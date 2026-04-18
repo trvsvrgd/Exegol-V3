@@ -1,0 +1,64 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Windows specific
+thumbs.db
+desktop.ini
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project specifics
+config_local/
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+
+# Testing and Local Cache
+.pytest_cache/
+.exegol/
+
+# Sensitive files
+token.json
+credentials.json

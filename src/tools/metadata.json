@@ -1,0 +1,10 @@
+{
+  "playwright_recorder": "Captures headless browser sessions and exports .webm",
+  "drive_sync": "Automates file uploads to the 'NotebookLM_Source' folder on Google Drive",
+  "gmail_api": "Sends HTML-formatted weekly summaries and reports via the Google Gmail API",
+  "markdown_formatter": "Transforms unstructured text into formatted, machine-readable markdown",
+  "file_namer": "Generates clean, snake_case alphanumeric file names based on document context",
+  "slack_notifier": "Sends notifications and approval requests to Slack",
+  "file_editor": "Reads, writes, and replaces content in repository files",
+  "llm_inference": "Provides reasoning and structured output capabilities via Ollama and Gemini"
+}

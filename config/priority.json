@@ -1,0 +1,77 @@
+{
+  "repositories": [
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3",
+      "priority": 1,
+      "model_routing_preference": "ollama",
+      "agent_status": "active",
+      "max_steps_policy": 100,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Analytics-Foundry",
+      "priority": 8,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 4,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\championCV",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 7,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Sentinel_Timer_2.0",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 5,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Sleeper_Stream_Scribe",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 3,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\snort",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 2,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\VoteFlow",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 6,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    }
+  ],
+  "global_settings": {
+    "slack_approvals_enabled": true,
+    "report_email": "travisvreugdenhil@gmail.com",
+    "context_isolation": {
+      "enabled": true,
+      "fresh_instance_per_execution": true,
+      "max_handoff_fields": 7,
+      "log_every_session": true
+    }
+  }
+}
