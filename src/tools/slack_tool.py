@@ -134,17 +134,34 @@ def post_to_slack(message: str, channel: Optional[str] = None) -> str:
     """Wrapper for legacy compatibility."""
     return slack_manager.post_message(text=message, channel=channel)
 
-def request_approval_for_delete(file_path: str, reason: str) -> str:
-    """Specialized Slack message for deletion approvals with interactive buttons."""
-    callback_id = f"delete_{os.path.basename(file_path)}_{threading.get_ident()}"
+def request_file_approval(file_path: str, action: str, reason: str, risk_score: float = 0.5, risk_label: str = "MEDIUM", risk_reason: str = "Standard review required.") -> str:
+    """Specialized Slack message for file modification approvals with interactive buttons and risk assessment."""
+    callback_id = f"{action.lower()}_{os.path.basename(file_path)}_{threading.get_ident()}"
     
+    # Action styling
+    action_verb = "DELETE" if action.upper() == "DELETE" else "OVERWRITE"
+    emoji = "🚨" if risk_score >= 0.7 else "⚠️"
+
     blocks = [
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"🚨 *APPROVAL REQUIRED*: Agent requests to DELETE `{file_path}`\n*Reason*: {reason}"
+                "text": f"{emoji} *APPROVAL REQUIRED*: Agent requests to *{action_verb}* `{file_path}`\n*Reason*: {reason}"
             }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Risk Level*: `{risk_label}` ({risk_score})"
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Assessment*: {risk_reason}"
+                }
+            ]
         },
         {
             "type": "actions",
@@ -154,7 +171,7 @@ def request_approval_for_delete(file_path: str, reason: str) -> str:
                     "text": {"type": "plain_text", "text": "Approve ✅"},
                     "style": "primary",
                     "value": callback_id,
-                    "action_id": "approve_delete"
+                    "action_id": "approve_delete"  # We can reuse the same action IDs as they handle the callback_id the same way
                 },
                 {
                     "type": "button",
@@ -167,28 +184,35 @@ def request_approval_for_delete(file_path: str, reason: str) -> str:
         }
     ]
 
-    print(f"\n[Slack] Requesting approval for delete: {file_path}")
-    slack_manager.post_message(text=f"Requesting approval to delete {file_path}", blocks=blocks)
+    print(f"\n[Slack] Requesting approval for {action_verb}: {file_path} (Risk: {risk_label})")
+    slack_manager.post_message(text=f"Requesting approval to {action_verb} {file_path}", blocks=blocks)
     
     # Also print to console
     print("\n" + "="*50)
     print("🚨 SYSTEM PAUSED FOR EXTERNAL APPROVAL 🚨")
-    print(f"Agent requests to DELETE file: {file_path}")
+    print(f"Agent requests to {action_verb} file: {file_path}")
     print(f"Reason: {reason}")
+    print(f"Risk: {risk_label} ({risk_score})")
     print("="*50)
 
     if not slack_manager.is_bot_active():
         # Fallback to CLI if bot is not active
-        response = input("Type 'APPROVE' to allow deletion, or any other key to reject: ").strip().upper()
+        response = input(f"Type 'APPROVE' to allow {action_verb}, or any other key to reject: ").strip().upper()
         return "APPROVED" if response == "APPROVE" else "REJECTED"
 
     # Block until Slack action or Timeout
     event = threading.Event()
     slack_manager.pending_approvals[callback_id] = event
     
-    print("[Slack] Waiting for response in Slack...")
-    # Wait up to 5 minutes
-    if event.wait(timeout=300):
+    # As per policy: Critical risk (1.0) must require HITL until approval (no timeout)
+    wait_timeout = None if risk_score >= 1.0 else 300
+    
+    if wait_timeout is None:
+        print("[Slack] CRITICAL RISK: Waiting indefinitely for response in Slack...")
+    else:
+        print(f"[Slack] Waiting up to {wait_timeout}s for response in Slack...")
+        
+    if event.wait(timeout=wait_timeout):
         result = slack_manager.approval_results.get(callback_id, "REJECTED")
         print(f"[Slack] Received response: {result}")
         return result

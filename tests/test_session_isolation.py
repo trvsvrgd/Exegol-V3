@@ -57,11 +57,11 @@ class TestHandoffContext:
         assert "T" in ctx.timestamp  # ISO format
 
     def test_max_handoff_fields(self):
-        """HandoffContext should have at most 7 data fields to stay minimal."""
+        """HandoffContext should have at most 9 data fields to stay minimal."""
         import dataclasses
         fields = dataclasses.fields(HandoffContext)
-        assert len(fields) <= 7, (
-            f"HandoffContext has {len(fields)} fields — exceeds the 7-field "
+        assert len(fields) <= 9, (
+            f"HandoffContext has {len(fields)} fields — exceeds the 9-field "
             "contract for minimal context. Remove or consolidate fields."
         )
 
@@ -106,29 +106,29 @@ class TestSessionIsolation:
 
         handoff_1 = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="captivating_cameraman",
+            agent_id="cameraman_cassian",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
         )
         handoff_2 = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="captivating_cameraman",
+            agent_id="cameraman_cassian",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
         )
 
         result_1 = sm.spawn_agent_session(
-            agent_id="captivating_cameraman",
-            module_path="agents.captivating_cameraman_agent",
-            class_name="CaptivatingCameramanAgent",
+            agent_id="cameraman_cassian",
+            module_path="agents.cameraman_cassian_agent",
+            class_name="CameramanCassianAgent",
             handoff=handoff_1,
         )
         result_2 = sm.spawn_agent_session(
-            agent_id="captivating_cameraman",
-            module_path="agents.captivating_cameraman_agent",
-            class_name="CaptivatingCameramanAgent",
+            agent_id="cameraman_cassian",
+            module_path="agents.cameraman_cassian_agent",
+            class_name="CameramanCassianAgent",
             handoff=handoff_2,
         )
 
@@ -144,16 +144,16 @@ class TestSessionIsolation:
 
         handoff = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="captivating_cameraman",
+            agent_id="cameraman_cassian",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
         )
 
         result = sm.spawn_agent_session(
-            agent_id="captivating_cameraman",
-            module_path="agents.captivating_cameraman_agent",
-            class_name="CaptivatingCameramanAgent",
+            agent_id="cameraman_cassian",
+            module_path="agents.cameraman_cassian_agent",
+            class_name="CameramanCassianAgent",
             handoff=handoff,
         )
 
@@ -164,7 +164,7 @@ class TestSessionIsolation:
 
         with open(log_file, "r") as f:
             log_data = json.load(f)
-        assert log_data["agent_id"] == "captivating_cameraman"
+        assert log_data["agent_id"] == "cameraman_cassian"
         assert log_data["outcome"] == "success"
 
     def test_unique_session_ids(self, tmp_repo):

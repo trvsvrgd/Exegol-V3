@@ -72,6 +72,10 @@
       "fresh_instance_per_execution": true,
       "max_handoff_fields": 7,
       "log_every_session": true
+    },
+    "compliance_monitoring": {
+      "last_run": "2026-04-19",
+      "frequency_days": 30
     }
   }
 }

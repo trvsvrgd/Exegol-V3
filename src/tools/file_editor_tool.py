@@ -9,9 +9,28 @@ def read_file(path: str) -> str:
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
 
-def write_file(path: str, content: str) -> str:
-    """Creates or overwrites a file with the given content."""
+def write_file(path: str, content: str, reason: Optional[str] = None) -> str:
+    """Creates or overwrites a file. Requires approval if overwriting a high-risk file."""
     try:
+        from tools.safety_gate import get_risk_metadata
+        from tools.slack_tool import request_file_approval
+        
+        # Check if this is an overwrite of a high-risk file
+        if os.path.exists(path):
+            risk_meta = get_risk_metadata(path)
+            if risk_meta["score"] >= 0.7:
+                print(f"[FileEditor] High risk overwrite detected for {path}. Requesting approval...")
+                approval = request_file_approval(
+                    file_path=path,
+                    action="OVERWRITE",
+                    reason=reason or "System-requested update",
+                    risk_score=risk_meta["score"],
+                    risk_label=risk_meta["label"],
+                    risk_reason=risk_meta["reason"]
+                )
+                if approval != "APPROVED":
+                    return f"Error: Overwrite of {path} rejected by user."
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -19,8 +38,8 @@ def write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-def replace_content(path: str, old_text: str, new_text: str) -> str:
-    """Replaces a specific block of text in a file."""
+def replace_content(path: str, old_text: str, new_text: str, reason: Optional[str] = None) -> str:
+    """Replaces a specific block of text in a file. Requires approval for high-risk files."""
     content = read_file(path)
     if content.startswith("Error:"):
         return content
@@ -29,16 +48,18 @@ def replace_content(path: str, old_text: str, new_text: str) -> str:
         return f"Error: Target text not found in {path}"
     
     new_content = content.replace(old_text, new_text)
-    return write_file(path, new_content)
+    # write_file handles the risk check internally for overwrites
+    return write_file(path, new_content, reason=reason or f"Replacing content in {os.path.basename(path)}")
 
-def search_replace_regex(path: str, pattern: str, replacement: str) -> str:
-    """Performs a regex search and replace in a file."""
+def search_replace_regex(path: str, pattern: str, replacement: str, reason: Optional[str] = None) -> str:
+    """Performs a regex search and replace in a file. Requires approval for high-risk files."""
     content = read_file(path)
     if content.startswith("Error:"):
         return content
     
     new_content = re.sub(pattern, replacement, content)
-    return write_file(path, new_content)
+    # write_file handles the risk check internally for overwrites
+    return write_file(path, new_content, reason=reason or f"Regex replace in {os.path.basename(path)}")
 
 def delete_file(path: str, reason: str) -> str:
     """Deletes a file, but requires explicit external approval first."""
@@ -46,14 +67,27 @@ def delete_file(path: str, reason: str) -> str:
         return f"Error: File not found at {path}"
         
     try:
-        from tools.slack_tool import request_approval_for_delete
-        approval = request_approval_for_delete(path, reason)
+        from tools.safety_gate import get_risk_metadata
+        from tools.slack_tool import request_file_approval
+        
+        # Calculate risk before requesting approval
+        risk_meta = get_risk_metadata(path)
+        
+        approval = request_file_approval(
+            file_path=path, 
+            action="DELETE",
+            reason=reason,
+            risk_score=risk_meta["score"],
+            risk_label=risk_meta["label"],
+            risk_reason=risk_meta["reason"]
+        )
+        
         if approval == "APPROVED":
             os.remove(path)
-            return f"Success: Deleted {path}"
+            return f"Success: Deleted {path} (Risk: {risk_meta['label']})"
         else:
-            return f"Error: Deletion rejected by user."
-    except ImportError:
-        return f"Error: Could not import slack_tool to request approval."
+            return f"Error: Deletion rejected by user. Risk was {risk_meta['label']}."
+    except ImportError as e:
+        return f"Error: Dependency missing for approval: {e}"
     except Exception as e:
         return f"Error: {str(e)}"

@@ -9,70 +9,74 @@ The Exegol ecosystem operates on a non-cyclical, state-driven loop. Each agent w
 ```mermaid
 flowchart TD
     subgraph Initialization
-    A["🦆 Thoughtful Thunderbird"] -- "Captures Intent" --> FS[("📁 .exegol Backlog")]
+    A["🔵 Onboarding Thrawn"] -- "Captures Intent" --> FS[("📁 .exegol Backlog")]
+    V["🔴 Vibe Vader"] -- "Detects Debt" --> FS
     end
 
     subgraph Product & Design
-    FS -- "Pending Tasks" --> B["🏒 Product Puck"]
+    FS -- "Pending Tasks" --> B["⚪ Product Poe"]
     B -- "Prioritized Task / Active Prompt" --> FS
-    FS -- "Architecture Needed" --> C["⚖️ Architect Anubis"]
+    FS -- "Architecture Needed" --> C["🤖 Architect Artoo"]
     C -- "Design Docs" --> FS
     end
 
     subgraph Implementation & Quality
-    FS -- "Active Prompt & Design" --> D["🐉 Developer Dragon"]
+    FS -- "Active Prompt & Design" --> D["👨‍🔧 Developer Dex"]
     D -- "Code Implementation" --> FS
-    FS -- "Test Required" --> E["🛡️ Quality Qop"]
+    FS -- "Test Required" --> E["⚔️ Quality Qui-Gon"]
     E -- "Pass: Mark Complete" --> FS
     E -- "Fail: Log Bug" --> B
     end
 
     subgraph Research & Standards
-    FS -- "Research Needed" --> F["🐦 Research Raven"]
+    FS -- "Research Needed" --> F["🔫 Research Rex"]
     F -- "Enriched Tasks" --> FS
-    FS -- "Standards Check" --> G["🔮 Evaluator Enigma"]
+    FS -- "Standards Check" --> G["📖 Evaluator Ezra"]
     G -- "Evaluation Criteria" --> FS
     end
 
     subgraph Polish & Evidence
-    FS -- "Docs Needed" --> H["✒️ Markdown Mark"]
+    FS -- "Docs Needed" --> H["🟪 Markdown Mace"]
     H -- "Markdown Polished" --> FS
-    FS -- "Ready for Demo" --> I["🎥 Cameraman Chimera"]
+    FS -- "Ready for Demo" --> I["🎥 Cameraman Cassian"]
     I -- "Video Evidence" --> FS
     end
 
     subgraph Oversight
-    FS -- "Logs" --> J["🔥 Agent Optimizer Abaddon"]
+    FS -- "Logs" --> J["💪 Optimizer Ahsoka"]
     J -- "Optimization Tasks" --> B
-    FS -- "Logs" --> K["👔 Chief of Staff Chen"]
+    FS -- "Logs" --> K["🦍 Chief of Staff Chewie"]
     K -- "Performance Review" --> Report
-    FS -- "Metrics" --> L["🪒 Report Razor"]
+    FS -- "Metrics" --> L["🎭 Report Revan"]
     L -- "Fleet Summary" --> Report
-    FS -- "Costs" --> M["💡 Insightful Intel"]
+    FS -- "Costs" --> M["🧠 Intel Ima"]
     M -- "Intel Report" --> Report[("📧 Intelligence Reports")]
     end
 
-    classDef agent fill:#ebf5ff,stroke:#2b6cb0,stroke-width:2px;
-    class A,B,C,D,E,F,G,H,I,J,K,L,M agent;
+    classDef agent fill:#f9f9f9,stroke:#333,stroke-width:2px;
+    class A,B,C,D,E,F,G,H,I,J,K,L,M,V agent;
 ```
+
 
 ## 🤖 The Agent Fleet
 
 | Agent ID | Alliterative Name | Core Responsibility | Primary Handoff Output |
 | :--- | :--- | :--- | :--- |
-| `thoughtful_thunderbird`| Thoughtful Thunderbird | Onboarding & User Intent | `.exegol/backlog.json` |
-| `product_puck` | Product Puck | Backlog Grooming & Prioritization | `.exegol/active_prompt.md` |
-| `architect_anubis` | Architect Anubis | Architecture & Design Review | Architecture Diagrams/Docs |
-| `research_raven` | Research Raven | Research & Web Intent | Backlog enrichment |
-| `developer_dragon` | Developer Dragon | Implementation & Coding | Source Code & PRs |
-| `quality_qop` | Quality Qop | Testing, QA & Bug Logging | `.exegol/test_reports.json` |
-| `markdown_mark` | Markdown Mark | Documentation & Formatting | Polished `.md` files |
-| `cameraman_chimera`| Cameraman Chimera | Visual Evidence & Recordings | Video loops for READMEs |
-| `evaluator_enigma` | Evaluator Enigma | Evaluation Research & Standards | Implementation requirements |
-| `agent_optimizer_abaddon`| Agent Optimizer Abaddon| System Performance Optimization | Refined agent instructions |
-| `report_razor` | Report Razor | Fleet Performance Reporting | Weekly Email/Slack summaries |
-| `chief_of_staff_chen`| Chief of Staff Chen | Agent Performance Reviews | Performance Scorecards |
-| `insightful_intel` | Insightful Intel | Intel & Cost Management | Cost/Cloud status reports |
+| `onboarding_thrawn` | Onboarding Thrawn | Onboarding & User Intent | `.exegol/backlog.json` |
+| `product_poe` | Product Poe | Backlog Grooming & Prioritization | `.exegol/active_prompt.md` |
+| `architect_artoo` | Architect Artoo | Architecture & Design Review | Architecture Diagrams/Docs |
+| `research_rex` | Research Rex | Research & Web Intent | Backlog enrichment |
+| `developer_dex` | Developer Dex | Implementation & Coding | Source Code & PRs |
+| `quality_quigon` | Quality Qui-Gon | Testing, QA & Bug Logging | `.exegol/test_reports.json` |
+| `markdown_mace` | Markdown Mace | Documentation & Formatting | Polished `.md` files |
+| `cameraman_cassian` | Cameraman Cassian | Visual Evidence & Recordings | Video loops for READMEs |
+| `evaluator_ezra` | Evaluator Ezra | Evaluation Research & Standards | Implementation requirements |
+| `vibe_vader` | Vibe Vader | Software Debt & Mock Code Analysis | `.exegol/backlog.json` |
+| `optimizer_ahsoka` | Optimizer Ahsoka | System Performance Optimization | Refined agent instructions |
+| `report_revan` | Report Revan | Fleet Performance Reporting | Weekly Email/Slack summaries |
+| `chief_of_staff_chewie` | Chief of Staff Chewie | Agent Performance Reviews | Performance Scorecards |
+| `intel_ima` | Intel Ima | Intel & Cost Management | Cost/Cloud status reports |
+
 
 ## 🏗️ Technical Architecture
 

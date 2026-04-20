@@ -4,13 +4,13 @@ import datetime
 from tools.gmail_tool import send_gmail_message
 
 
-class AgentOptimizerAbaddonAgent:
+class OptimizerAhsokaAgent:
     """Reviews last week's agent interactions and proposes improvements,
     free tool recommendations, and paid tool recommendations via weekly email."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "AgentOptimizerAbaddonAgent"
+        self.name = "OptimizerAhsokaAgent"
         self.max_steps = 10
         self.tools = ["gmail_api", "interaction_log_reader", "web_search"]
         self.report_email = "travisvreugdenhil@gmail.com"
@@ -43,12 +43,13 @@ class AgentOptimizerAbaddonAgent:
     # Interaction log helpers
     # ------------------------------------------------------------------
 
-    def _load_interaction_logs(self, repo_path: str) -> list:
-        """Load the last 7 days of agent interaction logs.
+    def _load_interaction_logs(self, repo_path: str, days: int = 7) -> list:
+        """Load agent interaction logs for the specified number of days.
+        If days is 0, load all history.
 
         Expected log schema per entry:
         {
-            "agent_id": "developer_dragon",
+            "agent_id": "developer_dex",
             "timestamp": "2026-04-12T09:15:00",
             "steps_used": 8,
             "max_steps": 20,
@@ -63,7 +64,10 @@ class AgentOptimizerAbaddonAgent:
                   "Using synthetic data for initial run.")
             return []
 
-        seven_days_ago = datetime.datetime.now() - datetime.timedelta(days=7)
+        cutoff = None
+        if days > 0:
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+
         entries: list = []
 
         for filename in sorted(os.listdir(logs_dir)):
@@ -76,11 +80,11 @@ class AgentOptimizerAbaddonAgent:
                     if isinstance(data, list):
                         for entry in data:
                             ts = datetime.datetime.fromisoformat(entry.get("timestamp", ""))
-                            if ts >= seven_days_ago:
+                            if not cutoff or ts >= cutoff:
                                 entries.append(entry)
                     elif isinstance(data, dict):
                         ts = datetime.datetime.fromisoformat(data.get("timestamp", ""))
-                        if ts >= seven_days_ago:
+                        if not cutoff or ts >= cutoff:
                             entries.append(data)
             except Exception as e:
                 print(f"[{self.name}] Skipping log file {filename}: {e}")
@@ -155,6 +159,123 @@ class AgentOptimizerAbaddonAgent:
         return suggestions
 
     # ------------------------------------------------------------------
+    # Milestone analysis (20x runs)
+    # ------------------------------------------------------------------
+
+    def _check_milestones(self, repo_path: str, all_logs: list, registry: dict):
+        """Check if any agents have reached usage milestones and trigger analysis."""
+        
+        # Aggregate total runs per agent
+        total_runs = {}
+        for entry in all_logs:
+            aid = entry.get("agent_id")
+            if aid:
+                total_runs[aid] = total_runs.get(aid, 0) + 1
+
+        tracker_file = os.path.join(repo_path, ".exegol", "milestone_tracker.json")
+        tracker = {}
+        if os.path.exists(tracker_file):
+            try:
+                with open(tracker_file, "r") as f:
+                    tracker = json.load(f)
+            except:
+                pass
+
+        for agent_id, runs in total_runs.items():
+            if runs >= 20:
+                agent_tracker = tracker.get(agent_id, {"milestones": []})
+                if "20_runs" not in agent_tracker["milestones"]:
+                    print(f"[{self.name}] Agent {agent_id} reached 20 runs! Triggering deep analysis...")
+                    
+                    # 1. Perform deep analysis
+                    agent_logs = [l for l in all_logs if l.get("agent_id") == agent_id]
+                    backlog_items = self._analyze_agent_deep(agent_id, agent_logs, registry, repo_path)
+                    
+                    # 2. Append to backlog
+                    if backlog_items:
+                        self._append_to_backlog(repo_path, backlog_items)
+                        print(f"[{self.name}] Added {len(backlog_items)} improvements for {agent_id} to backlog.")
+                    
+                    # 3. Update tracker
+                    agent_tracker["milestones"].append("20_runs")
+                    tracker[agent_id] = agent_tracker
+
+        with open(tracker_file, "w") as f:
+            json.dump(tracker, f, indent=4)
+
+    def _analyze_agent_deep(self, agent_id: str, agent_logs: list, registry: dict, repo_path: str) -> list:
+        """Use LLM to perform deep analysis of an agent after 20 runs."""
+        details = registry.get(agent_id, {})
+        agent_class = details.get("class", agent_id)
+        
+        # 1. Read agent source code
+        source_code = "Source code not found."
+        module_parts = details.get("module", "").split(".")
+        if len(module_parts) >= 2:
+            source_path = os.path.join(repo_path, "src", *module_parts) + ".py"
+            if os.path.exists(source_path):
+                with open(source_path, "r", encoding="utf-8") as f:
+                    source_code = f.read()
+
+        # 2. Prepare log summary
+        log_summary = []
+        for l in agent_logs[-10:]: # Look at last 10 logs for context
+            summary = l.get("output_summary") or ""
+            log_summary.append({
+                "outcome": l.get("outcome"),
+                "steps": l.get("steps_used"),
+                "errors": l.get("errors"),
+                "summary": summary[:200]
+            })
+
+        prompt = f"""
+Analyze the following autonomous agent '{agent_class}' which has completed 20 runs.
+Identify potential items for the product backlog to improve its performance, reliability, or capabilities.
+
+AGENT SOURCE CODE:
+```python
+{source_code}
+```
+
+RECENT INTERACTION LOGS:
+{json.dumps(log_summary, indent=2)}
+
+Return a list of 2-3 specific, actionable backlog items in JSON format.
+Each item must have: "id" (unique string), "summary" (short text), "priority" (high/medium/low), and "status" (todo).
+Return ONLY the JSON array.
+"""
+        response = self.llm_client.generate(prompt, system_instruction="You are a system architect and performance optimizer.")
+        items = self.llm_client.parse_json_response(response)
+        
+        if isinstance(items, list):
+            # Ensure items are valid
+            valid_items = []
+            for item in items:
+                if isinstance(item, dict) and "summary" in item:
+                    item["id"] = item.get("id", f"opt_{agent_id}_{datetime.datetime.now().strftime('%f')}")
+                    item["priority"] = item.get("priority", "medium")
+                    item["status"] = "todo"
+                    valid_items.append(item)
+            return valid_items
+        return []
+
+    def _append_to_backlog(self, repo_path: str, new_items: list):
+        """Append items to .exegol/backlog.json."""
+        backlog_file = os.path.join(repo_path, ".exegol", "backlog.json")
+        backlog = []
+        if os.path.exists(backlog_file):
+            try:
+                with open(backlog_file, "r") as f:
+                    backlog = json.load(f)
+            except:
+                pass
+        
+        backlog.extend(new_items)
+        
+        with open(backlog_file, "w") as f:
+            json.dump(backlog, f, indent=4)
+
+    # ------------------------------------------------------------------
     # Tool recommendations
     # ------------------------------------------------------------------
 
@@ -224,7 +345,7 @@ class AgentOptimizerAbaddonAgent:
                     "project tracker that supports priorities, sprints, and "
                     "agent-generated tickets via API. At $8/mo for a single seat "
                     "it would eliminate manual grooming overhead and give "
-                    "ProductivePuckAgent a structured API to write to."
+                    "ProductPoeAgent a structured API to write to."
                 )
             },
             {
@@ -232,7 +353,7 @@ class AgentOptimizerAbaddonAgent:
                 "price_tier": "Teams — $50/seat/mo",
                 "business_case": (
                     "W&B provides experiment tracking and model performance "
-                    "dashboards. With ResourcefulRavenAgent constantly evaluating "
+                    "dashboards. With ResearchRexAgent constantly evaluating "
                     "new models, W&B would provide side-by-side comparison charts "
                     "and automated performance reports, making model upgrade "
                     "decisions data-driven instead of gut-feel."
@@ -285,7 +406,7 @@ class AgentOptimizerAbaddonAgent:
 
 <hr style="border-color:#333;">
 <p style="color:#666;font-size:12px;">
-  Sent by AbaddonAgentOptimizerAgent · Exegol v3 Orchestrator
+  Sent by AhsokaAgent · Exegol v3 Orchestrator
 </p>
 </body>
 </html>"""
@@ -401,6 +522,10 @@ class AgentOptimizerAbaddonAgent:
             body_html=email_payload["body_html"]
         )
         print(f"[{self.name}] {result}")
+
+        # 8. Check for usage milestones (e.g. 20 runs) and perform deep analysis
+        all_logs = self._load_interaction_logs(repo_path, days=0)
+        self._check_milestones(repo_path, all_logs, AGENT_REGISTRY)
 
         return (
             f"Weekly optimization report generated and emailed. "

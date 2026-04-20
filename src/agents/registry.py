@@ -1,93 +1,107 @@
 AGENT_REGISTRY = {
-    "cameraman_chimera": {
-        "class": "CameramanChimeraAgent",
-        "module": "agents.cameraman_chimera_agent",
-        "wake_word": "record",
+    "cameraman_cassian": {
+        "class": "CameramanCassianAgent",
+        "module": "agents.cameraman_cassian_agent",
+        "wake_word": "cassian",
         "tools": ["playwright_recorder", "video_clipper"],
         "max_steps": 10
     },
-    "insightful_intel": {
-        "class": "InsightfulIntelAgent",
-        "module": "agents.insightful_intel_agent",
-        "wake_word": "report",
+    "intel_ima": {
+        "class": "IntelImaAgent",
+        "module": "agents.intel_ima_agent",
+        "wake_word": "ima",
         "tools": ["gmail_api", "drive_sync", "cost_analyzer"],
         "max_steps": 5
     },
-    "markdown_mark": {
-        "class": "MarkdownMarkAgent",
-        "module": "agents.markdown_mark_agent",
-        "wake_word": "mark",
+    "markdown_mace": {
+        "class": "MarkdownMaceAgent",
+        "module": "agents.markdown_mace_agent",
+        "wake_word": "mace",
         "tools": ["markdown_formatter", "file_namer"],
         "max_steps": 5
     },
-    "thoughtful_thunderbird": {
-        "class": "ThoughtfulThunderbirdAgent",
-        "module": "agents.thoughtful_thunderbird_agent",
-        "wake_word": "thunderbird",
+    "onboarding_thrawn": {
+        "class": "OnboardingThrawnAgent",
+        "module": "agents.onboarding_thrawn_agent",
+        "wake_word": "thrawn",
         "tools": ["user_prompting", "clarification_engine"],
         "max_steps": 5
     },
-    "product_puck": {
-        "class": "ProductPuckAgent",
-        "module": "agents.product_puck_agent",
-        "wake_word": "puck",
+    "product_poe": {
+        "class": "ProductPoeAgent",
+        "module": "agents.product_poe_agent",
+        "wake_word": "poe",
         "tools": ["backlog_grooming", "prompt_generation"],
         "max_steps": 10
     },
-    "developer_dragon": {
-        "class": "DeveloperDragonAgent",
-        "module": "agents.developer_dragon_agent",
-        "wake_word": "dragon",
-        "tools": ["file_editor", "slack_notifier", "agentic_coding"],
+    "developer_dex": {
+        "class": "DeveloperDexAgent",
+        "module": "agents.developer_dex_agent",
+        "wake_word": "dex",
+        "tools": ["file_editor", "slack_notifier", "agentic_coding", "sandbox_orchestrator"],
         "max_steps": 20
     },
-    "quality_qop": {
-        "class": "QualityQopAgent",
-        "module": "agents.quality_qop_agent",
-        "wake_word": "qop",
-        "tools": ["test_runner", "linter", "uat_sandbox"],
-        "max_steps": 15
-    },
-    "research_raven": {
-        "class": "ResourcefulRavenAgent",
-        "module": "agents.research_raven_agent",
-        "wake_word": "research",
+    "research_rex": {
+        "class": "ResearchRexAgent",
+        "module": "agents.research_rex_agent",
+        "wake_word": "rex",
         "tools": ["model_comparison", "web_search", "backlog_writer"],
         "max_steps": 10
     },
-    "architect_anubis": {
-        "class": "ArchitectAnubisAgent",
-        "module": "agents.architect_anubis_agent",
-        "wake_word": "architect",
-        "tools": ["diagram_generator", "readme_parser", "architecture_reviewer"],
+    "architect_artoo": {
+        "class": "ArchitectArtooAgent",
+        "module": "agents.architect_artoo_agent",
+        "wake_word": "artoo",
+        "tools": ["diagram_generator", "readme_parser", "architecture_reviewer", "schema_designer", "docker_compose_generator", "git_monitoring"],
         "max_steps": 10
     },
-    "agent_optimizer_abaddon": {
-        "class": "AbaddonAgentOptimizerAgent",
-        "module": "agents.agent_optimizer_abaddon_agent",
-        "wake_word": "optimize",
+    "optimizer_ahsoka": {
+        "class": "OptimizerAhsokaAgent",
+        "module": "agents.optimizer_ahsoka_agent",
+        "wake_word": "ahsoka",
         "tools": ["gmail_api", "interaction_log_reader", "web_search"],
         "max_steps": 10
     },
-    "evaluator_enigma": {
-        "class": "EvaluatorEnigmaAgent",
-        "module": "agents.evaluator_enigma_agent",
-        "wake_word": "evaluate",
+    "evaluator_ezra": {
+        "class": "EvaluatorEzraAgent",
+        "module": "agents.evaluator_ezra_agent",
+        "wake_word": "ezra",
         "tools": ["web_search", "arxiv_reader", "backlog_writer"],
         "max_steps": 15
     },
-    "report_razor": {
-        "class": "ReportRazorAgent",
-        "module": "agents.report_razor_agent",
-        "wake_word": "summary",
+    "report_revan": {
+        "class": "ReportRevanAgent",
+        "module": "agents.report_revan_agent",
+        "wake_word": "revan",
         "tools": ["gmail_api", "interaction_log_reader"],
         "max_steps": 10
     },
-    "chief_of_staff_chen": {
-        "class": "ChiefOfStaffChenAgent",
-        "module": "agents.chief_of_staff_chen_agent",
-        "wake_word": "review",
+    "chief_of_staff_chewie": {
+        "class": "ChiefOfStaffChewieAgent",
+        "module": "agents.chief_of_staff_chewie_agent",
+        "wake_word": "chewie",
         "tools": ["gmail_api", "interaction_log_reader", "agent_introspection"],
+        "max_steps": 15
+    },
+    "vibe_vader": {
+        "class": "VibeVaderAgent",
+        "module": "agents.vibe_vader_agent",
+        "wake_word": "vader",
+        "tools": ["repo_analyzer", "todo_reporter"],
+        "max_steps": 10
+    },
+    "quality_quigon": {
+        "class": "QualityQuigonAgent",
+        "module": "agents.quality_quigon_agent",
+        "wake_word": "quigon",
+        "tools": ["test_runner", "linter", "uat_sandbox", "sandbox_validator"],
+        "max_steps": 15
+    },
+    "compliance_cody": {
+        "class": "ComplianceCodyAgent",
+        "module": "agents.compliance_cody_agent",
+        "wake_word": "cody",
+        "tools": ["web_search", "backlog_writer", "capability_reviewer"],
         "max_steps": 15
     }
 }

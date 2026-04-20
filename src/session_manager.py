@@ -40,11 +40,11 @@ class SessionManager:
         Parameters
         ----------
         agent_id : str
-            Registry key (e.g. ``"developer_dragon"``).
+            Registry key (e.g. ``"developer_dex"``).
         module_path : str
-            Dotted module path (e.g. ``"agents.developer_dragon_agent"``).
+            Dotted module path (e.g. ``"agents.developer_dex_agent"``).
         class_name : str
-            Class to instantiate (e.g. ``"DeveloperDragonAgent"``).
+            Class to instantiate (e.g. ``"DeveloperDexAgent"``).
         handoff : HandoffContext
             Frozen context for this session.
 
@@ -67,8 +67,8 @@ class SessionManager:
             f"model={handoff.model_routing}, max_steps={handoff.max_steps}"
         )
 
-        from inference.llm_client import LLMClient
-        llm_client = LLMClient(provider=handoff.model_routing)
+        from inference.inference_manager import InferenceManager
+        llm_client = InferenceManager.get_client(provider=handoff.model_routing)
 
         agent_instance = None
         start_time = time.time()
@@ -83,6 +83,20 @@ class SessionManager:
             result.outcome = "success"
             result.output_summary = str(output) if output else ""
             result.steps_used = getattr(agent_instance, "_steps_used", 1)
+            
+            # Extract autonomous handoff request and snapshots if present
+            next_id = getattr(agent_instance, "next_agent_id", "")
+            if next_id:
+                result.next_agent_id = next_id
+                print(f"[SessionManager] Agent {agent_id} requested handoff to: {next_id}")
+            
+            result.snapshot_hash = getattr(agent_instance, "snapshot_hash", "")
+            if result.snapshot_hash:
+                print(f"[SessionManager] Snapshot hash captured: {result.snapshot_hash}")
+
+            result.regression_context = getattr(agent_instance, "regression_context", "")
+            if result.regression_context:
+                print(f"[SessionManager] Regression context captured: {result.regression_context}")
 
         except Exception as exc:
             result.outcome = "failure"

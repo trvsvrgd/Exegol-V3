@@ -5,20 +5,12 @@ import importlib
 from tools.gmail_tool import send_gmail_message
 
 
-class ChiefOfStaffChenAgent:
-    """Conducts periodic performance reviews of every agent in the fleet.
-
-    For each registered agent, Chen:
-    1. Loads its declared success_metrics and current values
-    2. Cross-references with interaction logs from the review period
-    3. Assigns a letter grade (A-F)
-    4. Flags underperformers and generates improvement mandates
-    5. Persists a structured review report and optionally emails it
-    """
+class ChiefOfStaffChewieAgent:
+    """Oversees all agent operations, reviews reports, and provides high-level strategic feedback."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "ChiefOfStaffChenAgent"
+        self.name = "ChiefOfStaffChewieAgent"
         self.max_steps = 15
         self.tools = ["gmail_api", "interaction_log_reader", "agent_introspection"]
         self.report_email = "travisvreugdenhil@gmail.com"
@@ -397,7 +389,7 @@ class ChiefOfStaffChenAgent:
 
 <hr style="border-color:#333;margin-top:24px;">
 <p style="color:#666;font-size:12px;">
-  Sent by ChiefOfStaffChenAgent · Exegol v3 Orchestrator
+  Sent by ChiefOfStaffChewieAgent · Exegol v3 Orchestrator
 </p>
 </body>
 </html>"""
@@ -440,7 +432,7 @@ class ChiefOfStaffChenAgent:
         reviews = []
         for agent_id, entry in AGENT_REGISTRY.items():
             # Don't review yourself
-            if agent_id == "chief_of_staff_chen":
+            if agent_id == "chief_of_staff_chewie":
                 continue
 
             module_path = entry.get("module", "")

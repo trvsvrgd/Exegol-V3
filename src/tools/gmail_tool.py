@@ -21,8 +21,7 @@ def send_gmail_message(to: str, subject: str, body: str, body_html: Optional[str
         token_path = os.getenv("GMAIL_TOKEN_PATH", "token.json")
         
         if not os.path.exists(token_path):
-            mode = "HTML" if body_html else "TEXT"
-            return f"[MOCK GMAIL] {mode} To: {to} | Sub: {subject} | Body: {body[:100]}..."
+            raise FileNotFoundError(f"Gmail token not found at {token_path}. Email could not be sent.")
             
         creds = Credentials.from_authorized_user_file(token_path)
         service = build('gmail', 'v1', credentials=creds)
@@ -44,6 +43,6 @@ def send_gmail_message(to: str, subject: str, body: str, body_html: Optional[str
         return f"Success: Sent message with ID {send_message['id']}"
         
     except ImportError:
-        return "Error: google-api-python-client or google-auth not installed."
+        raise ImportError("google-api-python-client or google-auth not installed. Cannot send Gmail.")
     except Exception as e:
-        return f"Error: {str(e)}"
+        raise RuntimeError(f"Gmail Send Failure: {str(e)}") from e

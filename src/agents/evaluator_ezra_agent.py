@@ -3,13 +3,12 @@ import json
 import datetime
 
 
-class EvaluatorEnigmaAgent:
-    """Researches the latest agentic evaluation techniques and generates
-    new requirements for Exegol_v3's evaluation framework."""
+class EvaluatorEzraAgent:
+    """Evaluates agent performance, reviews logs, and validates outputs against success metrics."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "EvaluatorEnigmaAgent"
+        self.name = "EvaluatorEzraAgent"
         self.max_steps = 15
         self.tools = ["web_search", "arxiv_reader", "backlog_writer"]
         self.success_metrics = {
@@ -50,7 +49,7 @@ class EvaluatorEnigmaAgent:
                 with open(req_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
-                print(f"[EvaluatorEnigmaAgent] Error reading eval_requirements: {e}")
+                print(f"[EvaluatorEzraAgent] Error reading eval_requirements: {e}")
         return []
 
     @staticmethod

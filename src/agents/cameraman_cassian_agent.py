@@ -1,9 +1,9 @@
-class CameramanChimeraAgent:
-    """Captures video walkthroughs of applications and embeds them into README files."""
+class CameramanCassianAgent:
+    """Automates screen recording and basic video editing (e.g. creating 10s feature loops)."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "CameramanChimeraAgent"
+        self.name = "CameramanCassianAgent"
         self.max_steps = 10
         self.tools = ["playwright_recorder", "video_clipper"]
         self.success_metrics = {

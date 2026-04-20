@@ -62,3 +62,7 @@ logs/
 # Sensitive files
 token.json
 credentials.json
+
+# Local scratch and temp files
+scratch/
+verify_test.txt

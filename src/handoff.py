@@ -23,12 +23,14 @@ class HandoffContext:
     """
 
     repo_path: str          # Absolute path to the target repository
-    agent_id: str           # Registry key (e.g. "developer_dragon")
+    agent_id: str           # Registry key (e.g. "developer_dex")
     task_id: str            # Specific task identifier, or "default"
     model_routing: str      # "ollama" | "gemini"
     max_steps: int          # Step budget for this session
     session_id: str = ""    # Unique execution ID — auto-generated if empty
     timestamp: str = ""     # ISO-8601 invocation time — auto-filled if empty
+    snapshot_hash: str = "" # Hash of the codebase state from previous session
+    regression_context: str = "" # Optional details if re-triggered due to failure
 
     def __post_init__(self):
         # frozen=True prevents normal assignment; use object.__setattr__
@@ -54,6 +56,9 @@ class SessionResult:
     artifacts_written: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     status_update: str = ""           # "idle", "active", or "blocked"
+    next_agent_id: str = ""           # ID of the agent that should be triggered next (autonomous chaining)
+    snapshot_hash: str = ""           # SHA-256 hash of the codebase state after modifications
+    regression_context: str = ""      # Details if a failure was detected
 
     def to_dict(self) -> dict:
         """Serialize for JSON persistence in interaction_logs/."""
@@ -67,5 +72,8 @@ class SessionResult:
             "artifacts_written": self.artifacts_written,
             "errors": self.errors,
             "status_update": self.status_update,
+            "next_agent_id": self.next_agent_id,
+            "snapshot_hash": self.snapshot_hash,
+            "regression_context": self.regression_context,
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds")
         }

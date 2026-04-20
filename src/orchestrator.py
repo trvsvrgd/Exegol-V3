@@ -102,6 +102,9 @@ class ExegolOrchestrator:
         print("\nStarting Fleet Cycle...")
         self.is_running_fleet = True
         
+        # Monthly Compliance Check Trigger
+        self.check_compliance_monitoring()
+
         repos = self.priority_config.get("repositories", [])
         active_repos = [r for r in repos if r.get('agent_status', 'idle') == 'active']
         sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
@@ -122,8 +125,8 @@ class ExegolOrchestrator:
         # Check if .exegol exists, otherwise trigger Thunderbird (onboarding)
         exegol_dir = os.path.join(repo_path, ".exegol")
         if not os.path.exists(exegol_dir):
-            print(f"[Onboarding] No .exegol found. Triggering ThoughtfulThunderbirdAgent...")
-            self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "thoughtful_thunderbird")
+            print(f"[Onboarding] No .exegol found. Triggering OnboardingThrawnAgent...")
+            self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "onboarding_thrawn")
             return
 
         # Check backlog for pending tasks
@@ -134,12 +137,54 @@ class ExegolOrchestrator:
             
             pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged"]]
             if pending_tasks:
-                print(f"Found {len(pending_tasks)} pending tasks. Triggering ProductivePuckAgent...")
-                self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 10, "product_puck")
+                print(f"Found {len(pending_tasks)} pending tasks. Triggering ProductPoeAgent...")
+                self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 10, "product_poe")
                 return
 
         # If it's a Monday or specific time, run review/optimizer (Logic TBD)
         print("💤 Repo is idle.")
+
+    def check_compliance_monitoring(self):
+        """Checks if a monthly compliance sweep is due and triggers Cody."""
+        global_settings = self.priority_config.get("global_settings", {})
+        monitoring = global_settings.get("compliance_monitoring", {})
+        if not monitoring:
+            return
+
+        last_run_str = monitoring.get("last_run", "1970-01-01")
+        frequency_days = monitoring.get("frequency_days", 30)
+
+        try:
+            from datetime import datetime, timedelta
+            last_run = datetime.fromisoformat(last_run_str)
+            if datetime.now() > last_run + timedelta(days=frequency_days):
+                print(f"[Compliance] Monthly sweep is due (last run: {last_run_str}). Waking ComplianceCody...")
+                # Run for the primary repo (or all, but Cody searches global anyway)
+                target = self.get_highest_priority_task()
+                if target:
+                    result = self.wake_and_execute_agent(
+                        repo_info=target,
+                        routing=target.get("model_routing_preference", "ollama"),
+                        max_steps=15,
+                        agent_id="compliance_cody"
+                    )
+                    if result and result.outcome == "success":
+                        # Update last_run in priority.json
+                        monitoring["last_run"] = datetime.now().date().isoformat()
+                        self.save_config()
+            else:
+                print(f"[Compliance] Monthly sweep not due. Next run after: {(last_run + timedelta(days=frequency_days)).date()}")
+        except Exception as e:
+            print(f"[Compliance] Error checking monitoring: {e}")
+
+    def save_config(self):
+        """Saves current priority_config back to priority.json."""
+        try:
+            with open(PRIORITY_FILE_PATH, 'w') as f:
+                json.dump(self.priority_config, f, indent=2)
+            print("[Config] priority.json updated successfully.")
+        except Exception as e:
+            print(f"[Config] Failed to save priority.json: {e}")
 
     def trigger_go(self):
         """Manual 'Go' trigger for the active target."""
@@ -154,10 +199,10 @@ class ExegolOrchestrator:
         self.wake_and_execute_agent(target_repo, routing, max_steps)
 
     def wake_and_execute_agent(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
-                                agent_id: str = None):
+                                agent_id: str = None, snapshot_hash: str = "", regression_context: str = ""):
         """Dispatch an agent through SessionManager for a fully isolated session."""
         if agent_id is None:
-            agent_id = "product_puck"
+            agent_id = "product_poe"
 
         registry_entry = AGENT_REGISTRY.get(agent_id)
         if not registry_entry:
@@ -170,6 +215,8 @@ class ExegolOrchestrator:
             task_id="fleet_cycle" if self.is_running_fleet else "manual_go",
             model_routing=routing,
             max_steps=min(max_steps, registry_entry.get("max_steps", 50)),
+            snapshot_hash=snapshot_hash,
+            regression_context=regression_context
         )
 
         result = self.session_manager.spawn_agent_session(
@@ -185,6 +232,24 @@ class ExegolOrchestrator:
                 self.update_repo_status(path, "blocked")
             elif getattr(result, "status_update", ""):
                 self.update_repo_status(path, result.status_update)
+
+            # Recursive autonomous handoff (Pipeline chaining)
+            if result.next_agent_id and result.outcome == "success":
+                print(f"[Orchestrator] Autonomous handoff requested: {agent_id} -> {result.next_agent_id}")
+                registry_entry = AGENT_REGISTRY.get(result.next_agent_id)
+                if registry_entry:
+                    # Small delay to ensure logs are flushed and system is ready
+                    time.sleep(1)
+                    return self.wake_and_execute_agent(
+                        repo_info=repo_info,
+                        routing=routing,
+                        max_steps=registry_entry.get("max_steps", 15),
+                        agent_id=result.next_agent_id,
+                        snapshot_hash=result.snapshot_hash,
+                        regression_context=result.regression_context
+                    )
+                else:
+                    print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
 
         return result
 

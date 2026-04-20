@@ -4,16 +4,12 @@ import datetime
 from tools.gmail_tool import send_gmail_message
 
 
-class ReportRazorAgent:
-    """Composes a weekly fleet summary email covering key metrics,
-    progress highlights, and issues across the entire agent fleet.
-
-    Delivers a concise 1-5 minute read to travisvreugdenhil@gmail.com
-    every week, giving the operator a clear picture of what happened."""
+class ReportRevanAgent:
+    """Summarizes fleet progress, generates high-level management reports, and tracks weekly performance."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "ReportRazorAgent"
+        self.name = "ReportRevanAgent"
         self.max_steps = 10
         self.tools = ["gmail_api", "interaction_log_reader"]
         self.report_email = "travisvreugdenhil@gmail.com"
@@ -378,7 +374,7 @@ class ReportRazorAgent:
 
 <hr style="border-color:#333;">
 <p style="color:#666;font-size:12px;">
-  Sent by ReportRazorAgent · Exegol v3 Orchestrator
+  Sent by ReportRevanAgent · Exegol v3 Orchestrator
 </p>
 </body>
 </html>"""
@@ -404,10 +400,10 @@ class ReportRazorAgent:
 
         if not registry_classes.issubset(reported_agents):
             missing = registry_classes - reported_agents
-            print(f"[{self.name}] VALIDATION FAIL — missing agents: {missing}")
+            print(f"[{self.name}] VALIDATION FAIL -- missing agents: {missing}")
             return False
 
-        print(f"[{self.name}] Validation passed — all {len(registry)} agents covered.")
+        print(f"[{self.name}] Validation passed -- all {len(registry)} agents covered.")
         return True
 
     # ------------------------------------------------------------------
@@ -423,7 +419,7 @@ class ReportRazorAgent:
         from agents.registry import AGENT_REGISTRY
 
         repo_path = handoff.repo_path
-        print(f"[{self.name}] Session {handoff.session_id} — weekly fleet summary starting.")
+        print(f"[{self.name}] Session {handoff.session_id} -- weekly fleet summary starting.")
 
         # 0. Load priority.json for all repos
         priority_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
@@ -456,7 +452,7 @@ class ReportRazorAgent:
         # 4. Issue detection
         issues = self._detect_issues(agent_summaries)
         if issues:
-            print(f"[{self.name}] ⚠ {len(issues)} issues detected.")
+            print(f"[{self.name}] ! {len(issues)} issues detected.")
         else:
             print(f"[{self.name}] No issues detected.")
 

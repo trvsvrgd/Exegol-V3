@@ -16,16 +16,16 @@ def test_agent_spawning_with_llm():
     # Mock handoff
     handoff = HandoffContext(
         repo_path=os.getcwd(),
-        agent_id="quality_qop",
+        agent_id="quality_quigon",
         task_id="test_task",
         model_routing="ollama",
         max_steps=15
     )
     
     # We need to mock the importlib.import_module or just let it run if dependencies are met
-    # Let's try to spawn QualityQopAgent as it's already updated
+    # Let's try to spawn QualityQuigonAgent as it's already updated
     
-    registry_entry = AGENT_REGISTRY["quality_qop"]
+    registry_entry = AGENT_REGISTRY["quality_quigon"]
     
     print(f"Testing spawn for {registry_entry['class']}...")
     
@@ -34,7 +34,7 @@ def test_agent_spawning_with_llm():
     LLMClient._generate_ollama = MagicMock(return_value="Mocked response")
     
     result = sm.spawn_agent_session(
-        agent_id="quality_qop",
+        agent_id="quality_quigon",
         module_path=registry_entry["module"],
         class_name=registry_entry["class"],
         handoff=handoff

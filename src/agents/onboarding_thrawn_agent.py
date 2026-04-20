@@ -2,12 +2,12 @@ import os
 import json
 
 
-class ThoughtfulThunderbirdAgent:
-    """Engages the user with thoughtful prompts for repository intent, clarification, and alignment."""
+class OnboardingThrawnAgent:
+    """Orchestrates the repository onboarding process, asks clarifying questions, and identifies project intent."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "ThoughtfulThunderbirdAgent"
+        self.name = "OnboardingThrawnAgent"
         self.max_steps = 5
         self.tools = ["user_prompting", "clarification_engine"]
         self.success_metrics = {

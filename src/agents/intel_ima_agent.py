@@ -3,12 +3,12 @@ import json
 import datetime
 
 
-class InsightfulIntelAgent:
+class IntelImaAgent:
     """Generates intelligence reports, cost analysis summaries, and delivers weekly email digests."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "InsightfulIntelAgent"
+        self.name = "IntelImaAgent"
         self.max_steps = 5
         self.tools = ["gmail_api", "drive_sync", "cost_analyzer"]
         self.success_metrics = {

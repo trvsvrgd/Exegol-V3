@@ -2,12 +2,12 @@ import os
 import re
 
 
-class MarkdownMarkAgent:
-    """Formats raw text into clean, well-structured Markdown documents with consistent naming."""
+class MarkdownMaceAgent:
+    """Specializes in formatting and optimizing markdown files across the repository."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "MeticulousMarkAgent"
+        self.name = "MarkdownMaceAgent"
         self.max_steps = 5
         self.tools = ["markdown_formatter", "file_namer"]
         self.success_metrics = {

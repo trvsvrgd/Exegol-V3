@@ -1,11 +1,17 @@
 import sys
 import os
 import json
+from typing import Optional, Union
 
 # Add src to path
 sys.path.append(os.getcwd())
 
 from src.inference.llm_client import LLMClient
+
+class MockLLMClient(LLMClient):
+    """A concrete implementation of LLMClient for testing purposes."""
+    def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
+        return "Mocked response"
 
 class MockAgent:
     """A mock agent for testing system prompt generation."""
@@ -20,7 +26,7 @@ class MockAgent:
         self.tools = ["tool1", "tool2"]
 
 def test_json_parsing():
-    client = LLMClient()
+    client = MockLLMClient("mock-model")
     
     # Test wrapped JSON
     text1 = "Here is the result: ```json\n{\"status\": \"ok\", \"data\": 123}\n``` Hope this helps."
@@ -41,7 +47,7 @@ def test_json_parsing():
     print("DONE: JSON parsing tests passed")
 
 def test_system_prompt():
-    client = LLMClient()
+    client = MockLLMClient("mock-model")
     agent = MockAgent()
     prompt = client.generate_system_prompt(agent)
     

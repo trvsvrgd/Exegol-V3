@@ -1,0 +1,15 @@
+{
+  "repositories": [
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3",
+      "priority": 1,
+      "agent_status": "active"
+    }
+  ],
+  "global_settings": {
+    "compliance_monitoring": {
+      "last_run": "2026-04-19",
+      "frequency_days": 30
+    }
+  }
+}

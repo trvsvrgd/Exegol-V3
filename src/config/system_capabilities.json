@@ -1,0 +1,58 @@
+{
+  "system_name": "Exegol v3",
+  "capabilities": [
+    {
+      "id": "isolated_sandboxing",
+      "name": "Isolated Execution Sandboxes",
+      "description": "Ability to create and deploy code into isolated local environments for testing and prototyping.",
+      "implemented": true
+    },
+    {
+      "id": "slack_hitl",
+      "name": "Slack Human-in-the-Loop Approval",
+      "description": "Integration with Slack to require user approval for high-risk actions like file deletions.",
+      "implemented": true
+    },
+    {
+      "id": "audit_logging",
+      "name": "Immutable Interaction Logs",
+      "description": "Automatic logging of every agent session and output to local JSON files for auditing.",
+      "implemented": true
+    },
+    {
+      "id": "model_agnostic",
+      "name": "Multi-Model Provider Support",
+      "description": "Support for switching between local (Ollama) and cloud (Gemini) models for different tasks.",
+      "implemented": true
+    },
+    {
+      "id": "automated_qa",
+      "name": "Automated Quality Gates",
+      "description": "Built-in quality assurance agent (Quality Quigon) to validate code and prototypes.",
+      "implemented": true
+    },
+    {
+      "id": "llm_as_judge",
+      "name": "LLM-as-Judge Evaluation",
+      "description": "Capability to use secondary models to objectively score agent performance and safety.",
+      "implemented": true
+    },
+    {
+      "id": "trajectory_analysis",
+      "name": "Agent Trajectory Analysis",
+      "description": "Ability to evaluate the step-by-step reasoning and tool-use efficiency of agents.",
+      "implemented": true
+    },
+    {
+      "id": "safety_red_teaming",
+      "name": "Safety & Adversarial Red-Teaming",
+      "description": "Automated probing for safety boundary violations and prompt injections.",
+      "implemented": true
+    }
+  ],
+  "compliance_exclusions": [],
+  "metadata": {
+    "last_updated": "2026-04-19",
+    "version": "3.0.0"
+  }
+}
