@@ -193,12 +193,15 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
         # Basic file iteration for audit
         for root, _, files in os.walk(src_dir):
             for file in files:
-                    # Skip data files and registry definitions to avoid false positives
-                    if file.endswith('.json') or "registry.py" in rel_path:
-                        continue
-                        
-                    try:
-                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                file_path = os.path.join(root, file)
+                rel_path = os.path.relpath(file_path, repo_path)
+                
+                # Skip data files and registry definitions to avoid false positives
+                if file.endswith('.json') or "registry.py" in rel_path:
+                    continue
+                    
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             for i, line in enumerate(f, 1):
                                 lower_line = line.lower()
                                 

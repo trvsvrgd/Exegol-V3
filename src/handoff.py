@@ -33,6 +33,7 @@ class HandoffContext:
     regression_context: str = "" # Optional details if re-triggered due to failure
     loop_depth: int = 0      # Current depth in an autonomous handoff chain
     chain_history: List[str] = field(default_factory=list) # Sequence of agent IDs in the chain
+    signature: str = ""     # HMAC-SHA256 signature for integrity validation
 
     def __post_init__(self):
         # frozen=True prevents normal assignment; use object.__setattr__

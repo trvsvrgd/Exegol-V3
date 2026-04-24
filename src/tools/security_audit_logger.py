@@ -9,7 +9,7 @@ def log_security_event(
     actor: str,
     action: str,
     outcome: str,
-    repo_path: str,
+    repo_path: Optional[str] = None,
     details: Optional[Dict[str, Any]] = None,
     session_id: Optional[str] = None
 ) -> str:
@@ -24,6 +24,9 @@ def log_security_event(
         details: Metadata about the event.
         session_id: The execution session identifier.
     """
+    if not repo_path:
+        repo_path = os.getcwd()
+
     audit_log_dir = os.path.join(repo_path, ".exegol", "security")
     os.makedirs(audit_log_dir, exist_ok=True)
     audit_file = os.path.join(audit_log_dir, "security_audit_log.json")

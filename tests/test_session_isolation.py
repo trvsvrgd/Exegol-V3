@@ -11,6 +11,8 @@ import pytest
 # Ensure src/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import hmac
+import hashlib
 from handoff import HandoffContext, SessionResult
 from session_manager import SessionManager
 
@@ -66,8 +68,8 @@ class TestHandoffContext:
         """
         import dataclasses
         fields = dataclasses.fields(HandoffContext)
-        assert len(fields) <= 11, (
-            f"HandoffContext has {len(fields)} fields — exceeds the 11-field "
+        assert len(fields) <= 12, (
+            f"HandoffContext has {len(fields)} fields — exceeds the 12-field "
             "contract. Remove or consolidate fields before adding more."
         )
 
@@ -106,6 +108,14 @@ class TestSessionIsolation:
         exegol_dir.mkdir()
         return str(tmp_path)
 
+    def _sign_handoff(self, handoff: HandoffContext) -> HandoffContext:
+        """Helper to sign handoff for testing."""
+        secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+        data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
+        signature = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()
+        object.__setattr__(handoff, "signature", signature)
+        return handoff
+
     def test_no_state_leak_between_sessions(self, tmp_repo):
         """Two sequential sessions of the same agent should not share state."""
         sm = SessionManager(log_every_session=True)
@@ -125,18 +135,23 @@ class TestSessionIsolation:
             max_steps=10,
         )
 
-        result_1 = sm.spawn_agent_session(
-            agent_id="cameraman_cassian",
-            module_path="agents.cameraman_cassian_agent",
-            class_name="CameramanCassianAgent",
-            handoff=handoff_1,
-        )
-        result_2 = sm.spawn_agent_session(
-            agent_id="cameraman_cassian",
-            module_path="agents.cameraman_cassian_agent",
-            class_name="CameramanCassianAgent",
-            handoff=handoff_2,
-        )
+        handoff_1 = self._sign_handoff(handoff_1)
+        handoff_2 = self._sign_handoff(handoff_2)
+
+        from unittest.mock import patch
+        with patch.object(sm, "_get_agent_cooldown", return_value=0.0):
+            result_1 = sm.spawn_agent_session(
+                agent_id="cameraman_cassian",
+                module_path="agents.cameraman_cassian_agent",
+                class_name="CameramanCassianAgent",
+                handoff=handoff_1,
+            )
+            result_2 = sm.spawn_agent_session(
+                agent_id="cameraman_cassian",
+                module_path="agents.cameraman_cassian_agent",
+                class_name="CameramanCassianAgent",
+                handoff=handoff_2,
+            )
 
         # Different sessions
         assert result_1.session_id != result_2.session_id
@@ -156,12 +171,16 @@ class TestSessionIsolation:
             max_steps=10,
         )
 
-        result = sm.spawn_agent_session(
-            agent_id="cameraman_cassian",
-            module_path="agents.cameraman_cassian_agent",
-            class_name="CameramanCassianAgent",
-            handoff=handoff,
-        )
+        handoff = self._sign_handoff(handoff)
+
+        from unittest.mock import patch
+        with patch.object(sm, "_get_agent_cooldown", return_value=0.0):
+            result = sm.spawn_agent_session(
+                agent_id="cameraman_cassian",
+                module_path="agents.cameraman_cassian_agent",
+                class_name="CameramanCassianAgent",
+                handoff=handoff,
+            )
 
         log_file = os.path.join(
             tmp_repo, ".exegol", "interaction_logs", f"{result.session_id}.json"

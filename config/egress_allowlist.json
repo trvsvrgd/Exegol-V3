@@ -1,0 +1,25 @@
+{
+  "allowed_domains": [
+    "slack.com",
+    "slack-edge.com",
+    "googleapis.com",
+    "google.com",
+    "duckduckgo.com",
+    "www.googleapis.com",
+    "customsearch.googleapis.com",
+    "generativelanguage.googleapis.com",
+    "api.anthropic.com",
+    "ollama.ai",
+    "localhost",
+    "127.0.0.1",
+    "host.docker.internal",
+    "anthropic.com"
+  ],
+  "allowed_ips": [],
+  "blocked_domains": [
+    "webhook.site",
+    "requestbin.com",
+    "pipedream.net"
+  ],
+  "enforce_egress": true
+}

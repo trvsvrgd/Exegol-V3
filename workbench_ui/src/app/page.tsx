@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import ActionQueue from "../components/ActionQueue";
 import BacklogBoard from "../components/BacklogBoard";
 import QuickAddTask from "../components/QuickAddTask";
+import ThrawnInteraction from "../components/ThrawnInteraction";
+import FleetHealth from "../components/FleetHealth";
 
 interface Repo {
   repo_path: string;
@@ -49,29 +51,8 @@ export default function Home() {
 
           <section className="sector-grid">
             <div className="sector">
-              <h2 className="sector-title">Fleet Command</h2>
-              <div className="repo-grid">
-                {repos.map(repo => (
-                  <div 
-                    key={repo.repo_path} 
-                    className={`glass repo-card ${activeRepo === repo.repo_path ? 'active-border' : ''}`}
-                    onClick={() => setActiveRepo(repo.repo_path)}
-                  >
-                    <div className="repo-header">
-                      <h3>{repo.repo_path.split('\\').pop()}</h3>
-                      <span className={`status-badge ${repo.agent_status}`}>
-                        {repo.agent_status}
-                      </span>
-                    </div>
-                    <div className="repo-details">
-                      <div className="detail">
-                        <span className="label">Brain:</span>
-                        <span className="value title-glow">{repo.model_routing_preference.toUpperCase()}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <h2 className="sector-title">Fleet Command Telemetry</h2>
+              <FleetHealth onSelect={setActiveRepo} activePath={activeRepo} />
             </div>
 
             {activeRepo && (
@@ -79,6 +60,7 @@ export default function Home() {
                 <h2 className="sector-title">Operational Intel</h2>
                 <QuickAddTask repoPath={activeRepo} onTaskAdded={fetchRepos} />
                 <BacklogBoard repoPath={activeRepo} />
+                <ThrawnInteraction repoPath={activeRepo} />
               </div>
             )}
           </section>

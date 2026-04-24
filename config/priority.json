@@ -74,6 +74,12 @@
       "max_handoff_depth": 5,
       "log_every_session": true
     },
+    "rate_limits": {
+      "default": 30,
+      "developer_dex": 10,
+      "security_architect": 60,
+      "vibe_vader": 15
+    },
     "compliance_monitoring": {
       "last_run": "2026-04-19",
       "frequency_days": 30

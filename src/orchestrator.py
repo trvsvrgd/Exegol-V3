@@ -4,6 +4,8 @@ import time
 import threading
 import sys
 import schedule
+import hmac
+import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -37,28 +39,75 @@ class ExegolOrchestrator:
         self._setup_cadence_engine()
 
     def _setup_cadence_engine(self):
-        """Configures periodic autonomous tasks for the fleet."""
-        # 1. Daily Reports (ReportRevan)
-        schedule.every().day.at("08:00").do(self._scheduled_trigger, agent_id="report_revan", summary="Daily Fleet Performance Summary")
-        
-        # 2. Weekly Architecture Review (ArchitectArtoo)
-        schedule.every().monday.at("09:00").do(self._scheduled_trigger, agent_id="architect_artoo", summary="Weekly Global Architecture Audit")
-        
-        # 3. Weekly Security Sweep (SecurityArchitect)
-        schedule.every().wednesday.at("10:00").do(self._scheduled_trigger, agent_id="security_architect", summary="Weekly Zero-Day & Infrastructure Security Scan")
-        
-        # 4. Weekly Boundary Audit (VibeVader)
-        schedule.every().friday.at("15:00").do(self._scheduled_trigger, agent_id="vibe_vader", summary="Weekly Human-Action Boundary Audit")
+        """Configures periodic autonomous tasks for the fleet from config."""
+        cadence_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "fleet_cadence.json")
+        if not os.path.exists(cadence_path):
+            print("[Scheduler] No fleet_cadence.json found. Skipping cadence engine.")
+            return
 
-        # Start Scheduler Thread
-        self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
-        self.scheduler_thread.start()
-        print("[Scheduler] Cadence engine started in background.")
+        try:
+            with open(cadence_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            if not config.get("global_settings", {}).get("enable_scheduler", True):
+                print("[Scheduler] Scheduler disabled in config.")
+                return
+
+            for job in config.get("schedules", []):
+                if not job.get("enabled", True):
+                    continue
+                
+                freq = job.get("frequency")
+                at_time = job.get("at")
+                agent_id = job.get("agent_id")
+                summary = job.get("summary")
+
+                # Map frequency string to schedule methods
+                s = schedule.every()
+                if freq == "daily":
+                    s = s.day
+                elif freq == "monday":
+                    s = s.monday
+                elif freq == "tuesday":
+                    s = s.tuesday
+                elif freq == "wednesday":
+                    s = s.wednesday
+                elif freq == "thursday":
+                    s = s.thursday
+                elif freq == "friday":
+                    s = s.friday
+                elif freq == "saturday":
+                    s = s.saturday
+                elif freq == "sunday":
+                    s = s.sunday
+                elif freq.startswith("every_"):
+                    # e.g. every_10_minutes
+                    parts = freq.split("_")
+                    val = int(parts[1])
+                    unit = parts[2]
+                    if "minute" in unit: s = schedule.every(val).minutes
+                    elif "hour" in unit: s = schedule.every(val).hours
+                    elif "day" in unit: s = schedule.every(val).days
+                
+                if at_time:
+                    s = s.at(at_time)
+                
+                s.do(self._scheduled_trigger, agent_id=agent_id, summary=summary)
+                print(f"[Scheduler] Registered: {summary} ({agent_id}) @ {freq} {at_time or ''}")
+
+            # Start Scheduler Thread
+            self._check_interval = config.get("global_settings", {}).get("check_interval_seconds", 60)
+            self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
+            self.scheduler_thread.start()
+            print(f"[Scheduler] Cadence engine started (interval: {self._check_interval}s).")
+
+        except Exception as e:
+            print(f"[Scheduler] Error setting up cadence engine: {e}")
 
     def _run_scheduler(self):
         while not self._should_stop_scheduler:
             schedule.run_pending()
-            time.sleep(60) # Only check every minute
+            time.sleep(self._check_interval)
 
     def _scheduled_trigger(self, agent_id: str, summary: str):
         """Bridge between schedule library and the orchestration loop."""
@@ -278,6 +327,7 @@ class ExegolOrchestrator:
             )
             
             self.update_repo_status(repo_info.get("repo_path"), "blocked")
+            self.escalate_to_human(msg, repo_info.get("repo_path"))
             return None
 
         # 2. Circuit Breaker: Detect simple cycles (A -> B -> A) or repeated agents
@@ -299,6 +349,7 @@ class ExegolOrchestrator:
                 )
                 
                 self.update_repo_status(repo_info.get("repo_path"), "blocked")
+                self.escalate_to_human(msg, repo_info.get("repo_path"))
                 return None
 
         # Update history for the current run
@@ -332,12 +383,15 @@ class ExegolOrchestrator:
             loop_depth=current_depth,
             chain_history=current_history
         )
-
+        
+        # --- SECURITY GUARD: Sign Handoff (sec_sec_arch_005) ---
+        signed_handoff = self._sign_handoff(handoff)
+        
         result = self.session_manager.spawn_agent_session(
             agent_id=agent_id,
             module_path=registry_entry["module"],
             class_name=registry_entry["class"],
-            handoff=handoff,
+            handoff=signed_handoff,
         )
         
         if result:
@@ -368,6 +422,47 @@ class ExegolOrchestrator:
                     print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
 
         return result
+
+    def _sign_handoff(self, handoff: HandoffContext) -> HandoffContext:
+        """Computes and attaches an HMAC signature to the HandoffContext."""
+        secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+        
+        data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
+        
+        signature = hmac.new(
+            secret.encode(),
+            data.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        # frozen=True dataclass needs object.__setattr__
+        object.__setattr__(handoff, "signature", signature)
+        return handoff
+
+    def escalate_to_human(self, message: str, repo_path: str):
+        """Escalates a critical autonomous failure to the human-in-the-loop queue."""
+        uar_path = os.path.join(repo_path, ".exegol", "user_action_required.md")
+        timestamp = datetime.now().isoformat()
+        
+        escalation_entry = f"\n- [ ] **BLOCKING ISSUE: {message}**\n  - *Timestamp:* {timestamp}\n  - *Action:* Resolve the agent loop or manually fix the issue to unblock the repository.\n"
+        
+        try:
+            if os.path.exists(uar_path):
+                with open(uar_path, 'a', encoding='utf-8') as f:
+                    f.write(escalation_entry)
+            else:
+                os.makedirs(os.path.dirname(uar_path), exist_ok=True)
+                with open(uar_path, 'w', encoding='utf-8') as f:
+                    f.write("# Exegol V3 - Human Action Required\n")
+                    f.write(f"**Generated by:** Orchestrator (Loop Guard)\n")
+                    f.write(f"**Timestamp:** {timestamp}\n\n")
+                    f.write("> [!CAUTION]\n> A critical loop or depth limit was reached. Autonomous execution is paused for this repo.\n\n")
+                    f.write("## 🚨 Critical Escalations\n")
+                    f.write(escalation_entry)
+            
+            print(f"[Orchestrator] Escalated to human: {message}")
+        except Exception as e:
+            print(f"[Orchestrator] Failed to escalate to human: {e}")
 
     def handle_wake_word(self, command_string: str, channel: str = None):
         """Processes CLI input to trigger specific agents or default 'go' behavior."""
@@ -429,7 +524,8 @@ class ExegolOrchestrator:
         if "stop" in cmd:
             slack_manager.post_message("🛑 `stop` received — shutting down Exegol orchestrator...", channel=channel)
             print("\n[Slack] Stop command detected. Shutting down...")
-            sys.exit(0)
+            self.shutdown()
+            return
 
         if "go" in cmd:
             slack_manager.post_message("🚀 `go` received — triggering active repository...", channel=channel)
@@ -441,6 +537,18 @@ class ExegolOrchestrator:
             f"❓ Unknown command: `{command_string}`\nTry: `go`, `fleet`, or an agent wake word.",
             channel=channel
         )
+
+    def shutdown(self):
+        """Performs a clean shutdown of the orchestrator and its background threads."""
+        print("[Shutdown] Initiating graceful shutdown...")
+        self._should_stop_scheduler = True
+        self.is_running_fleet = False
+        
+        # Give threads a moment to catch the stop signals
+        time.sleep(1)
+        
+        print("[Shutdown] Exiting process.")
+        sys.exit(0)
 
 if __name__ == "__main__":
     orchestrator = ExegolOrchestrator()

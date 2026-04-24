@@ -13,6 +13,8 @@ import json
 import os
 import time
 import traceback
+import hmac
+import hashlib
 from typing import Optional, Any
 
 from handoff import HandoffContext, SessionResult
@@ -23,6 +25,8 @@ class SessionManager:
 
     def __init__(self, log_every_session: bool = True):
         self.log_every_session = log_every_session
+        self._last_executions: Dict[str, float] = {}  # agent_id -> timestamp
+        self._default_cooldown = 30.0  # seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -58,6 +62,33 @@ class SessionManager:
             session_id=handoff.session_id,
         )
 
+        # --- SECURITY GUARD: Trust System (feat_agent_trust_system) ---
+        from tools.trust_manager import TrustManager
+        autonomy_level = TrustManager.check_autonomy(agent_id)
+        if autonomy_level == "SUSPENDED":
+            msg = f"Agent '{agent_id}' is SUSPENDED due to low trust score ({TrustManager.get_score(agent_id)})."
+            result.outcome = "failure"
+            result.errors.append(msg)
+            result.output_summary = "Security Block: Agent suspended."
+            print(f"[SessionManager] SECURITY: {msg}")
+            return result
+        
+        # --- SECURITY GUARD: Rate Limiting (sec_sec_arch_002) ---
+        cooldown = self._get_agent_cooldown(agent_id, handoff.repo_path)
+        last_run = self._last_executions.get(agent_id, 0.0)
+        now = time.time()
+        
+        if now - last_run < cooldown:
+            remaining = int(cooldown - (now - last_run))
+            msg = f"Rate limit hit for agent '{agent_id}'. Cooldown in effect for {remaining}s."
+            result.outcome = "failure"
+            result.errors.append(msg)
+            result.output_summary = "Security Block: Rate limit exceeded."
+            print(f"[SessionManager] SECURITY: {msg}")
+            return result
+            
+        self._last_executions[agent_id] = now
+
         print(
             f"[SessionManager] Spawning isolated session "
             f"{handoff.session_id} for {class_name}"
@@ -66,6 +97,14 @@ class SessionManager:
             f"[SessionManager] Handoff -> repo={handoff.repo_path}, "
             f"model={handoff.model_routing}, max_steps={handoff.max_steps}"
         )
+
+        # --- SECURITY GUARD: HMAC Validation (sec_sec_arch_005) ---
+        if not self._validate_handoff_signature(handoff):
+            result.outcome = "failure"
+            result.errors.append("Invalid or missing handoff signature (potential forgery).")
+            result.output_summary = "Security Block: Handoff validation failed."
+            print(f"[SessionManager] SECURITY: Rejected forged handoff for session {handoff.session_id}")
+            return result
 
         from inference.inference_manager import InferenceManager
         llm_client = InferenceManager.get_client(provider=handoff.model_routing)
@@ -78,7 +117,9 @@ class SessionManager:
             agent_instance = self._create_fresh_instance(module_path, class_name, llm_client)
 
             # 2. Execute with the standardised handoff contract
+            os.environ["EXEGOL_ACTIVE_AGENT"] = agent_id
             output = agent_instance.execute(handoff)
+            os.environ.pop("EXEGOL_ACTIVE_AGENT", None)
 
             result.outcome = "success"
             result.output_summary = str(output) if output else ""
@@ -134,6 +175,39 @@ class SessionManager:
         importlib.reload(mod)
         cls = getattr(mod, class_name)
         return cls(llm_client=llm_client)
+
+    @staticmethod
+    def _validate_handoff_signature(handoff: HandoffContext) -> bool:
+        """Verifies the HMAC signature of the handoff to ensure integrity."""
+        secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+        
+        # We need to compute the signature over the fields that matter
+        # Excluding the signature field itself obviously
+        data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
+        
+        expected_sig = hmac.new(
+            secret.encode(),
+            data.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        return hmac.compare_digest(handoff.signature, expected_sig)
+
+    def _get_agent_cooldown(self, agent_id: str, repo_path: str) -> float:
+        """Retrieves the cooldown period for an agent from config."""
+        # Try to load from repo-specific config first (not implemented yet in priority.json)
+        # Fallback to global settings
+        priority_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "priority.json")
+        if os.path.exists(priority_path):
+            try:
+                with open(priority_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                global_settings = config.get("global_settings", {})
+                rate_limits = global_settings.get("rate_limits", {})
+                return float(rate_limits.get(agent_id, rate_limits.get("default", self._default_cooldown)))
+            except Exception:
+                pass
+        return self._default_cooldown
 
     @staticmethod
     def _persist_session_log(repo_path: str, result: SessionResult) -> Optional[str]:

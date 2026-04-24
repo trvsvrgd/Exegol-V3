@@ -1,0 +1,46 @@
+{
+  "agents": {
+    "developer_dex": {
+      "score": 85,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    },
+    "architect_artoo": {
+      "score": 90,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    },
+    "security_architect": {
+      "score": 95,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    },
+    "thoughtful_thrawn": {
+      "score": 100,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    },
+    "vibe_vader": {
+      "score": 75,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    },
+    "default": {
+      "score": 70,
+      "last_updated": "2026-04-24T08:00:00",
+      "history": []
+    }
+  },
+  "mechanics": {
+    "hitl_approval_gain": 1,
+    "hitl_rejection_loss": 15,
+    "security_violation_loss": 25,
+    "min_score": 0,
+    "max_score": 100
+  },
+  "thresholds": {
+    "full_autonomy": 80,
+    "force_hitl": 50,
+    "suspension": 20
+  }
+}

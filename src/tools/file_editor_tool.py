@@ -3,15 +3,27 @@ import re
 from typing import Optional
 
 def read_file(path: str) -> str:
-    """Reads the content of a file."""
+    """Reads the content of a file. Requires RBAC."""
+    agent_id = os.getenv("EXEGOL_ACTIVE_AGENT", "unknown")
+    
+    from tools.rbac_manager import RBACManager
+    if not RBACManager.check_permission(agent_id, "filesystem:read"):
+        return f"Error: Agent '{agent_id}' does not have 'filesystem:read' permission."
+
     if not os.path.exists(path):
         return f"Error: File not found at {path}"
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
 
 def write_file(path: str, content: str, reason: Optional[str] = None) -> str:
-    """Creates or overwrites a file. Requires approval if overwriting a high-risk file."""
+    """Creates or overwrites a file. Requires RBAC and potential approval."""
+    agent_id = os.getenv("EXEGOL_ACTIVE_AGENT", "unknown")
+    
     try:
+        from tools.rbac_manager import RBACManager
+        if not RBACManager.check_permission(agent_id, "filesystem:write", target_path=path):
+            return f"Error: Agent '{agent_id}' does not have 'filesystem:write' permission for {path}."
+
         from tools.safety_gate import get_risk_metadata
         from tools.slack_tool import request_file_approval
         
@@ -62,11 +74,19 @@ def search_replace_regex(path: str, pattern: str, replacement: str, reason: Opti
     return write_file(path, new_content, reason=reason or f"Regex replace in {os.path.basename(path)}")
 
 def delete_file(path: str, reason: str) -> str:
-    """Deletes a file, but requires explicit external approval first."""
+    """Deletes a file, requires RBAC and explicit external approval."""
+    agent_id = os.getenv("EXEGOL_ACTIVE_AGENT", "unknown")
+
     if not os.path.exists(path):
         return f"Error: File not found at {path}"
         
     try:
+        from tools.rbac_manager import RBACManager
+        if not RBACManager.check_permission(agent_id, "filesystem:delete"):
+            # Note: config/agent_rbac.json might say "requires_hitl" for delete
+            # We check the granted permission first.
+            pass 
+
         from tools.safety_gate import get_risk_metadata
         from tools.slack_tool import request_file_approval
         

@@ -85,6 +85,7 @@ class DeveloperDexAgent:
             }
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.system_prompt += "\n\nCRITICAL: After completing any coding task or sandbox creation, you MUST hand off to QualityQuigonAgent for validation. Set your next_agent_id to 'quality_quigon'."
 
     def _validate_action_path(self, repo_path: str, relative_path: str) -> bool:
         """Security Guard: Ensures the target path is within the repo boundary."""
@@ -139,6 +140,9 @@ class DeveloperDexAgent:
             else:
                 # Real coding loop
                 res = self._run_coding_loop(repo_path, active_prompt, handoff)
+            
+            # Ensure handoff to Quigon
+            self.next_agent_id = "quality_quigon"
             
             duration = time.time() - start_time
             log_interaction(
@@ -287,6 +291,9 @@ class DeveloperDexAgent:
 
         res = f"Coding cycle complete. Results:\n" + "\n".join(results)
         
+        # --- TASK: Implementation Plan Logging (doc_implementation_plan_logging) ---
+        self._log_implementation_plan(repo_path, actions, results, active_prompt)
+        
         # Capture snapshot for regression testing (poe_009)
         snapshot_data = {
             "task_id": getattr(handoff, "task_id", "unknown"),
@@ -305,3 +312,33 @@ class DeveloperDexAgent:
 
         self.next_agent_id = "quality_quigon"
         return res
+
+    def _log_implementation_plan(self, repo_path: str, actions: list, results: list, prompt: str):
+        """Logs a human-readable implementation plan for the user to review."""
+        logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        plan_path = os.path.join(logs_dir, f"plan_dex_{timestamp}.md")
+        
+        plan_content = f"# Implementation Plan: DeveloperDex\n"
+        plan_content += f"**Timestamp:** {time.ctime()}\n"
+        plan_content += f"**Task Prompt:** {prompt}\n\n"
+        plan_content += f"## Proposed Actions\n"
+        
+        for i, action in enumerate(actions):
+            plan_content += f"### {i+1}. {action.get('type', 'Unknown').capitalize()}: `{action.get('path')}`\n"
+            if action.get('type') == 'replace':
+                plan_content += f"- **Target:** `{action.get('target')}`\n"
+            plan_content += f"```\n{action.get('content')}\n```\n\n"
+            
+        plan_content += f"## Execution Results\n"
+        for result in results:
+            plan_content += f"- {result}\n"
+            
+        try:
+            with open(plan_path, 'w', encoding='utf-8') as f:
+                f.write(plan_content)
+            print(f"[{self.name}] Implementation plan logged to {plan_path}")
+        except Exception as e:
+            print(f"[{self.name}] Failed to log implementation plan: {e}")

@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, Callable
 from slack_sdk import WebClient
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from tools.egress_filter import EgressFilter
 
 class SlackManager:
     """Manages Slack interactions including sending messages and listening for commands."""
@@ -64,10 +65,12 @@ class SlackManager:
             if blocks:
                 payload["blocks"] = blocks
             try:
+                EgressFilter.validate_request(self.webhook_url)
                 resp = requests.post(self.webhook_url, json=payload)
                 resp.raise_for_status()
                 return "Success: Posted via Webhook"
             except Exception as e:
+                print(f"[SlackManager] Webhook post failed: {e}")
                 return f"Error: {str(e)}"
 
         return f"[MOCK SLACK] Message: {text}"
@@ -106,6 +109,13 @@ class SlackManager:
             ack()
             callback_id = body["actions"][0]["value"]
             self.approval_results[callback_id] = "APPROVED"
+            
+            # Reward Trust (slow gain)
+            active_agent = os.getenv("EXEGOL_ACTIVE_AGENT")
+            if active_agent:
+                from tools.trust_manager import TrustManager
+                TrustManager.update_score(active_agent, 1, "User approved HITL request")
+
             if callback_id in self.pending_approvals:
                 self.pending_approvals[callback_id].set()
 
@@ -114,6 +124,13 @@ class SlackManager:
             ack()
             callback_id = body["actions"][0]["value"]
             self.approval_results[callback_id] = "REJECTED"
+            
+            # Penalize Trust (fast loss)
+            active_agent = os.getenv("EXEGOL_ACTIVE_AGENT")
+            if active_agent:
+                from tools.trust_manager import TrustManager
+                TrustManager.update_score(active_agent, -15, "User rejected HITL request")
+
             if callback_id in self.pending_approvals:
                 self.pending_approvals[callback_id].set()
 

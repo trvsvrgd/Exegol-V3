@@ -15,6 +15,8 @@ from typing import List, Optional, Dict, Any
 from orchestrator import ExegolOrchestrator
 from agents.registry import AGENT_REGISTRY
 from tools.state_manager import StateManager
+from tools.thrawn_intel_manager import ThrawnIntelManager
+from tools.egress_filter import EgressFilter
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -119,6 +121,23 @@ class AgentModelMapping(BaseModel):
 
 class AgentModelsRequest(BaseModel):
     mappings: List[AgentModelMapping]
+
+class ThrawnObjectiveRequest(BaseModel):
+    repo_path: str
+    objective: str
+
+class ThrawnAnswerRequest(BaseModel):
+    repo_path: str
+    question: str
+    answer: str
+
+class ThrawnAskRequest(BaseModel):
+    repo_path: str
+    question: str
+
+class ThrawnArchitectureRequest(BaseModel):
+    repo_path: str
+    pattern: str
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -291,7 +310,9 @@ async def update_agent_models(req: AgentModelsRequest):
 @app.get("/local-models")
 async def get_local_models():
     try:
-        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        url = "http://localhost:11434/api/tags"
+        EgressFilter.validate_request(url)
+        response = requests.get(url, timeout=5)
         if response.status_code == 200:
             return response.json().get("models", [])
         return []
@@ -306,6 +327,79 @@ async def get_snapshot(snapshot_name: str, repo_path: str):
 
     with open(snapshot_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+# --- Epic 4: Thrawn Interaction ---
+
+@app.get("/thrawn/intel")
+async def get_thrawn_intel(repo_path: str):
+    mgr = ThrawnIntelManager(repo_path)
+    return mgr.read_intent()
+
+@app.post("/thrawn/objective")
+async def update_thrawn_objective(req: ThrawnObjectiveRequest):
+    mgr = ThrawnIntelManager(req.repo_path)
+    mgr.update_objective(req.objective)
+    return {"status": "success"}
+
+@app.post("/thrawn/answer")
+async def answer_thrawn_question(req: ThrawnAnswerRequest):
+    mgr = ThrawnIntelManager(req.repo_path)
+    mgr.answer_question(req.question, req.answer)
+    return {"status": "success"}
+
+@app.post("/thrawn/ask")
+async def ask_thrawn_question(req: ThrawnAskRequest):
+    mgr = ThrawnIntelManager(req.repo_path)
+    intel = mgr.read_intent()
+    intel["questions"].append({"question": req.question, "answer": None})
+    mgr.save_intent(intel)
+    return {"status": "success"}
+
+@app.post("/thrawn/architecture")
+async def add_thrawn_architecture(req: ThrawnArchitectureRequest):
+    mgr = ThrawnIntelManager(req.repo_path)
+    mgr.add_architecture(req.pattern)
+    return {"status": "success"}
+
+# --- Epic 5: Fleet Health Dashboard ---
+
+@app.get("/fleet/health")
+async def get_fleet_health():
+    """Aggregates health metrics across all managed repositories."""
+    orchestrator.load_config()
+    repos = orchestrator.priority_config.get("repositories", [])
+    health_data = []
+
+    for repo in repos:
+        path = repo.get("repo_path")
+        sm = StateManager(path)
+        
+        # 1. Backlog size (uncompleted tasks)
+        backlog = sm.read_json(".exegol/backlog.json") or []
+        backlog_count = len([t for t in backlog if t.get("status") in ["todo", "pending_prioritization", "backlogged"]])
+        
+        # 2. HITL size (User action required)
+        hitl = sm.read_json(".exegol/user_action_required.json") or []
+        hitl_count = len([t for t in hitl if t.get("status") != "done"])
+        
+        # 3. Last activity
+        from tools.fleet_logger import read_interaction_logs
+        logs = read_interaction_logs([path], days=30)
+        last_log = logs[-1] if logs else None
+        
+        health_data.append({
+            "name": os.path.basename(path),
+            "path": path,
+            "status": repo.get("agent_status", "idle"),
+            "priority": repo.get("priority", 10),
+            "backlog_count": backlog_count,
+            "hitl_count": hitl_count,
+            "last_activity": last_log.get("timestamp") if last_log else None,
+            "last_agent": last_log.get("agent_id") if last_log else None,
+            "last_outcome": last_log.get("outcome") if last_log else None
+        })
+
+    return health_data
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

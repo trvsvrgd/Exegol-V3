@@ -1,0 +1,63 @@
+{
+  "roles": {
+    "developer": {
+      "permissions": [
+        "filesystem:read",
+        "filesystem:write",
+        "sandbox:orchestrate",
+        "slack:notify"
+      ]
+    },
+    "architect": {
+      "permissions": [
+        "filesystem:read",
+        "architecture:review",
+        "schema:design"
+      ]
+    },
+    "security": {
+      "permissions": [
+        "filesystem:read",
+        "repo:scan",
+        "security:audit"
+      ]
+    },
+    "manager": {
+      "permissions": [
+        "backlog:read",
+        "backlog:write",
+        "report:generate"
+      ]
+    },
+    "restricted": {
+      "permissions": [
+        "filesystem:read"
+      ]
+    }
+  },
+  "agent_roles": {
+    "developer_dex": "developer",
+    "architect_artoo": "architect",
+    "security_architect": "security",
+    "product_poe": "manager",
+    "report_revan": "manager",
+    "thoughtful_thrawn": "restricted",
+    "vibe_vader": "restricted",
+    "quality_quigon": "developer"
+  },
+  "path_grants": {
+    "vibe_vader": [
+      ".exegol/user_action_required.md",
+      ".exegol/user_action_required.json"
+    ],
+    "thoughtful_thrawn": [
+      ".exegol/intent.md",
+      "README.md"
+    ]
+  },
+  "global_restrictions": {
+    "filesystem:delete": "requires_hitl",
+    "system:command": "requires_hitl",
+    "credential:access": "requires_hitl"
+  }
+}

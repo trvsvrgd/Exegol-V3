@@ -3,6 +3,10 @@ import json
 import datetime
 from tools.git_tool import has_commits_since, get_recent_commits
 from tools.backlog_manager import BacklogManager
+from tools.readme_parser import ReadmeParser
+from tools.diagram_generator import DiagramGenerator
+from tools.architecture_reviewer import ArchitectureReviewer
+from tools.schema_designer import SchemaDesigner
 
 
 class ArchitectArtooAgent:
@@ -61,16 +65,8 @@ class ArchitectArtooAgent:
             print(f"[{self.name}] Archived {archived} completed task(s) from backlog.")
 
         # 3. Check README for Mermaid architecture diagram
-        readme_path = os.path.join(repo_path, "README.md")
-        has_diagram = False
-        if os.path.exists(readme_path):
-            try:
-                with open(readme_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    if "```mermaid" in content or "Architecture Diagram" in content:
-                        has_diagram = True
-            except Exception as e:
-                print(f"[{self.name}] Error reading README: {e}")
+        readme_data = ReadmeParser.parse(repo_path)
+        has_diagram = readme_data.get("has_mermaid", False)
 
         if not has_diagram:
             print(f"[{self.name}] No Mermaid diagram found in README. Backlogging diagram update.")
@@ -120,18 +116,25 @@ class ArchitectArtooAgent:
                 print(f"[{self.name}] Error processing test reports: {e}")
 
         # 5. Evaluate broader solution architecture gaps and inject tasks
-        print(f"[{self.name}] Evaluating broader solution architecture gaps...")
-        arch_tasks = [
-            {
-                "id": "arch_tool_registry",
-                "summary": "Implement missing Artoo tools: diagram_generator, readme_parser, architecture_reviewer, schema_designer",
-                "priority": "high",
-                "type": "architecture_gap",
-                "status": "pending_prioritization",
-                "source_agent": self.name,
-                "rationale": "ArchitectArtoo declares these tools in its manifest but none are implemented. The agent cannot hit its schema_adherence_rate and repos_with_arch_diagram KPIs without them.",
-                "created_at": datetime.datetime.now().isoformat()
-            },
+        print(f"[{self.name}] Performing deep architecture review...")
+        review_report = ArchitectureReviewer.review(repo_path, client=self.llm_client)
+        
+        arch_tasks = []
+        if review_report.get("status") in ["DEGRADED", "CRITICAL"]:
+            for finding in review_report.get("findings", []):
+                arch_tasks.append({
+                    "id": f"arch_fix_{finding[:12].lower().replace(' ', '_')}",
+                    "summary": f"Architectural Issue: {finding}",
+                    "priority": "high",
+                    "type": "architecture_improvement",
+                    "status": "pending_prioritization",
+                    "source_agent": self.name,
+                    "rationale": "Automated architectural review identified this concern.",
+                    "created_at": datetime.datetime.now().isoformat()
+                })
+
+        # Add predefined tasks if they are not already there
+        standard_tasks = [
             {
                 "id": "arch_app_schema_validator",
                 "summary": "Implement app.exegol.json schema validator and enforce it in the DeveloperDex sandbox lifecycle",
@@ -183,6 +186,8 @@ class ArchitectArtooAgent:
                 "created_at": datetime.datetime.now().isoformat()
             },
         ]
+
+        arch_tasks.extend(standard_tasks)
 
         for task in arch_tasks:
             added = bm.add_task(task)

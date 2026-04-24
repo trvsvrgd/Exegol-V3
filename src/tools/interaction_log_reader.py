@@ -2,21 +2,34 @@ import os
 import json
 from typing import List, Dict, Any, Optional
 
-def read_logs(repo_path: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Reads interaction logs from the .exegol/interaction_logs directory.
+def read_logs(repo_path: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Reads interaction logs from the repo or the global logs directory.
     
     Returns a list of session result dictionaries, sorted by timestamp descending.
     """
-    logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
-    if not os.path.isdir(logs_dir):
+    log_paths = []
+    
+    # 1. Check repo-specific logs
+    if repo_path:
+        repo_logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
+        if os.path.isdir(repo_logs_dir):
+            log_paths.append(repo_logs_dir)
+            
+    # 2. Check global logs directory
+    global_logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
+    if os.path.isdir(global_logs_dir):
+        log_paths.append(global_logs_dir)
+
+    if not log_paths:
         return []
 
     all_logs = []
     try:
-        filenames = os.listdir(logs_dir)
-        for filename in filenames:
-            if filename.endswith(".json"):
-                file_path = os.path.join(logs_dir, filename)
+        for logs_dir in log_paths:
+            filenames = os.listdir(logs_dir)
+            for filename in filenames:
+                if filename.endswith(".json"):
+                    file_path = os.path.join(logs_dir, filename)
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
                         log_data = json.load(f)
@@ -71,8 +84,14 @@ def summarize_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
         "top_errors": [e[0] for e in sorted_errors[:5]]
     }
 
-def get_agent_performance(repo_path: str, agent_id: str) -> Dict[str, Any]:
-    """Retrieves performance metrics for a specific agent."""
-    logs = read_logs(repo_path, limit=200)
+def get_agent_performance(agent_id: str, repo_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retrieves performance metrics for a specific agent across the fleet."""
+    logs = read_logs(repo_path, limit=500)
     agent_logs = [l for l in logs if l.get("agent_id") == agent_id]
     return summarize_logs(agent_logs)
+
+def get_recent_failures(limit: int = 5) -> List[Dict[str, Any]]:
+    """Returns the most recent failed sessions for audit."""
+    logs = read_logs(limit=200)
+    failures = [l for l in logs if l.get("outcome") != "success"]
+    return failures[:limit]

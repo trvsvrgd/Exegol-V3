@@ -24,8 +24,13 @@ class TestLoopGuard(unittest.TestCase):
             "repo_path": "test_repo",
             "priority": 1
         }
+        
+        # Mock Slack to avoid egress filter blocks
+        self.slack_patcher = patch('orchestrator.slack_manager.post_message')
+        self.slack_patcher.start()
 
     def tearDown(self):
+        self.slack_patcher.stop()
         self.priority_patcher.stop()
         if os.path.exists('tests/mock_priority.json'):
             os.remove('tests/mock_priority.json')

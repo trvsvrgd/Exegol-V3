@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 import session_manager  # type: ignore
+import hmac
+import hashlib
 from handoff import HandoffContext  # type: ignore
 from agents.registry import AGENT_REGISTRY  # type: ignore
 
@@ -21,6 +23,12 @@ def test_agent_spawning_with_llm():
         model_routing="ollama",
         max_steps=15
     )
+    
+    # Sign handoff
+    secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+    data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
+    signature = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()
+    object.__setattr__(handoff, "signature", signature)
     
     # We need to mock the importlib.import_module or just let it run if dependencies are met
     # Let's try to spawn QualityQuigonAgent as it's already updated

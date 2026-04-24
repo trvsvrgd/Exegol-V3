@@ -1,0 +1,40 @@
+{
+  "schedules": [
+    {
+      "id": "daily_report",
+      "agent_id": "report_revan",
+      "summary": "Daily Fleet Performance Summary",
+      "frequency": "daily",
+      "at": "08:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_arch_audit",
+      "agent_id": "architect_artoo",
+      "summary": "Weekly Global Architecture Audit",
+      "frequency": "monday",
+      "at": "09:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_security_scan",
+      "agent_id": "security_architect",
+      "summary": "Weekly Zero-Day & Infrastructure Security Scan",
+      "frequency": "wednesday",
+      "at": "10:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_vibe_audit",
+      "agent_id": "vibe_vader",
+      "summary": "Weekly Human-Action Boundary Audit",
+      "frequency": "friday",
+      "at": "15:00",
+      "enabled": true
+    }
+  ],
+  "global_settings": {
+    "enable_scheduler": true,
+    "check_interval_seconds": 60
+  }
+}

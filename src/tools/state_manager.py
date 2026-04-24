@@ -40,15 +40,24 @@ class StateManager:
         
         with _global_lock:
             # Atomic write pattern: write to temp file, then rename
-            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(abs_path), prefix=".state_", suffix=".json")
-            try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as tmp:
+            target_dir = os.path.dirname(abs_path)
+            with tempfile.NamedTemporaryFile('w', dir=target_dir, prefix=".state_", suffix=".json", encoding='utf-8', delete=False) as tmp:
+                temp_path = tmp.name
+                try:
                     json.dump(data, tmp, indent=4)
-                
+                    tmp.flush()
+                    os.fsync(tmp.fileno()) # Ensure data is written to disk
+                except Exception as e:
+                    print(f"[StateManager] Error writing to temp file: {e}")
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise e
+            
+            try:
                 # Replace the original file with the temporary one atomically
                 os.replace(temp_path, abs_path)
             except Exception as e:
-                print(f"[StateManager] Error writing {relative_path}: {e}")
+                print(f"[StateManager] Error replacing {relative_path}: {e}")
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 raise e

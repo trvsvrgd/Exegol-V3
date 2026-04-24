@@ -51,12 +51,20 @@ class QualityQuigonAgent:
         # 1. Snapshot Regression Check (poe_009)
         print(f"[{self.name}] Checking for snapshots/baseline for task: {task_id}")
         
-        dummy_output = {"captured_hash": handoff.snapshot_hash} 
-        eval_res = run_regression_eval(dummy_output, f"dex_{task_id}")
-        results.append(f"Snapshot Regression ({task_id}): {eval_res.get('status')}")
+        # Use actual sandbox state if available for regression, otherwise use the handoff hash
+        exegol_dir = os.path.join(repo_path, ".exegol")
+        sandboxes_dir = os.path.join(exegol_dir, "sandboxes")
+        
+        # Capture a 'current' snapshot of active sandboxes for comparison
+        current_state = {"sandboxes": []}
+        if os.path.isdir(sandboxes_dir):
+            current_state["sandboxes"] = sorted(os.listdir(sandboxes_dir))
+
+        eval_res = run_regression_eval(current_state, f"qa_baseline_{task_id}")
+        results.append(f"State Regression: {eval_res.get('status', 'unknown')}")
 
         if eval_res.get("status") == "fail":
-            self.regression_context = f"Snapshot mismatch detected for task {task_id}. Saved: {eval_res.get('saved')}, Current: {eval_res.get('current')}"
+            self.regression_context = f"Fleet state mismatch detected. Target: {task_id}. Baseline differs from current sandbox allocation."
 
         # 2. Sandbox Validation (Existing logic)
         exegol_dir = os.path.join(repo_path, ".exegol")
@@ -67,8 +75,32 @@ class QualityQuigonAgent:
             active_sandboxes = [d for d in os.listdir(sandboxes_dir) if os.path.isdir(os.path.join(sandboxes_dir, d))]
             if active_sandboxes:
                 print(f"[{self.name}] Found {len(active_sandboxes)} active sandboxes. Validating...")
-                # ... (rest of existing sandbox validation logic)
-                results.append(f"Validated {len(active_sandboxes)} sandboxes.")
+                schema_path = os.path.join(repo_path, ".exegol", "schemas", "app_schema.json")
+                
+                for sb in active_sandboxes:
+                    sb_path = os.path.join(sandboxes_dir, sb)
+                    
+                    # 2a. Schema Check
+                    if not os.path.exists(schema_path):
+                        results.append(f"Sandbox '{sb}' Schema: error (Master schema missing)")
+                        continue
+                        
+                    schema_res = validate_app_schema(sb_path, schema_path)
+                    results.append(f"Sandbox '{sb}' Schema: {schema_res['status']}")
+                    if schema_res['status'] == 'fail':
+                        results.append(f"  - Failure: {schema_res.get('message')}")
+                    
+                    # 2b. Linting
+                    lint_res = run_sandbox_lint(sb_path)
+                    results.append(f"Sandbox '{sb}' Lint: {lint_res['status']}")
+                    
+                    # 2c. Automated Tests
+                    test_res = run_sandbox_tests(sb_path)
+                    results.append(f"Sandbox '{sb}' Tests: {test_res['status']}")
+                    
+                    if schema_res['status'] == 'fail' or lint_res['status'] == 'fail' or test_res['status'] == 'fail':
+                        print(f"[{self.name}] Sandbox '{sb}' failed quality checks.")
+                        # Could set a flag here to trigger dex if we want
 
         # Final Report
         report_data = {
@@ -94,4 +126,35 @@ class QualityQuigonAgent:
 
             self.next_agent_id = "architect_artoo"
 
+        # --- TASK: Validation Report Logging ---
+        self._log_validation_report(repo_path, results, eval_res)
+
         return f"Validation Cycle complete. Results: " + ", ".join(results)
+
+    def _log_validation_report(self, repo_path: str, results: list, eval_res: dict):
+        """Logs a human-readable validation report for the user."""
+        logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        import time
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        report_path = os.path.join(logs_dir, f"report_quigon_{timestamp}.md")
+        
+        content = f"# Validation Report: QualityQuigon\n"
+        content += f"**Timestamp:** {time.ctime()}\n\n"
+        
+        content += f"## Summary Results\n"
+        for res in results:
+            content += f"- {res}\n"
+        
+        content += f"\n## Regression Details\n"
+        content += f"- **Status:** {eval_res.get('status', 'unknown')}\n"
+        if self.regression_context:
+            content += f"- **Context:** {self.regression_context}\n"
+            
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"[{self.name}] Validation report logged to {report_path}")
+        except Exception as e:
+            print(f"[{self.name}] Failed to log validation report: {e}")

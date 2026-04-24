@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union
 from dotenv import load_dotenv
+from tools.egress_filter import EgressFilter
 
 load_dotenv()
 
@@ -53,11 +54,7 @@ class OllamaClient(LLMClient):
 
     def _validate_url(self, url: str) -> bool:
         """Ensures the URL is within the allowed set of hosts to prevent SSRF."""
-        try:
-            parsed = urlparse(url)
-            return parsed.hostname in self._allowed_hosts
-        except Exception:
-            return False
+        return EgressFilter.is_url_allowed(url)
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
         payload = {
@@ -83,6 +80,7 @@ class GeminiClient(LLMClient):
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
         try:
+            EgressFilter.validate_request("https://generativelanguage.googleapis.com")
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
             model = genai.GenerativeModel(self.model, system_instruction=system_instruction)
@@ -109,6 +107,7 @@ class AnthropicClient(LLMClient):
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
         try:
+            EgressFilter.validate_request("https://api.anthropic.com")
             import anthropic
             client = anthropic.Anthropic(api_key=self.api_key)
             
