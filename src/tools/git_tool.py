@@ -31,6 +31,26 @@ def get_recent_commits(repo_path, timeframe="1 week ago"):
         return []
     return output.splitlines()
 
+def git_add(repo_path, files=["."]):
+    """Stages files for commit."""
+    return run_git_command(repo_path, ["add"] + files)
+
+def git_commit(repo_path, message):
+    """Commits staged changes with a message."""
+    if not message:
+        return "Error: Commit message is required."
+    return run_git_command(repo_path, ["commit", "-m", message])
+
+def git_push(repo_path, remote="origin", branch=None):
+    """Pushes commits to a remote repository."""
+    if not branch:
+        # Try to get current branch
+        branch = run_git_command(repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
+        if branch.startswith("Error:"):
+            return branch
+    
+    return run_git_command(repo_path, ["push", remote, branch])
+
 if __name__ == "__main__":
     # Quick test
     path = os.getcwd()

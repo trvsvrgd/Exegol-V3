@@ -8,6 +8,8 @@ from tools.sandbox_validator import validate_app_schema
 from tools.file_editor_tool import read_file, write_file, replace_content, search_replace_regex, delete_file
 from tools.snapshot_tester import capture_snapshot
 from tools.fleet_logger import log_interaction
+from tools.input_sanitizer import sanitize_prompt
+from tools.security_audit_logger import log_security_event
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +112,25 @@ class DeveloperDexAgent:
 
         try:
             with open(prompt_file, 'r', encoding='utf-8') as f:
-                active_prompt = f.read()
+                raw_prompt = f.read()
+            
+            # --- SECURITY GUARD: Input Sanitization (sec_sec_arch_006) ---
+            sanitization_result = sanitize_prompt(raw_prompt)
+            active_prompt = sanitization_result["sanitized_text"]
+            
+            if sanitization_result["is_suspicious"]:
+                print(f"[{self.name}] WARNING: {sanitization_result['warning']}")
+                log_security_event(
+                    actor=self.name,
+                    action="input_sanitization_warning",
+                    outcome="flagged",
+                    repo_path=repo_path,
+                    session_id=handoff.session_id,
+                    details={
+                        "warning": sanitization_result["warning"],
+                        "prompt_snippet": raw_prompt[:100]
+                    }
+                )
             
             print(f"[{self.name}] Analyzing prompt: {active_prompt[:100]}...")
 
@@ -239,6 +259,14 @@ class DeveloperDexAgent:
             # --- SECURITY GUARD: Path Boundary Check ---
             if not self._validate_action_path(repo_path, validated.path):
                 print(f"[{self.name}] SECURITY: Rejected path traversal attempt: {validated.path}")
+                log_security_event(
+                    actor=self.name,
+                    action="path_traversal_blocked",
+                    outcome="blocked",
+                    repo_path=repo_path,
+                    session_id=handoff.session_id,
+                    details={"attempted_path": validated.path}
+                )
                 results.append(f"REJECTED (path traversal blocked): {validated.path}")
                 self._steps_used += 1
                 continue

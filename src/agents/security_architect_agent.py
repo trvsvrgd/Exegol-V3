@@ -75,6 +75,7 @@ class SecurityArchitectAgent:
                 "name": "Arbitrary Code Execution via eval/exec",
                 "cwe": "CWE-78: OS Command Injection / CWE-94: Code Injection",
                 "severity": "CRITICAL",
+                "case_sensitive": True,
                 "patterns": [r"\beval\s*\(", r"\bexec\s*\(", r"subprocess\.call\(.*shell\s*=\s*True"],
                 "description": "Use of eval(), exec(), or subprocess with shell=True can allow arbitrary code execution.",
                 "recommendation": "Eliminate eval/exec. Use subprocess with shell=False and explicit argument lists."
@@ -164,9 +165,10 @@ class SecurityArchitectAgent:
                         lines = content.splitlines()
 
                     for vuln in VULN_PATTERNS:
+                        case_flags = 0 if vuln.get("case_sensitive") else re.IGNORECASE
                         for pattern_str in vuln["patterns"]:
                             try:
-                                matches = list(re.finditer(pattern_str, content, re.IGNORECASE))
+                                matches = list(re.finditer(pattern_str, content, case_flags))
                             except re.error:
                                 continue
 
