@@ -71,6 +71,7 @@
       "enabled": true,
       "fresh_instance_per_execution": true,
       "max_handoff_fields": 7,
+      "max_handoff_depth": 5,
       "log_every_session": true
     },
     "compliance_monitoring": {

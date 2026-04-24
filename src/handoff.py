@@ -31,6 +31,8 @@ class HandoffContext:
     timestamp: str = ""     # ISO-8601 invocation time — auto-filled if empty
     snapshot_hash: str = "" # Hash of the codebase state from previous session
     regression_context: str = "" # Optional details if re-triggered due to failure
+    loop_depth: int = 0      # Current depth in an autonomous handoff chain
+    chain_history: List[str] = field(default_factory=list) # Sequence of agent IDs in the chain
 
     def __post_init__(self):
         # frozen=True prevents normal assignment; use object.__setattr__

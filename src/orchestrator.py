@@ -3,6 +3,8 @@ import os
 import time
 import threading
 import sys
+import schedule
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables before any other imports
@@ -13,6 +15,7 @@ from agents.registry import AGENT_REGISTRY
 from handoff import HandoffContext
 from session_manager import SessionManager
 from tools.slack_tool import slack_manager
+from tools.fleet_logger import log_interaction
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 
@@ -25,9 +28,59 @@ class ExegolOrchestrator:
             log_every_session=self._get_isolation_setting("log_every_session", True)
         )
         self.is_running_fleet = False
+        self._should_stop_scheduler = False
         
         # Initialize Slack Listener
         slack_manager.setup_listener(self.handle_wake_word)
+        
+        # Initialize Autonomous Cadence Engine
+        self._setup_cadence_engine()
+
+    def _setup_cadence_engine(self):
+        """Configures periodic autonomous tasks for the fleet."""
+        # 1. Daily Reports (ReportRevan)
+        schedule.every().day.at("08:00").do(self._scheduled_trigger, agent_id="report_revan", summary="Daily Fleet Performance Summary")
+        
+        # 2. Weekly Architecture Review (ArchitectArtoo)
+        schedule.every().monday.at("09:00").do(self._scheduled_trigger, agent_id="architect_artoo", summary="Weekly Global Architecture Audit")
+        
+        # 3. Weekly Security Sweep (SecurityArchitect)
+        schedule.every().wednesday.at("10:00").do(self._scheduled_trigger, agent_id="security_architect", summary="Weekly Zero-Day & Infrastructure Security Scan")
+        
+        # 4. Weekly Boundary Audit (VibeVader)
+        schedule.every().friday.at("15:00").do(self._scheduled_trigger, agent_id="vibe_vader", summary="Weekly Human-Action Boundary Audit")
+
+        # Start Scheduler Thread
+        self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
+        self.scheduler_thread.start()
+        print("[Scheduler] Cadence engine started in background.")
+
+    def _run_scheduler(self):
+        while not self._should_stop_scheduler:
+            schedule.run_pending()
+            time.sleep(60) # Only check every minute
+
+    def _scheduled_trigger(self, agent_id: str, summary: str):
+        """Bridge between schedule library and the orchestration loop."""
+        print(f"\n[Scheduler] Triggering scheduled task: {summary} ({agent_id})")
+        target = self.active_target or self.get_highest_priority_task()
+        if not target:
+            print("[Scheduler] No target repository found for scheduled task.")
+            return
+
+        routing = target.get("model_routing_preference", "ollama")
+        entry = AGENT_REGISTRY.get(agent_id)
+        if not entry:
+            print(f"[Scheduler] Error: Scheduled agent '{agent_id}' not found in registry.")
+            return
+
+        slack_manager.post_message(f"⏰ *Scheduled Task*: {summary}. Waking `{agent_id}`...")
+        self.wake_and_execute_agent(
+            repo_info=target,
+            routing=routing,
+            max_steps=entry.get("max_steps", 20),
+            agent_id=agent_id
+        )
 
     def load_config(self):
         """Loads priority and agent configuration from priority.json"""
@@ -125,8 +178,8 @@ class ExegolOrchestrator:
         # Check if .exegol exists, otherwise trigger Thunderbird (onboarding)
         exegol_dir = os.path.join(repo_path, ".exegol")
         if not os.path.exists(exegol_dir):
-            print(f"[Onboarding] No .exegol found. Triggering OnboardingThrawnAgent...")
-            self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "onboarding_thrawn")
+            print(f"[Onboarding] No .exegol found. Triggering ThoughtfulThrawnAgent...")
+            self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "thoughtful_thrawn")
             return
 
         # Check backlog for pending tasks
@@ -199,10 +252,69 @@ class ExegolOrchestrator:
         self.wake_and_execute_agent(target_repo, routing, max_steps)
 
     def wake_and_execute_agent(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
-                                agent_id: str = None, snapshot_hash: str = "", regression_context: str = ""):
+                                agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
+                                loop_depth: int = 0, chain_history: List[str] = None):
         """Dispatch an agent through SessionManager for a fully isolated session."""
         if agent_id is None:
             agent_id = "product_poe"
+        
+        if chain_history is None:
+            chain_history = []
+        
+        # 1. Loop Guard: Check max depth
+        max_depth = self._get_isolation_setting("max_handoff_depth", 5)
+        if loop_depth >= max_depth:
+            msg = f"[Orchestrator] CRITICAL: Max loop depth ({max_depth}) reached for chain: {' -> '.join(chain_history)}"
+            print(msg)
+            slack_manager.post_message(f"🚨 *Loop Guard Triggered*: {msg}")
+            
+            log_interaction(
+                agent_id="orchestrator",
+                outcome="failure",
+                task_summary="Loop depth guard triggered.",
+                repo_path=repo_info.get("repo_path", ""),
+                errors=[msg],
+                state_changes={"chain_history": chain_history}
+            )
+            
+            self.update_repo_status(repo_info.get("repo_path"), "blocked")
+            return None
+
+        # 2. Circuit Breaker: Detect simple cycles (A -> B -> A) or repeated agents
+        if agent_id in chain_history:
+            # If the same agent appears more than twice, or if it's a tight loop
+            occurrences = chain_history.count(agent_id)
+            if occurrences >= 2:
+                msg = f"[Orchestrator] CIRCUIT BREAKER: Cycle detected. Agent '{agent_id}' already appeared twice in {chain_history}"
+                print(msg)
+                slack_manager.post_message(f"🔒 *Circuit Breaker Triggered*: {msg}")
+                
+                log_interaction(
+                    agent_id="orchestrator",
+                    outcome="failure",
+                    task_summary="Circuit breaker triggered (cycle detected).",
+                    repo_path=repo_info.get("repo_path", ""),
+                    errors=[msg],
+                    state_changes={"chain_history": chain_history, "offending_agent": agent_id}
+                )
+                
+                self.update_repo_status(repo_info.get("repo_path"), "blocked")
+                return None
+
+        # Update history for the current run
+        current_history = chain_history + [agent_id]
+        current_depth = loop_depth + 1
+
+        # Check for dynamic model override in config/agent_models.json
+        agent_models_path = os.path.join(os.path.dirname(PRIORITY_FILE_PATH), 'agent_models.json')
+        if os.path.exists(agent_models_path):
+            try:
+                with open(agent_models_path, 'r') as f:
+                    agent_models = json.load(f)
+                if agent_id in agent_models:
+                    routing = agent_models[agent_id]
+            except Exception as e:
+                print(f"[Orchestrator] Error reading config/agent_models.json: {e}")
 
         registry_entry = AGENT_REGISTRY.get(agent_id)
         if not registry_entry:
@@ -216,7 +328,9 @@ class ExegolOrchestrator:
             model_routing=routing,
             max_steps=min(max_steps, registry_entry.get("max_steps", 50)),
             snapshot_hash=snapshot_hash,
-            regression_context=regression_context
+            regression_context=regression_context,
+            loop_depth=current_depth,
+            chain_history=current_history
         )
 
         result = self.session_manager.spawn_agent_session(
@@ -246,7 +360,9 @@ class ExegolOrchestrator:
                         max_steps=registry_entry.get("max_steps", 15),
                         agent_id=result.next_agent_id,
                         snapshot_hash=result.snapshot_hash,
-                        regression_context=result.regression_context
+                        regression_context=result.regression_context,
+                        loop_depth=current_depth,
+                        chain_history=current_history
                     )
                 else:
                     print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
@@ -261,6 +377,39 @@ class ExegolOrchestrator:
             slack_manager.post_message("🚀 Fleet cycle starting — processing all active repos...", channel=channel)
             self.run_fleet_cycle()
             slack_manager.post_message("✅ Fleet cycle complete.", channel=channel)
+            return
+
+        if cmd.startswith("add to backlog") or cmd.startswith("backlog"):
+            from tools.backlog_manager import BacklogManager
+            import uuid
+            import datetime
+            
+            prefix = "add to backlog" if cmd.startswith("add to backlog") else "backlog"
+            content = command_string[cmd.find(prefix) + len(prefix):].strip()
+            if content.startswith(":"):
+                content = content[1:].strip()
+                
+            if not content:
+                slack_manager.post_message("❌ Please provide a task description. Example: `add to backlog review PRs`", channel=channel)
+                return
+
+            target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
+            repo_path = target.get("repo_path")
+            
+            bm = BacklogManager(repo_path)
+            new_task = {
+                "id": str(uuid.uuid4()),
+                "summary": content,
+                "status": "pending_prioritization",
+                "priority": "medium",
+                "source": "slack",
+                "created_at": datetime.datetime.now().isoformat()
+            }
+            if bm.add_task(new_task):
+                repo_name = os.path.basename(repo_path)
+                slack_manager.post_message(f"✅ Added to backlog for `{repo_name}`:\n_{content}_", channel=channel)
+            else:
+                slack_manager.post_message(f"⚠️ Failed to add task to backlog.", channel=channel)
             return
 
         for agent_id, details in AGENT_REGISTRY.items():
@@ -280,7 +429,7 @@ class ExegolOrchestrator:
         if "stop" in cmd:
             slack_manager.post_message("🛑 `stop` received — shutting down Exegol orchestrator...", channel=channel)
             print("\n[Slack] Stop command detected. Shutting down...")
-            os._exit(0)
+            sys.exit(0)
 
         if "go" in cmd:
             slack_manager.post_message("🚀 `go` received — triggering active repository...", channel=channel)

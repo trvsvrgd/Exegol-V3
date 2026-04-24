@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 from tools.gmail_tool import send_gmail_message
+from tools.fleet_logger import log_interaction, read_interaction_logs
 
 
 class ReportRevanAgent:
@@ -44,37 +45,7 @@ class ReportRevanAgent:
 
     def _load_interaction_logs(self, repo_paths: list) -> list:
         """Load the last 7 days of agent interaction logs across multiple repos."""
-        seven_days_ago = datetime.datetime.now() - datetime.timedelta(days=7)
-        entries: list = []
-
-        for repo_path in repo_paths:
-            logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
-            if not os.path.isdir(logs_dir):
-                print(f"[{self.name}] No interaction_logs directory found at {logs_dir}.")
-                continue
-
-            for filename in sorted(os.listdir(logs_dir)):
-                if not filename.endswith(".json"):
-                    continue
-                filepath = os.path.join(logs_dir, filename)
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            for entry in data:
-                                ts = datetime.datetime.fromisoformat(entry.get("timestamp", ""))
-                                if ts >= seven_days_ago:
-                                    entry["_repo_path"] = repo_path
-                                    entries.append(entry)
-                        elif isinstance(data, dict):
-                            ts = datetime.datetime.fromisoformat(data.get("timestamp", ""))
-                            if ts >= seven_days_ago:
-                                data["_repo_path"] = repo_path
-                                entries.append(data)
-                except Exception as e:
-                    print(f"[{self.name}] Skipping log file {filename}: {e}")
-
-        return entries
+        return read_interaction_logs(repo_paths, days=7)
 
     def _load_repo_backlogs(self, repo_paths: list) -> dict:
         """Load backlog.json for all provided repositories."""
@@ -513,10 +484,22 @@ class ReportRevanAgent:
         )
         print(f"[{self.name}] {result}")
 
-        return (
+        summary_msg = (
             f"Weekly fleet summary generated and emailed. "
             f"{fleet_metrics['total_runs']} total runs, "
             f"{fleet_metrics['success_rate']} success rate, "
-            f"{len(issues)} issues flagged. "
-            f"Report saved: {report_file}"
+            f"{len(issues)} issues flagged."
         )
+        
+        # Emit agent log
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=summary_msg,
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            state_changes={"report_file": report_file}
+        )
+
+        return f"{summary_msg} Report saved: {report_file}"
+

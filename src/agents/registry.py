@@ -20,9 +20,9 @@ AGENT_REGISTRY = {
         "tools": ["markdown_formatter", "file_namer"],
         "max_steps": 5
     },
-    "onboarding_thrawn": {
-        "class": "OnboardingThrawnAgent",
-        "module": "agents.onboarding_thrawn_agent",
+    "thoughtful_thrawn": {
+        "class": "ThoughtfulThrawnAgent",
+        "module": "agents.thoughtful_thrawn_agent",
         "wake_word": "thrawn",
         "tools": ["user_prompting", "clarification_engine"],
         "max_steps": 5
@@ -102,6 +102,20 @@ AGENT_REGISTRY = {
         "module": "agents.compliance_cody_agent",
         "wake_word": "cody",
         "tools": ["web_search", "backlog_writer", "capability_reviewer"],
+        "max_steps": 15
+    },
+    "security_architect": {
+        "class": "SecurityArchitectAgent",
+        "module": "agents.security_architect_agent",
+        "wake_word": "secure",
+        "tools": ["repo_scanner", "cve_lookup", "backlog_writer", "architecture_reviewer"],
+        "max_steps": 20
+    },
+    "assessment_anakin": {
+        "class": "AssessmentAnakinAgent",
+        "module": "agents.assessment_anakin_agent",
+        "wake_word": "anakin",
+        "tools": ["repo_analyzer", "risk_scorer", "backlog_writer"],
         "max_steps": 15
     }
 }

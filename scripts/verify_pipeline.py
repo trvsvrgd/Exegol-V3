@@ -15,7 +15,7 @@ from agents.registry import AGENT_REGISTRY
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 EXEGOL_DIR = os.path.join(REPO_PATH, ".exegol")
 BACKLOG_FILE = os.path.join(EXEGOL_DIR, "backlog.json")
-VIBE_FILE = os.path.join(EXEGOL_DIR, "vibe_todo.json")
+USER_ACTION_FILE = os.path.join(EXEGOL_DIR, "user_action_required.md")
 SNAPSHOT_DIR = os.path.join(EXEGOL_DIR, "eval_reports", "snapshots")
 
 def setup_dummy_backlog():
@@ -31,8 +31,8 @@ def setup_dummy_backlog():
     with open(BACKLOG_FILE, 'w') as f:
         json.dump(backlog, f, indent=4)
     
-    if os.path.exists(VIBE_FILE):
-        os.remove(VIBE_FILE)
+    if os.path.exists(USER_ACTION_FILE):
+        os.remove(USER_ACTION_FILE)
 
 def cleanup():
     # Keep the logs but maybe clear snapshots for a fresh run

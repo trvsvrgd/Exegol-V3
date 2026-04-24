@@ -57,12 +57,18 @@ class TestHandoffContext:
         assert "T" in ctx.timestamp  # ISO format
 
     def test_max_handoff_fields(self):
-        """HandoffContext should have at most 9 data fields to stay minimal."""
+        """HandoffContext should stay lean — ceiling is 11 fields.
+
+        The original contract was 9. Two fields were intentionally added by
+        the loop-guard sprint (loop_depth, chain_history) to support
+        circuit-breaker logic in ExegolOrchestrator. Any future additions
+        must justify themselves against the minimal-context principle.
+        """
         import dataclasses
         fields = dataclasses.fields(HandoffContext)
-        assert len(fields) <= 9, (
-            f"HandoffContext has {len(fields)} fields — exceeds the 9-field "
-            "contract for minimal context. Remove or consolidate fields."
+        assert len(fields) <= 11, (
+            f"HandoffContext has {len(fields)} fields — exceeds the 11-field "
+            "contract. Remove or consolidate fields before adding more."
         )
 
 

@@ -2,12 +2,12 @@ import os
 import json
 
 
-class OnboardingThrawnAgent:
+class ThoughtfulThrawnAgent:
     """Orchestrates the repository onboarding process, asks clarifying questions, and identifies project intent."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "OnboardingThrawnAgent"
+        self.name = "ThoughtfulThrawnAgent"
         self.max_steps = 5
         self.tools = ["user_prompting", "clarification_engine"]
         self.success_metrics = {

@@ -36,7 +36,7 @@ class LLMClient(ABC):
         clean_text = json_match.group(1) if json_match else text
         try:
             return json.loads(clean_text)
-        except:
+        except Exception:
             # Fallback extraction logic
             start, end = text.find('{'), text.rfind('}')
             if start != -1 and end != -1:
@@ -87,3 +87,28 @@ class LlamaCppClient(LLMClient):
     """Placeholder for memory-efficient llama.cpp backend."""
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
         return "llama.cpp Provider not yet implemented."
+
+class AnthropicClient(LLMClient):
+    """Client for Anthropic Claude models via official SDK."""
+    def __init__(self, model: Optional[str] = None):
+        super().__init__(model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620"))
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=self.api_key)
+            
+            messages = [{"role": "user", "content": prompt}]
+            kwargs = {
+                "model": self.model,
+                "max_tokens": 4096,
+                "messages": messages,
+            }
+            if system_instruction:
+                kwargs["system"] = system_instruction
+            
+            response = client.messages.create(**kwargs)
+            return response.content[0].text
+        except Exception as e:
+            return f"Anthropic Error: {e}"

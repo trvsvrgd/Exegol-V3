@@ -2,6 +2,7 @@ import os
 import json
 from tools.sandbox_validator import validate_app_schema, run_sandbox_lint, run_sandbox_tests
 from evals.snapshot_eval_runner import run_regression_eval
+from tools.backlog_manager import BacklogManager
 
 
 class QualityQuigonAgent:
@@ -83,6 +84,14 @@ class QualityQuigonAgent:
             print(f"[{self.name}] Regression detected! Auto-triggering DeveloperDex for correction.")
             self.next_agent_id = "developer_dex"
         else:
+            # Task Closure & Archival
+            if task_id and task_id != "fleet_cycle":
+                bm = BacklogManager(repo_path)
+                print(f"[{self.name}] Task {task_id} passed validation. Marking as completed and archiving...")
+                bm.update_task_status(task_id, "completed")
+                archived_count = bm.archive_completed_tasks()
+                results.append(f"Task {task_id} closed and archived.")
+
             self.next_agent_id = "architect_artoo"
 
         return f"Validation Cycle complete. Results: " + ", ".join(results)

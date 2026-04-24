@@ -1,5 +1,8 @@
 import os
 import json
+import time
+from tools.fleet_logger import log_interaction
+from tools.backlog_manager import BacklogManager
 
 
 class ProductPoeAgent:
@@ -40,6 +43,7 @@ class ProductPoeAgent:
         Reads backlog from filesystem, selects the next task, 
         and writes the active prompt.
         """
+        start_time = time.time()
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
 
@@ -49,47 +53,62 @@ class ProductPoeAgent:
         backlog_file = os.path.join(exegol_dir, "backlog.json")
         prompt_file = os.path.join(exegol_dir, "active_prompt.md")
 
-        backlog = self._load_json(backlog_file, [])
+        try:
+            bm = BacklogManager(repo_path)
+            backlog = bm.load_backlog()
 
-        task, source = self._select_next_task(backlog)
+            task, source = self._select_next_task(backlog)
 
-        if not task:
-            print(f"[{self.name}] No actionable tasks found in backlog or vibe_todo.")
-            # Fallback: Create a maintenance task
-            task = {
-                "id": "maint_001",
-                "summary": "General codebase health check and documentation update",
-                "priority": "low",
-                "status": "todo"
-            }
-            source = "fallback"
+            if not task:
+                print(f"[{self.name}] No actionable tasks found in backlog or vibe_todo.")
+                # Fallback: Create a maintenance task
+                task = {
+                    "id": "maint_001",
+                    "summary": "General codebase health check and documentation update",
+                    "priority": "low",
+                    "status": "todo"
+                }
+                source = "fallback"
 
-        print(f"[{self.name}] Selected task {task.get('id')} from {source}: {task.get('summary')}")
+            print(f"[{self.name}] Selected task {task.get('id')} from {source}: {task.get('summary')}")
 
-        # Update backlog status if it was from backlog
-        if source == "backlog":
-            for t in backlog:
-                if t.get("id") == task.get("id"):
-                    t["status"] = "in_progress"
-            self._save_json(backlog_file, backlog)
+            # Update backlog status if it was from backlog
+            if source == "backlog":
+                bm.update_task_status(task.get("id"), "in_progress")
 
-        active_prompt = self._generate_active_prompt(task, repo_path)
-        
-        with open(prompt_file, 'w', encoding='utf-8') as f:
-            f.write(active_prompt)
+            active_prompt = self._generate_active_prompt(task, repo_path)
+            
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(active_prompt)
 
-        self.next_agent_id = "developer_dex"
-        return f"Active task set: {task.get('id')} ({task.get('summary')}). Handing off to DeveloperDex."
-
-    def _load_json(self, path, default):
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return default
-
-    def _save_json(self, path, data):
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
+            self.next_agent_id = "developer_dex"
+            res = f"Active task set: {task.get('id')} ({task.get('summary')}). Handing off to DeveloperDex."
+            
+            duration = time.time() - start_time
+            log_interaction(
+                agent_id=self.name,
+                outcome="success",
+                task_summary=res,
+                repo_path=repo_path,
+                steps_used=1,
+                duration_seconds=duration,
+                session_id=handoff.session_id
+            )
+            return res
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            log_interaction(
+                agent_id=self.name,
+                outcome="failure",
+                task_summary=f"Task selection failed: {str(e)}",
+                repo_path=repo_path,
+                steps_used=1,
+                duration_seconds=duration,
+                errors=[str(e)],
+                session_id=handoff.session_id
+            )
+            return f"[{self.name}] Error during backlog grooming: {e}"
 
     def _select_next_task(self, backlog):
         # 1. Backlog 'todo' or 'backlogged' (Prioritize High/Critical)
@@ -118,6 +137,6 @@ class ProductPoeAgent:
         try:
             response = self.llm_client.generate(context_prompt, system_instruction=self.system_prompt)
             return f"# Active Developer Task\n\n**Task ID:** {task.get('id')}\n\n{response}"
-        except:
+        except Exception:
             # Fallback
             return f"# Active Developer Task\n\n**Task ID:** {task.get('id')}\n\n## Instructions\n{task.get('summary')}\n"

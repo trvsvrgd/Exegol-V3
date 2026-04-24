@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from inference.llm_client import LLMClient, OllamaClient, GeminiClient, VLLMClient, LlamaCppClient
+from inference.llm_client import LLMClient, OllamaClient, GeminiClient, VLLMClient, LlamaCppClient, AnthropicClient
 
 class InferenceManager:
     """
@@ -14,19 +14,22 @@ class InferenceManager:
         Factory method to return the appropriate LLM client based on provider type.
         Defaults to environment variables or local Ollama.
         """
-        provider = (provider or os.getenv("LLM_PROVIDER", "ollama")).lower()
+        routing_str = (provider or os.getenv("LLM_PROVIDER", "ollama")).lower()
         
-        if provider == "ollama":
+        if routing_str == "ollama":
             return OllamaClient(model=model)
-        elif provider == "gemini":
+        elif routing_str == "gemini":
             return GeminiClient(model=model)
-        elif provider == "vllm":
+        elif routing_str in ("anthropic", "claude"):
+            return AnthropicClient(model=model)
+        elif routing_str == "vllm":
             return VLLMClient(model=model)
-        elif provider == "llama.cpp":
+        elif routing_str == "llama.cpp":
             return LlamaCppClient(model=model)
         else:
-            print(f"[InferenceManager] Warning: Unknown provider '{provider}'. Defaulting to Ollama.")
-            return OllamaClient(model=model)
+            print(f"[InferenceManager] Treating '{routing_str}' as a specific Ollama local model.")
+            # Use original case `provider` string for the model, as model names can be case sensitive
+            return OllamaClient(model=provider)
 
     @staticmethod
     def check_vram_usage():

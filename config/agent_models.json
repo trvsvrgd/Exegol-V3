@@ -1,0 +1,12 @@
+{
+    "product_poe": "gemini",
+    "developer_dex": "ollama",
+    "architect_artoo": "ollama",
+    "report_revan": "ollama",
+    "quality_quigon": "ollama",
+    "security_architect": "ollama",
+    "compliance_cody": "ollama",
+    "evaluator_ezra": "ollama",
+    "optimizer_ahsoka": "ollama",
+    "cameraman_cassian": "ollama"
+}

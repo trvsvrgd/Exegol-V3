@@ -36,11 +36,11 @@ def get_risk_metadata(path_str: str) -> dict:
         }
 
     # 4. Agentic Metadata (Score: 0.7)
-    if ".exegol/backlog.json" in normalized_path or ".exegol/vibe_todo.json" in normalized_path:
+    if ".exegol/backlog.json" in normalized_path or ".exegol/user_action_required.md" in normalized_path:
         return {
             "score": 0.7,
             "label": "MEDIUM-HIGH",
-            "reason": "This file tracks project state and tasks. Deletion will cause loss of progress tracking."
+            "reason": "This file tracks project state, tasks, or human action requirements. Deletion will cause loss of progress tracking."
         }
 
     # 5. Tests and Artifacts (Score: 0.2)

@@ -22,6 +22,7 @@ export default function ABTestPage() {
   const [taskPrompt, setTaskPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<{a?: any, b?: any}>({});
+  const [localModels, setLocalModels] = useState<any[]>([]);
 
   useEffect(() => {
     fetch("http://localhost:8000/repos")
@@ -37,6 +38,11 @@ export default function ABTestPage() {
         setAgents(data);
         if (data.length > 0) setSelectedAgent(data[0].id);
       });
+
+    fetch("http://localhost:8000/local-models")
+      .then(res => res.json())
+      .then(data => setLocalModels(data))
+      .catch(err => console.error("Local models fetch error", err));
   }, []);
 
   const runTest = async () => {
@@ -128,15 +134,25 @@ export default function ABTestPage() {
           <div className="form-group" style={{ flex: 1 }}>
             <label className="title-glow">Brain A</label>
             <select value={modelA} onChange={e => setModelA(e.target.value)}>
-              <option value="ollama">Ollama (Local)</option>
+              <option value="ollama">Ollama (Auto)</option>
               <option value="gemini">Gemini (Cloud)</option>
+              <optgroup label="Local Inference (Ollama)">
+                {localModels.map(m => (
+                  <option key={m.name} value={m.name}>{m.name}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
             <label className="title-glow">Brain B</label>
             <select value={modelB} onChange={e => setModelB(e.target.value)}>
               <option value="gemini">Gemini (Cloud)</option>
-              <option value="ollama">Ollama (Local)</option>
+              <option value="ollama">Ollama (Auto)</option>
+              <optgroup label="Local Inference (Ollama)">
+                {localModels.map(m => (
+                  <option key={m.name} value={m.name}>{m.name}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
         </div>
