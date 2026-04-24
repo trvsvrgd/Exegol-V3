@@ -2,6 +2,7 @@ import os
 import json
 import re
 import requests
+from urllib.parse import urlparse
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union
 from dotenv import load_dotenv
@@ -48,6 +49,15 @@ class OllamaClient(LLMClient):
     def __init__(self, model: Optional[str] = None):
         super().__init__(model or os.getenv("OLLAMA_MODEL", "llama3"))
         self.api_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+        self._allowed_hosts = {"localhost", "127.0.0.1", "host.docker.internal"}
+
+    def _validate_url(self, url: str) -> bool:
+        """Ensures the URL is within the allowed set of hosts to prevent SSRF."""
+        try:
+            parsed = urlparse(url)
+            return parsed.hostname in self._allowed_hosts
+        except Exception:
+            return False
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
         payload = {
@@ -58,6 +68,9 @@ class OllamaClient(LLMClient):
             "format": "json" if json_format else ""
         }
         try:
+            if not self._validate_url(self.api_url):
+                return f"Security Error: Blocked attempt to access non-allowlisted host in Ollama URL: {self.api_url}"
+                
             response = requests.post(self.api_url, json=payload, timeout=60)
             return response.json().get("response", "")
         except Exception as e:
