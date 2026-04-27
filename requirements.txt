@@ -9,6 +9,6 @@ slack-sdk
 slack-bolt
 fastapi
 uvicorn
-duckduckgo-search
+ddgs
 anthropic
 schedule

@@ -1,7 +1,7 @@
 import os
 import requests
 from typing import List, Dict, Any, Optional
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from tools.egress_filter import EgressFilter
 
 def search(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
