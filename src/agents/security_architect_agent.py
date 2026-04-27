@@ -5,6 +5,7 @@ import datetime
 import time
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
+from tools.web_search import web_search
 
 
 class SecurityArchitectAgent:
@@ -22,7 +23,7 @@ class SecurityArchitectAgent:
         self.name = "SecurityArchitectAgent"
         self.max_steps = 20
         self._steps_used = 0
-        self.tools = ["repo_scanner", "cve_lookup", "backlog_writer", "architecture_reviewer"]
+        self.tools = ["repo_scanner", "web_search", "backlog_writer", "architecture_reviewer"]
         self.success_metrics = {
             "backlog_submissions": {
                 "description": "Number of security findings submitted to backlog per scan",
@@ -447,6 +448,36 @@ class SecurityArchitectAgent:
             return "MEDIUM"
         return "LOW"
 
+    def _research_external_vulnerabilities(self, repo_path: str) -> list:
+        """Uses web_search to find latest CVEs relevant to the repo's dependencies."""
+        findings = []
+        try:
+            # Simple dependency detection (e.g. requirements.txt)
+            reqs_file = os.path.join(repo_path, "requirements.txt")
+            deps = "Python AI agents"
+            if os.path.exists(reqs_file):
+                with open(reqs_file, 'r') as f:
+                    deps = f.read()[:500] # Just a snippet
+            
+            query = f"latest CVEs and security vulnerabilities for: {deps} 2024 2025"
+            search_results = web_search(query, num_results=5)
+            
+            # Use LLM to extract specific findings
+            analysis_prompt = f"Identify 1-2 specific security vulnerabilities from these search results relevant to this tech stack: {deps}\nResults: {json.dumps(search_results)}"
+            response = self.llm_client.generate(analysis_prompt, system_instruction=self.system_prompt, json_format=True)
+            new_findings = self.llm_client.parse_json_response(response)
+            
+            if isinstance(new_findings, list):
+                for f in new_findings:
+                    f["vuln_id"] = f.get("vuln_id", "SEC-EXT-001")
+                    f["file"] = "requirements.txt"
+                    f["line"] = 0
+                    findings.append(f)
+        except Exception as e:
+            print(f"[{self.name}] External research failed: {e}")
+            
+        return findings
+
     # ------------------------------------------------------------------
     # Main Execution
     # ------------------------------------------------------------------
@@ -467,6 +498,11 @@ class SecurityArchitectAgent:
             # Step 1: Zero-Day Pattern Detection
             print(f"[{self.name}] [1/4] Scanning for zero-day vulnerability patterns...")
             findings = self._scan_for_zero_day_patterns(repo_path)
+            self._steps_used += 1
+
+            # Step 1b: External CVE/Vulnerability Research (Phase 2 Integration)
+            print(f"[{self.name}] [1b/4] Researching external vulnerabilities for stack...")
+            findings += self._research_external_vulnerabilities(repo_path)
             self._steps_used += 1
 
             # Step 2: Architectural Gap Analysis

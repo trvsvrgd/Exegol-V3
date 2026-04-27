@@ -45,6 +45,7 @@ export default function Home() {
               <p className="subtitle">Bi-directional orchestrator and fleet management.</p>
             </div>
             <div className="nav-controls">
+              <a href="/fleet" className="btn-outline">Fleet Dashboard</a>
               <a href="/settings" className="btn-outline">Agent Settings</a>
             </div>
           </header>

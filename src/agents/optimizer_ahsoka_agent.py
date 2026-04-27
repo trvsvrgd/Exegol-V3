@@ -276,92 +276,71 @@ Return ONLY the JSON array.
             json.dump(backlog, f, indent=4)
 
     # ------------------------------------------------------------------
-    # Tool recommendations
-    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _recommend_free_tool() -> dict:
-        """Return a single free tool recommendation.
-
-        In a production implementation this would query web_search for the
-        latest trending developer tools and cross-reference with the
-        current toolset.  For now we maintain a curated rotation list.
+    def _recommend_free_tool(self) -> dict:
+        """Return a single free tool recommendation based on current trends.
+        
+        Dynamically researches latest trending developer tools via web_search.
         """
-        # Rotation list — a real implementation would dynamically research.
-        free_tools = [
-            {
+        print(f"[{self.name}] Searching for latest trending free developer tools...")
+        from tools.web_search import web_search
+        search_query = "latest trending free developer tools for AI agents 2024 2025"
+        search_results = web_search(search_query, num_results=5)
+
+        analysis_prompt = f"""
+        Research Task: Recommend exactly one free developer tool for an AI agent fleet.
+        Search Results: {json.dumps(search_results)}
+        
+        Return a JSON object with:
+        - 'name': Name of the tool
+        - 'url': Home page URL
+        - 'fit': A 2-3 sentence explanation of how it fits the Exegol fleet.
+        """
+        
+        response = self.llm_client.generate(analysis_prompt, system_instruction=self.system_prompt, json_format=True)
+        tool = self.llm_client.parse_json_response(response)
+        
+        if not tool or not isinstance(tool, dict):
+            # Fallback
+            return {
                 "name": "LangSmith (free tier)",
                 "url": "https://smith.langchain.com",
-                "fit": (
-                    "LangSmith provides tracing and observability for LLM-powered "
-                    "agents at no cost on the free tier. It slots directly into "
-                    "Exegol's orchestrator to visualize step-by-step agent "
-                    "execution and pinpoint latency bottlenecks."
-                )
-            },
-            {
-                "name": "Ollama Web UI (Open WebUI)",
-                "url": "https://github.com/open-webui/open-webui",
-                "fit": (
-                    "Open WebUI gives a ChatGPT-style frontend for local Ollama "
-                    "models. It lets you manually test prompts destined for agents "
-                    "before committing them, reducing iteration cycles."
-                )
-            },
-            {
-                "name": "Dagger.io",
-                "url": "https://dagger.io",
-                "fit": (
-                    "Dagger lets you define CI/CD pipelines as code in Python. "
-                    "It can replace ad-hoc shell scripts for daily commits and "
-                    "PR creation, giving each agent a reproducible deploy path."
-                )
+                "fit": "LangSmith provides tracing and observability for LLM-powered agents at no cost on the free tier."
             }
-        ]
-        week_number = datetime.datetime.now().isocalendar()[1]
-        return free_tools[week_number % len(free_tools)]
+        return tool
 
-    @staticmethod
-    def _recommend_paid_tool() -> dict:
-        """Return a single paid tool recommendation with business case."""
-        paid_tools = [
-            {
+
+    def _recommend_paid_tool(self) -> dict:
+        """Return a single paid tool recommendation with business case.
+        
+        Dynamically researches enterprise-grade AI tools via web_search.
+        """
+        print(f"[{self.name}] Searching for latest enterprise-grade AI tools...")
+        from tools.web_search import web_search
+        search_query = "latest enterprise AI agent observability and evaluation tools 2024 2025"
+        search_results = web_search(search_query, num_results=5)
+
+        analysis_prompt = f"""
+        Research Task: Recommend exactly one paid developer tool for an AI agent fleet.
+        Search Results: {json.dumps(search_results)}
+        
+        Return a JSON object with:
+        - 'name': Name of the tool
+        - 'price_tier': Estimated price (e.g. '$100/mo')
+        - 'business_case': A 2-3 sentence business case for the Exegol fleet.
+        """
+        
+        response = self.llm_client.generate(analysis_prompt, system_instruction=self.system_prompt, json_format=True)
+        tool = self.llm_client.parse_json_response(response)
+        
+        if not tool or not isinstance(tool, dict):
+            # Fallback
+            return {
                 "name": "Braintrust",
                 "price_tier": "Team — $150/mo",
-                "business_case": (
-                    "Braintrust provides production-grade LLM eval and logging "
-                    "with dataset versioning. For a 20-repo fleet generating "
-                    "hundreds of agent runs per week, manual log inspection "
-                    "doesn't scale. Braintrust would cut eval-cycle time by ~60% "
-                    "and surface regressions automatically before they reach "
-                    "production."
-                )
-            },
-            {
-                "name": "Linear",
-                "price_tier": "Standard — $8/user/mo",
-                "business_case": (
-                    "Linear replaces the flat backlog.json files with a real "
-                    "project tracker that supports priorities, sprints, and "
-                    "agent-generated tickets via API. At $8/mo for a single seat "
-                    "it would eliminate manual grooming overhead and give "
-                    "ProductPoeAgent a structured API to write to."
-                )
-            },
-            {
-                "name": "Weights & Biases (W&B)",
-                "price_tier": "Teams — $50/seat/mo",
-                "business_case": (
-                    "W&B provides experiment tracking and model performance "
-                    "dashboards. With ResearchRexAgent constantly evaluating "
-                    "new models, W&B would provide side-by-side comparison charts "
-                    "and automated performance reports, making model upgrade "
-                    "decisions data-driven instead of gut-feel."
-                )
+                "business_case": "Braintrust provides production-grade LLM eval and logging with dataset versioning."
             }
-        ]
-        week_number = datetime.datetime.now().isocalendar()[1]
-        return paid_tools[week_number % len(paid_tools)]
+        return tool
 
     # ------------------------------------------------------------------
     # Email composition

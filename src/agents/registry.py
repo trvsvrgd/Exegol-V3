@@ -10,7 +10,7 @@ AGENT_REGISTRY = {
         "class": "IntelImaAgent",
         "module": "agents.intel_ima_agent",
         "wake_word": "ima",
-        "tools": ["gmail_api", "drive_sync", "cost_analyzer"],
+        "tools": ["gmail_api", "drive_sync", "cost_analyzer", "web_search"],
         "max_steps": 5
     },
     "markdown_mace": {
@@ -24,21 +24,21 @@ AGENT_REGISTRY = {
         "class": "ThoughtfulThrawnAgent",
         "module": "agents.thoughtful_thrawn_agent",
         "wake_word": "thrawn",
-        "tools": ["user_prompting", "clarification_engine"],
+        "tools": ["user_prompting", "clarification_engine", "web_search"],
         "max_steps": 5
     },
     "product_poe": {
         "class": "ProductPoeAgent",
         "module": "agents.product_poe_agent",
         "wake_word": "poe",
-        "tools": ["backlog_grooming", "prompt_generation"],
+        "tools": ["backlog_grooming", "prompt_generation", "web_search"],
         "max_steps": 10
     },
     "developer_dex": {
         "class": "DeveloperDexAgent",
         "module": "agents.developer_dex_agent",
         "wake_word": "dex",
-        "tools": ["file_editor", "slack_notifier", "agentic_coding", "sandbox_orchestrator"],
+        "tools": ["file_editor", "slack_notifier", "agentic_coding", "sandbox_orchestrator", "web_search"],
         "max_steps": 20
     },
     "research_rex": {
@@ -52,7 +52,7 @@ AGENT_REGISTRY = {
         "class": "ArchitectArtooAgent",
         "module": "agents.architect_artoo_agent",
         "wake_word": "artoo",
-        "tools": ["diagram_generator", "readme_parser", "architecture_reviewer", "schema_designer", "docker_compose_generator", "git_monitoring"],
+        "tools": ["diagram_generator", "readme_parser", "architecture_reviewer", "schema_designer", "docker_compose_generator", "git_monitoring", "web_search"],
         "max_steps": 10
     },
     "optimizer_ahsoka": {
@@ -87,14 +87,14 @@ AGENT_REGISTRY = {
         "class": "VibeVaderAgent",
         "module": "agents.vibe_vader_agent",
         "wake_word": "vader",
-        "tools": ["repo_analyzer", "todo_reporter"],
+        "tools": ["repo_analyzer", "todo_reporter", "web_search"],
         "max_steps": 10
     },
     "quality_quigon": {
         "class": "QualityQuigonAgent",
         "module": "agents.quality_quigon_agent",
         "wake_word": "quigon",
-        "tools": ["test_runner", "linter", "uat_sandbox", "sandbox_validator"],
+        "tools": ["test_runner", "linter", "uat_sandbox", "sandbox_validator", "web_search"],
         "max_steps": 15
     },
     "compliance_cody": {
@@ -108,14 +108,14 @@ AGENT_REGISTRY = {
         "class": "SecurityArchitectAgent",
         "module": "agents.security_architect_agent",
         "wake_word": "secure",
-        "tools": ["repo_scanner", "cve_lookup", "backlog_writer", "architecture_reviewer"],
+        "tools": ["repo_scanner", "web_search", "backlog_writer", "architecture_reviewer"],
         "max_steps": 20
     },
     "assessment_anakin": {
         "class": "AssessmentAnakinAgent",
         "module": "agents.assessment_anakin_agent",
         "wake_word": "anakin",
-        "tools": ["repo_analyzer", "risk_scorer", "backlog_writer"],
+        "tools": ["repo_analyzer", "risk_scorer", "backlog_writer", "web_search"],
         "max_steps": 15
     },
     "technical_tarkin": {
@@ -123,6 +123,13 @@ AGENT_REGISTRY = {
         "module": "agents.technical_tarkin_agent",
         "wake_word": "tarkin",
         "tools": ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search"],
+        "max_steps": 15
+    },
+    "model_router_mothma": {
+        "class": "ModelRouterMothmaAgent",
+        "module": "agents.model_router_mothma_agent",
+        "wake_word": "mothma",
+        "tools": ["web_search", "file_editor"],
         "max_steps": 15
     }
 }

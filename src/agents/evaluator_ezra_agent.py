@@ -67,126 +67,40 @@ class EvaluatorEzraAgent:
     def _research_latest_techniques(self) -> list:
         """Return a list of cutting-edge agentic evaluation techniques.
 
-        In production this would call web_search and arxiv_reader tools to
-        pull the latest papers, blog posts, and benchmark suites.  For now
-        we maintain a curated knowledge base that is rotated weekly.
+        Dynamically researches arXiv, blogs, and benchmarks via web_search.
         """
-        # Comprehensive catalogue of modern eval techniques.
-        # A real implementation would dynamically fetch from arXiv, HuggingFace,
-        # LangChain docs, etc.
-        techniques = [
-            {
-                "technique_name": "LLM-as-Judge (G-Eval)",
-                "source_url": "https://arxiv.org/abs/2303.16634",
-                "description": (
-                    "Use a secondary LLM to score agent outputs on coherence, "
-                    "relevance, fluency, and consistency using chain-of-thought "
-                    "prompting.  Enables automated quality gates without human "
-                    "annotators."
-                ),
-                "category": "output_quality"
-            },
-            {
-                "technique_name": "Multi-Turn Conversation Eval Harness",
-                "source_url": "https://arxiv.org/abs/2406.04792",
-                "description": (
-                    "A framework for evaluating agents across multi-turn "
-                    "dialogues, measuring context retention, instruction "
-                    "following, and tool-use accuracy over extended sessions."
-                ),
-                "category": "multi_turn"
-            },
-            {
-                "technique_name": "Tool-Use Scoring Rubric (ToolBench)",
-                "source_url": "https://arxiv.org/abs/2305.16504",
-                "description": (
-                    "Standardised rubric for evaluating how correctly and "
-                    "efficiently an agent selects and invokes external tools. "
-                    "Measures tool selection accuracy, parameter correctness, "
-                    "and result interpretation."
-                ),
-                "category": "tool_use"
-            },
-            {
-                "technique_name": "Agent Trajectory Evaluation (AgentBench)",
-                "source_url": "https://arxiv.org/abs/2308.03688",
-                "description": (
-                    "Evaluates the full reasoning trajectory of an agent, "
-                    "not just the final answer.  Scores each intermediate step "
-                    "for correctness, efficiency (fewest steps), and safety "
-                    "(no harmful actions)."
-                ),
-                "category": "trajectory"
-            },
-            {
-                "technique_name": "Agentic RAG Evaluation (RAGAS / ARES)",
-                "source_url": "https://arxiv.org/abs/2309.15217",
-                "description": (
-                    "Evaluates retrieval-augmented generation pipelines used by "
-                    "agents.  Measures context relevancy, answer faithfulness, "
-                    "and hallucination rate with automated LLM-based metrics."
-                ),
-                "category": "rag"
-            },
-            {
-                "technique_name": "Red-Teaming & Safety Probes",
-                "source_url": "https://arxiv.org/abs/2402.10260",
-                "description": (
-                    "Automated adversarial testing of agents using jailbreak "
-                    "prompts, prompt injection attacks, and boundary-violation "
-                    "scenarios.  Ensures agents respect safety constraints "
-                    "(e.g., max_steps, file deletion approvals)."
-                ),
-                "category": "safety"
-            },
-            {
-                "technique_name": "Cost-Aware Evaluation",
-                "source_url": "https://arxiv.org/abs/2401.16947",
-                "description": (
-                    "Measures not just quality but the token and API cost of "
-                    "each agent run.  Enables Pareto-optimal selection of models "
-                    "and prompts — critical for a 20-repo fleet where cost "
-                    "scales linearly."
-                ),
-                "category": "cost"
-            },
-            {
-                "technique_name": "Human-in-the-Loop Preference Eval (LMSYS Chatbot Arena style)",
-                "source_url": "https://arxiv.org/abs/2403.04132",
-                "description": (
-                    "Periodic human preference ratings between agent outputs "
-                    "using an ELO-style ranking system.  Provides ground-truth "
-                    "calibration for automated metrics."
-                ),
-                "category": "human_eval"
-            },
-            {
-                "technique_name": "Regression Testing via Snapshot Assertions",
-                "source_url": "https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
-                "description": (
-                    "Capture agent output snapshots and assert future runs "
-                    "produce equivalent results.  Detects unintended behaviour "
-                    "changes after prompt or model updates."
-                ),
-                "category": "regression"
-            },
-            {
-                "technique_name": "SWE-bench Style Task Completion",
-                "source_url": "https://arxiv.org/abs/2310.06770",
-                "description": (
-                    "Evaluate coding agents by having them solve real GitHub "
-                    "issues end-to-end.  Success is measured by whether the "
-                    "generated patch passes the repo's existing test suite."
-                ),
-                "category": "code_generation"
-            }
-        ]
+        print(f"[{self.name}] Searching for latest agentic evaluation techniques...")
+        search_query = "latest autonomous agent evaluation techniques benchmarks 2024 2025 arXiv"
+        from tools.web_search import web_search
+        search_results = web_search(search_query, num_results=5)
 
-        # Rotate to simulate discovering new techniques each week
-        week_num = datetime.datetime.now().isocalendar()[1]
-        # Return a subset that simulates 'newly discovered' techniques
-        start = (week_num * 3) % len(techniques)
-        return [techniques[(start + i) % len(techniques)] for i in range(3)]
+        # Use LLM to extract specific techniques from search results
+        analysis_prompt = f"""
+        Research Task: Identify specific, actionable agentic evaluation techniques from these search results.
+        Search Results: {json.dumps(search_results)}
+        
+        Return a JSON list of technique objects. Each object should have:
+        - 'technique_name': Name of the technique
+        - 'source_url': URL to the paper or blog
+        - 'description': Brief summary of what it measures
+        - 'category': One of ['output_quality', 'multi_turn', 'tool_use', 'trajectory', 'rag', 'safety', 'cost', 'human_eval', 'regression', 'code_generation']
+        """
+        
+        response = self.llm_client.generate(analysis_prompt, system_instruction=self.system_prompt, json_format=True)
+        techniques = self.llm_client.parse_json_response(response)
+        
+        if not techniques or not isinstance(techniques, list):
+            # Fallback to a minimal list if analysis fails
+            return [
+                {
+                    "technique_name": "LLM-as-Judge (G-Eval)",
+                    "source_url": "https://arxiv.org/abs/2303.16634",
+                    "description": "Use a secondary LLM to score agent outputs on coherence and relevance.",
+                    "category": "output_quality"
+                }
+            ]
+            
+        return techniques
 
     # ------------------------------------------------------------------
     # Gap analysis

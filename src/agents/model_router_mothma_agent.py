@@ -5,12 +5,12 @@ from tools.fleet_logger import log_interaction
 from tools.web_search import web_search
 from tools.file_editor_tool import write_file
 
-class SavantSifoAgent:
-    """Researches the best models for given tasks, providing free/local and paid options."""
+class ModelRouterMothmaAgent:
+    """Evaluates and determines the best LLMs for specific tasks, providing Ollama-based and paid options."""
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "SavantSifoAgent"
+        self.name = "ModelRouterMothmaAgent"
         self.max_steps = 15
         self._steps_used = 0
         self.tools = ["web_search", "file_editor"]
@@ -27,15 +27,15 @@ class SavantSifoAgent:
             }
         }
         self.system_prompt = """
-You are Savant Sifo, the Fleet's Model Strategist. Your mission is to research and recommend the absolute best LLMs and generative models for specific operational tasks. 
+You are Mothma, the Fleet's Model Router. Your mission is to evaluate and determine the absolute best LLMs and generative models for each specific operational task. 
 
 Your Core Directives:
-1. Research and Identify: For a given task or set of categories, find the top-performing models currently available.
+1. Model Selection: For a given task or set of categories, identify the top-performing models currently available.
 2. Dual Recommendations: For every category, you MUST provide two options:
    - Paid/API: High-performance, proprietary models (e.g., GPT-4o, Claude 3.5 Sonnet, Gemini 1.5 Pro).
-   - Free/Local: High-efficiency, open-weights models that can run locally (e.g., Llama 3, Mistral, Gemma 2) or via free tiers.
+   - Free/Local (Ollama): High-efficiency models that are specifically available through Ollama for local execution (e.g., Llama 3, Mistral, Gemma 2). You must verify they are on the Ollama library.
 3. Categories to Cover: Writing, Coding, Web Research, Image Generation, General Purpose, Audio/Voice, Video Generation.
-4. Detailed Rationale: Explain WHY each model was chosen, considering factors like context window, reasoning capability, speed, and cost-effectiveness.
+4. Task-Specific Rationale: Explain WHY each model was chosen for the task, considering factors like context window, reasoning capability, speed, and cost-effectiveness.
 
 Output Format:
 You must save your research report to `.exegol/research_reports/model_recommendations.json` and a human-readable version to `.exegol/research_reports/model_recommendations.md`.
@@ -65,12 +65,12 @@ You must save your research report to `.exegol/research_reports/model_recommenda
                 print(f"[{self.name}] Researching category: {category}...")
                 
                 # Formulate search query
-                query = f"best AI models for {category} 2024 2025 free local vs paid"
+                query = f"best AI models for {category} 2024 2025 Ollama vs paid"
                 search_results = web_search(query, num_results=5)
                 self._steps_used += 1
                 
                 # Use LLM to process results and pick top 2
-                analysis_prompt = f"Research category: {category}\nSearch Results: {json.dumps(search_results)}\n\nBased on these results, identify the best Paid/API model and the best Free/Local model for {category}. Provide: 1. Model Name (Paid), 2. Rationale (Paid), 3. Model Name (Free/Local), 4. Rationale (Free/Local). Return the result as a JSON object with keys: 'paid_name', 'paid_rationale', 'free_name', 'free_rationale'."
+                analysis_prompt = f"Research category: {category}\nSearch Results: {json.dumps(search_results)}\n\nBased on these results, identify the best Paid/API model and the best model available on Ollama for {category}. Provide: 1. Model Name (Paid), 2. Rationale (Paid), 3. Model Name (Ollama), 4. Rationale (Ollama). Return the result as a JSON object with keys: 'paid_name', 'paid_rationale', 'free_name', 'free_rationale'."
                 
                 analysis_response = self.llm_client.generate(analysis_prompt, system_instruction=self.system_prompt, json_format=True)
                 analysis_data = self.llm_client.parse_json_response(analysis_response)
@@ -127,15 +127,15 @@ You must save your research report to `.exegol/research_reports/model_recommenda
     def _generate_md_report(self, data):
         md = f"# AI Model Recommendations Report\n\n"
         md += f"**Last Updated:** {data['timestamp']}\n\n"
-        md += "This report summarizes the best AI models for various categories, providing both premium paid options and high-efficiency free/local alternatives.\n\n"
+        md += "This report summarizes the best AI models for various categories, providing both premium paid options and high-efficiency alternatives available via Ollama.\n\n"
         
         for category, info in data["categories"].items():
             md += f"## {category}\n\n"
             md += f"### 💰 Paid / API Choice: **{info.get('paid_name', 'N/A')}**\n"
             md += f"{info.get('paid_rationale', 'No rationale provided.')}\n\n"
-            md += f"### 🏠 Free / Local Choice: **{info.get('free_name', 'N/A')}**\n"
+            md += f"### 🏠 Ollama (Free/Local) Choice: **{info.get('free_name', 'N/A')}**\n"
             md += f"{info.get('free_rationale', 'No rationale provided.')}\n\n"
             md += "---\n\n"
             
-        md += "\n*Generated by Savant Sifo Agent*\n"
+        md += "\n*Generated by Model Router Mothma*\n"
         return md

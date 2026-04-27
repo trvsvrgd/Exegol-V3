@@ -75,3 +75,61 @@ class StateManager:
         if updated:
             self.write_json(".exegol/backlog.json", backlog)
         return updated
+
+    def add_hitl_task(self, summary: str, category: str, context: str, task_id: Optional[str] = None) -> str:
+        """Standardized method to escalate a task to the human-in-the-loop queue.
+        
+        Updates both the JSON queue (for Control Tower UI) and the Markdown report.
+        """
+        import hashlib
+        import datetime
+        
+        timestamp = datetime.datetime.now().isoformat()
+        if not task_id:
+             task_id = f"hitl_{hashlib.md5(summary.encode()).hexdigest()[:8]}"
+        
+        # 1. Update JSON
+        json_path = ".exegol/user_action_required.json"
+        queue = self.read_json(json_path) or []
+        
+        # Check if already exists (prevent duplicates)
+        exists = False
+        for item in queue:
+            if item.get("id") == task_id or (item.get("task") == summary and item.get("status") != "done"):
+                exists = True
+                break
+        
+        if not exists:
+            queue.append({
+                "id": task_id,
+                "task": summary,
+                "category": category,
+                "context": context,
+                "status": "pending",
+                "notes": "",
+                "timestamp": timestamp
+            })
+            self.write_json(json_path, queue)
+            
+        # 2. Update Markdown
+        md_path = os.path.join(self.repo_path, ".exegol", "user_action_required.md")
+        os.makedirs(os.path.dirname(md_path), exist_ok=True)
+        
+        entry = f"\n- [ ] **{summary}**\n  - *Category:* {category}\n  - *Context:* {context}\n  - *Timestamp:* {timestamp}\n"
+        
+        try:
+            if os.path.exists(md_path):
+                # Check if this task is already in the MD to avoid visual spam
+                with open(md_path, 'r', encoding='utf-8') as f:
+                    if summary not in f.read():
+                        with open(md_path, 'a', encoding='utf-8') as f:
+                            f.write(entry)
+            else:
+                with open(md_path, 'w', encoding='utf-8') as f:
+                    f.write("# Exegol V3 - Human Action Required\n")
+                    f.write("## 🚨 Critical Escalations & Manual Tasks\n")
+                    f.write(entry)
+        except Exception as e:
+            print(f"[StateManager] Failed to update UAR markdown: {e}")
+                
+        return task_id

@@ -1,7 +1,15 @@
-# 🌌 Exegol v3
+# 🌌 Exegol v3 — Autonomous Multi-Agent Dev Fleet
 
-![Control Tower UI Demo](./control-tower-demo.webp)
-Exegol v3 is an autonomous, priority-based agent fleet designed for continuous development and maintenance of multiple repositories. It uses a "FileSystem as State" philosophy, allowing specialized agents to coordinate handoffs without shared memory or long-term session context.
+> **The first fully stateless, filesystem-driven autonomous agent fleet for software development.**
+> No shared memory. No long-running sessions. Just a directory, a backlog, and a fleet of specialized AI agents that never sleep.
+
+Exegol v3 is a proposed novel paradigm in autonomous software engineering. Forget monolithic AI assistants or brittle pipeline scripts — Exegol is a living, breathing fleet of purpose-built agents that collaboratively plan, design, build, test, and document software *continuously*, across any number of repositories, without human intervention.
+
+Each agent in the fleet is **stateless by design**. Instead of relying on fragile long-context memory or shared process state, Exegol uses the **FileSystem as State** — a `.exegol/` directory that acts as the single source of truth. Agents wake up, read the current state, execute their specialty, write their output, and hand off to the next agent. No deadlocks. No context drift. No hallucinated history.
+
+The result: a **self-sustaining development loop** that can be triggered with a single word — `go`.
+
+---
 
 ## 🔄 Agent Handoff Loop
 
@@ -96,25 +104,62 @@ flowchart TD
 
 ## 🏗️ Technical Architecture
 
-### FileSystem as State
-Unlike traditional agent frameworks that rely on large context windows and shared memory, Exegol agents are **stateless**. Every bit of information they need is stored in the filesystem:
-- **`.exegol/backlog.json`**: The master list of tasks and their status.
-- **`.exegol/active_prompt.md`**: The specific instruction for the next active agent.
-- **`interaction_logs/`**: Historical logs for oversight agents to analyze.
+### FileSystem as State — A Novel Approach
+
+> [!NOTE]
+> Most AI agent systems break down at scale because they share state through fragile in-memory channels, huge context windows, or message queues that require complex orchestration. Exegol eliminates this entirely.
+
+Exegol agents are **radically stateless**. There is no shared database, no message bus, no orchestration server. Every bit of coordination happens through structured files in the `.exegol/` directory:
+
+| File | Purpose |
+| :--- | :--- |
+| `.exegol/backlog.json` | Master task registry — the single source of truth for all pending work |
+| `.exegol/active_prompt.md` | The live instruction set for whichever agent is currently executing |
+| `.exegol/roadmap.md` | Strategic planning context consumed by Product Poe and Architect Artoo |
+| `interaction_logs/` | Immutable history for oversight agents (Ahsoka, Chewie, Revan) to analyze |
+
+This design means any agent can be **killed and restarted at any time** without data loss. The fleet is inherently resilient, horizontally scalable, and completely debuggable — just `cat` a file to understand the full system state.
 
 ### Priority-Based Orchestration
-The `ExegolOrchestrator` runs a continuous "Fleet Cycle":
-1.  **Evaluate**: Reads `config/priority.json` to find active repositories.
-2.  **Inspect**: Checks `.exegol/` state for each active repo.
-3.  **Wake**: Dispatches the most appropriate agent for the current state.
-4.  **Execute**: Runs the agent in a context-isolated session.
-5.  **Status Update**: Captures the outcome and updates the repo status (Idle, Active, or Blocked).
+The `ExegolOrchestrator` runs a continuous **Fleet Cycle**, making intelligent dispatch decisions in real-time:
+
+1. 🔍 **Evaluate** — Reads `config/priority.json` to rank active repositories by urgency.
+2. 📂 **Inspect** — Checks the `.exegol/` state for each active repo to determine what's needed.
+3. ⚡ **Wake** — Dispatches the most appropriate specialist agent for the current context.
+4. 🛠️ **Execute** — Runs the agent in a fully context-isolated session with enforced `max_step` limits.
+5. 📊 **Status Update** — Captures the outcome and updates the repo state (Idle / Active / Blocked).
+
+Blocked tasks automatically trigger a Slack notification for HITL escalation, preventing runaway loops.
+
+---
 
 ## 🚀 Getting Started
 
-1.  **Install Dependencies**: `pip install -r requirements.txt`
-2.  **Configure Environment**: Set up your `.env` with API keys.
-3.  **Run Orchestrator**: `python src/orchestrator.py --fleet` or type `go` for the highest priority task.
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Configure your environment
+cp .env.example .env  # Add your API keys
+
+# 3. Launch the fleet
+python src/orchestrator.py --fleet
+```
+
+Or, if you already know what you want: just say **`go`** and Exegol will identify the highest-priority repository and execute the predefined task suite for the appropriate agent — automatically.
 
 ---
-*Generated by Antigravity—The Exegol Architect.*
+
+## ✨ Why Exegol is Different
+
+| Traditional AI Dev Tools | Exegol v3 |
+| :--- | :--- |
+| Single assistant, linear context | Fleet of 17+ specialized agents |
+| Context window limits task scope | Stateless — unlimited task history via filesystem |
+| Manual handoffs between steps | Fully autonomous agent-to-agent handoffs |
+| Works on one repo at a time | Priority-ranked multi-repo orchestration |
+| Breaks if session is interrupted | Restarts from exact filesystem state, zero data loss |
+| No quality gate | QualityQuigon enforces regression testing on every change |
+
+---
+*Built with ❤️ by Antigravity — The Exegol Architect.*

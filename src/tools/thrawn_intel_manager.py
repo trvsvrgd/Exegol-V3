@@ -138,9 +138,29 @@ class ThrawnIntelManager:
         with open(self.roadmap_file, 'w', encoding='utf-8') as f:
             f.write(content)
 
+    def add_roadmap_item(self, section: str, item: str):
+        """Add a new item to a specific section in the roadmap."""
+        content = self.read_roadmap()
+        lines = content.splitlines()
+        new_lines = []
+        section_found = False
+        
+        for line in lines:
+            new_lines.append(line)
+            if section.lower() in line.lower() and (line.startswith("##") or line.startswith("###")):
+                section_found = True
+                new_lines.append(f"- [ ] {item}")
+        
+        if not section_found:
+            # If section doesn't exist, append it at the end
+            new_lines.append(f"\n## {section}")
+            new_lines.append(f"- [ ] {item}")
+            
+        self.save_roadmap("\n".join(new_lines) + "\n")
+
     def redact_roadmap_item(self, pattern: str):
         """Redact a line from the roadmap matching the pattern."""
         content = self.read_roadmap()
         lines = content.splitlines()
-        new_lines = [line for line in lines if pattern not in line]
+        new_lines = [line for line in lines if pattern.lower() not in line.lower()]
         self.save_roadmap("\n".join(new_lines) + "\n")

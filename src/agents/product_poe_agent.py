@@ -3,6 +3,7 @@ import json
 import time
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
+from tools.web_search import web_search
 
 
 class ProductPoeAgent:
@@ -16,7 +17,7 @@ class ProductPoeAgent:
         self.llm_client = llm_client
         self.name = "ProductPoeAgent"
         self.max_steps = 10
-        self.tools = ["backlog_grooming", "prompt_generation", "app_scaffolding"]
+        self.tools = ["backlog_grooming", "prompt_generation", "app_scaffolding", "web_search"]
         self.success_metrics = {
             "app_definition_readiness": {
                 "description": "Percentage of user ideas successfully transformed into valid app.exegol.json schemas",
@@ -126,11 +127,18 @@ class ProductPoeAgent:
 
     def _generate_active_prompt(self, task, repo_path):
         """Uses LLM to context-enrich the task summary into a developer prompt."""
+        # Phase 2: Web Search for Feasibility and Best Practices
+        print(f"[{self.name}] Researching feasibility for: {task.get('summary')}")
+        search_query = f"technical implementation details and best practices for: {task.get('summary')}"
+        research = web_search(search_query, num_results=2)
+        
         context_prompt = f"""
         Expand this task into a detailed developer instruction set.
         Task Summary: {task.get('summary')}
         Task Description: {task.get('description', 'N/A')}
         Repository: {repo_path}
+        
+        Implementation Research: {json.dumps(research)}
         
         Include relevant files to check and a step-by-step implementation plan.
         """

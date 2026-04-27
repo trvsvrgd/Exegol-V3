@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+from tools.web_search import web_search
 
 class AssessmentAnakinAgent:
     """Performs deep-dive risk and impact assessments for proposed changes and infrastructure.
@@ -13,7 +14,7 @@ class AssessmentAnakinAgent:
         self.llm_client = llm_client
         self.name = "AssessmentAnakinAgent"
         self.max_steps = 15
-        self.tools = ["repo_analyzer", "risk_scorer", "backlog_writer"]
+        self.tools = ["repo_analyzer", "risk_scorer", "backlog_writer", "web_search"]
         self.success_metrics = {
             "risk_mitigation_rate": {
                 "description": "Percentage of high-risk tasks with associated mitigation plans",
@@ -40,7 +41,12 @@ class AssessmentAnakinAgent:
         os.makedirs(exegol_dir, exist_ok=True)
 
         print(f"[{self.name}] Session {handoff.session_id} — Conducting deep-dive risk assessment...")
-
+        
+        # Phase 2: Web Search for Risk Research
+        print(f"[{self.name}] Researching latest security and performance risks for AI agents...")
+        risk_query = "latest AI agent security risks performance bottlenecks and safety failures 2024 2025"
+        risk_research = web_search(risk_query, num_results=3)
+        
         # Mock assessment logic
         assessment_report = {
             "timestamp": datetime.datetime.now().isoformat(),

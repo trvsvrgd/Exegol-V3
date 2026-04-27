@@ -9,6 +9,9 @@ interface HealthMetric {
   priority: number;
   backlog_count: number;
   hitl_count: number;
+  success_rate: number;
+  avg_steps: number;
+  total_tasks: number;
   last_activity: string | null;
   last_agent: string | null;
   last_outcome: string | null;
@@ -77,8 +80,25 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
                 </span>
               </div>
               <div className="stat">
+                <span className="stat-label">Success</span>
+                <span className={`stat-value ${metric.success_rate < 70 ? 'warning' : 'success-text'}`}>
+                  {metric.success_rate}%
+                </span>
+              </div>
+            </div>
+
+            <div className="stats-row secondary-stats">
+              <div className="stat">
+                <span className="stat-label">Avg Steps</span>
+                <span className="stat-value small">{metric.avg_steps}</span>
+              </div>
+              <div className="stat">
+                <span className="stat-label">Total Tasks</span>
+                <span className="stat-value small">{metric.total_tasks}</span>
+              </div>
+              <div className="stat">
                 <span className="stat-label">Priority</span>
-                <span className="stat-value">{metric.priority}</span>
+                <span className="stat-value small">{metric.priority}</span>
               </div>
             </div>
 
@@ -187,6 +207,18 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
         }
         .stat-value.warning { color: #f39c12; }
         .stat-value.critical { color: #e74c3c; text-shadow: 0 0 10px rgba(231, 76, 60, 0.3); }
+        .stat-value.success-text { color: #2ecc71; }
+        .stat-value.small { font-size: 0.9rem; }
+
+        .secondary-stats {
+          margin-bottom: 1rem;
+          padding: 0.5rem 0;
+          border-top: none;
+          opacity: 0.8;
+        }
+        .secondary-stats .stat-label {
+          font-size: 0.55rem;
+        }
 
         .activity-footer {
           font-size: 0.75rem;

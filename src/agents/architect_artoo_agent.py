@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 from tools.git_tool import has_commits_since, get_recent_commits
+from tools.web_search import web_search
 from tools.backlog_manager import BacklogManager
 from tools.readme_parser import ReadmeParser
 from tools.diagram_generator import DiagramGenerator
@@ -20,7 +21,7 @@ class ArchitectArtooAgent:
         self.llm_client = llm_client
         self.name = "ArchitectArtooAgent"
         self.max_steps = 10
-        self.tools = ["diagram_generator", "readme_parser", "architecture_reviewer", "schema_designer"]
+        self.tools = ["diagram_generator", "readme_parser", "architecture_reviewer", "schema_designer", "web_search"]
         self.success_metrics = {
             "schema_adherence_rate": {
                 "description": "Percentage of apps passing the app.exegol.json validation check",
@@ -116,6 +117,10 @@ class ArchitectArtooAgent:
                 print(f"[{self.name}] Error processing test reports: {e}")
 
         # 5. Evaluate broader solution architecture gaps and inject tasks
+        print(f"[{self.name}] Researching latest design patterns for this stack...")
+        arch_query = "latest micro-agent architecture patterns and filesystem-as-state best practices 2024 2025"
+        arch_research = web_search(arch_query, num_results=3)
+        
         print(f"[{self.name}] Performing deep architecture review...")
         review_report = ArchitectureReviewer.review(repo_path, client=self.llm_client)
         
@@ -195,11 +200,41 @@ class ArchitectArtooAgent:
                 tasks_added.append(task["id"])
                 print(f"[{self.name}] Backlogged: {task['id']}")
 
+        # 6. Calculate Success Metrics for reporting
+        all_apps = []
+        for root, dirs, _ in os.walk(os.path.join(repo_path, ".exegol", "sandboxes")):
+             if "app.exegol.json" in os.listdir(root):
+                 all_apps.append(root)
+        
+        passed_schema = 0
+        schema_path = os.path.join(repo_path, ".exegol", "schemas", "app_schema.json")
+        from tools.sandbox_validator import validate_app_schema
+        for app_path in all_apps:
+            val = validate_app_schema(app_path, schema_path)
+            if val.get("status") == "pass":
+                passed_schema += 1
+        
+        schema_rate = (passed_schema / len(all_apps) * 100) if all_apps else 100.0
+        self.success_metrics["schema_adherence_rate"]["current"] = f"{schema_rate:.1f}%"
+        self.success_metrics["repos_with_arch_diagram"]["current"] = "100%" if has_diagram else "0%"
+
+        # Log metrics to fleet reports
+        reports_dir = os.path.join(exegol_dir, "fleet_reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        metrics_path = os.path.join(reports_dir, f"metrics_{self.name.lower()}.json")
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "metrics": self.success_metrics,
+                "apps_scanned": len(all_apps)
+            }, f, indent=4)
+
         summary = (
             f"Architecture review complete. "
             f"{archived} task(s) archived. "
-            f"{len(tasks_added)} new task(s) added: "
-            f"{', '.join(tasks_added) if tasks_added else 'none (all already present)'}."
+            f"{len(tasks_added)} new task(s) added. "
+            f"Metrics: Schema Adherence {self.success_metrics['schema_adherence_rate']['current']}, "
+            f"Diagram Presence {self.success_metrics['repos_with_arch_diagram']['current']}."
         )
         print(f"[{self.name}] {summary}")
         return summary

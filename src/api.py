@@ -24,10 +24,16 @@ from tools.egress_filter import EgressFilter
 
 app = FastAPI(title="Exegol V3 - Control Tower Backend")
 
-# Enable CORS for Next.js development
+# Enable CORS for Control Tower UI
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    os.getenv("EXEGOL_FRONTEND_URL", "http://localhost:3001") # Support custom frontend ports
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -382,9 +388,15 @@ async def get_fleet_health():
         hitl = sm.read_json(".exegol/user_action_required.json") or []
         hitl_count = len([t for t in hitl if t.get("status") != "done"])
         
-        # 3. Last activity
+        # 3. Aggregated Metrics
         from tools.fleet_logger import read_interaction_logs
         logs = read_interaction_logs([path], days=30)
+        
+        total_tasks = len(logs)
+        successes = len([l for l in logs if l.get("outcome") == "success"])
+        avg_steps = sum([l.get("steps_used", 0) for l in logs]) / total_tasks if total_tasks > 0 else 0
+        success_rate = (successes / total_tasks) * 100 if total_tasks > 0 else 0
+        
         last_log = logs[-1] if logs else None
         
         health_data.append({
@@ -394,6 +406,9 @@ async def get_fleet_health():
             "priority": repo.get("priority", 10),
             "backlog_count": backlog_count,
             "hitl_count": hitl_count,
+            "success_rate": round(success_rate, 1),
+            "avg_steps": round(avg_steps, 1),
+            "total_tasks": total_tasks,
             "last_activity": last_log.get("timestamp") if last_log else None,
             "last_agent": last_log.get("agent_id") if last_log else None,
             "last_outcome": last_log.get("outcome") if last_log else None

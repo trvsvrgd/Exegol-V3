@@ -1,6 +1,6 @@
 import os
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class RBACManager:
     """Manages agent roles and enforces permission boundaries."""

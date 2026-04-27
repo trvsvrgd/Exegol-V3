@@ -1,6 +1,7 @@
 import os
 import json
 from tools.thrawn_intel_manager import ThrawnIntelManager
+from tools.web_search import web_search
 
 
 class ThoughtfulThrawnAgent:
@@ -10,7 +11,7 @@ class ThoughtfulThrawnAgent:
         self.llm_client = llm_client
         self.name = "ThoughtfulThrawnAgent"
         self.max_steps = 5
-        self.tools = ["user_prompting", "clarification_engine", "markdown_sync"]
+        self.tools = ["user_prompting", "clarification_engine", "markdown_sync", "web_search"]
         self.restrictions = [
             "Cannot modify code files (*.py, *.js, etc.)",
             "Cannot modify agent definitions",
@@ -43,56 +44,21 @@ class ThoughtfulThrawnAgent:
         os.makedirs(exegol_dir, exist_ok=True)
         intent_file = os.path.join(exegol_dir, "intent.md")
 
-        # 1. Load Intent & Clarifications
-        if not os.path.exists(intent_file):
-            print(f"[{self.name}] CRITICAL: No intent.md found. Creating boilerplate...")
-            self._create_boilerplate_intent(intent_file)
-            return "Boilerplate intent.md created. Please fill it out."
-
-        with open(intent_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # 2. Identify Open Questions
-        open_questions = []
-        in_questions_section = False
-        current_question = None
-        
-        for line in content.splitlines():
-            if "Open Clarification Questions" in line:
-                in_questions_section = True
-                continue
-            
-            if in_questions_section:
-                if line.startswith("##"):
-                    in_questions_section = False
-                    continue
-                
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                
-                # Check for new question
-                if stripped[0].isdigit() or stripped.startswith("-"):
-                    if current_question and "Answer:" not in current_question:
-                        open_questions.append(current_question)
-                    current_question = stripped
-                elif "Answer:" in stripped:
-                    if current_question:
-                        current_question += " " + stripped
-                elif current_question:
-                    current_question += " " + stripped
-
-        # Handle the last question
-        if in_questions_section and current_question:
-            if "Answer:" not in current_question:
-                open_questions.append(current_question)
-            else:
-                # Store answered questions for potential roadmap sync
-                pass # We'll handle this via IntelManager
-
-        # 3. Synchronize Answered Questions with Roadmap
+        # 1. Load Intent & Clarifications via Manager (Stateless Refactor)
         mgr = ThrawnIntelManager(repo_path)
         intel = mgr.read_intent()
+        
+        # Phase 2: Web Search for Intent Enrichment
+        if intel.get("objective") and intel.get("objective") != "[Describe the main goal of this repository]":
+            print(f"[{self.name}] Researching context for objective: {intel['objective']}")
+            search_query = f"industry standards and technical requirements for: {intel['objective']}"
+            context_research = web_search(search_query, num_results=3)
+            # This research can be used by the LLM in the next steps
+
+        # 2. Identify Open Questions from parsed intel
+        open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
+        
+        # 3. Synchronize Answered Questions with Roadmap
         answered_questions = [q for q in intel["questions"] if q["answer"]]
         
         if answered_questions:
@@ -110,23 +76,18 @@ Return a list of specific actions in JSON format:
 [{{"action": "redact", "pattern": "string to match"}}, {{"action": "add", "section": "Phase X", "item": "new item"}}]
 If no changes needed, return [].
 """
-            sync_response = self.llm_client.generate_response(sync_prompt, system_prompt=self.system_prompt)
-            try:
-                # Extract JSON from response
-                start = sync_response.find("[")
-                end = sync_response.rfind("]") + 1
-                actions = json.loads(sync_response[start:end])
-                for action in actions:
-                    if action["action"] == "redact":
-                        mgr.redact_roadmap_item(action["pattern"])
-                    # TODO: Implement 'add' and 'update' in mgr if needed
-            except:
-                print(f"[{self.name}] Failed to parse sync actions from LLM.")
+            sync_response = self.llm_client.generate(sync_prompt, system_instruction=self.system_prompt)
+            actions = self._parse_and_validate_sync_actions(sync_response)
+            for action in actions:
+                if action["action"] == "redact":
+                    mgr.redact_roadmap_item(action["pattern"])
+                elif action["action"] == "add":
+                    mgr.add_roadmap_item(action["section"], action["item"])
 
         if not open_questions:
             # If no open questions, maybe do a general checkup
             prompt = f"The current intent for the repository at {repo_path} is:\n{content}\n\nReview this intent. Is it clear? Are there any missing architectural details or potential risks? If so, generate 1-3 strategic questions. If it's perfect, say 'The strategy is sound.'"
-            response = self.llm_client.generate_response(prompt, system_prompt=self.system_prompt)
+            response = self.llm_client.generate(prompt, system_instruction=self.system_prompt)
             
             if "The strategy is sound" not in response:
                 # Add new questions to intent.md
@@ -147,6 +108,63 @@ If no changes needed, return [].
         post_to_slack(msg)
 
         return f"[{self.name}] Notified user via Slack. Waiting for further input."
+
+    def _parse_and_validate_sync_actions(self, response: str) -> list:
+        """Extracts JSON from LLM response and validates against sync schema."""
+        import jsonschema
+        
+        schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["redact", "add"]},
+                    "pattern": {"type": "string"},
+                    "section": {"type": "string"},
+                    "item": {"type": "string"}
+                },
+                "required": ["action"],
+                "if": {
+                    "properties": {"action": {"const": "redact"}}
+                },
+                "then": {
+                    "required": ["pattern"]
+                },
+                "else": {
+                    "if": {
+                        "properties": {"action": {"const": "add"}}
+                    },
+                    "then": {
+                        "required": ["section", "item"]
+                    }
+                }
+            }
+        }
+        
+        # Use common robust parser from LLMClient
+        data = self.llm_client.parse_json_response(response)
+        
+        if not isinstance(data, list):
+            # If it's a dict with the list inside (common LLM failure)
+            if isinstance(data, dict):
+                for val in data.values():
+                    if isinstance(val, list):
+                        data = val
+                        break
+        
+        if not isinstance(data, list):
+            print(f"[{self.name}] ERROR: Expected list of actions, got {type(data)}")
+            return []
+            
+        validated_actions = []
+        for action in data:
+            try:
+                jsonschema.validate(instance=action, schema=schema)
+                validated_actions.append(action)
+            except jsonschema.exceptions.ValidationError as e:
+                print(f"[{self.name}] WARNING: Skipping invalid action: {e.message}")
+                
+        return validated_actions
 
     def _create_boilerplate_intent(self, path):
         boilerplate = """# 🚀 Repository Intent & Clarifications
