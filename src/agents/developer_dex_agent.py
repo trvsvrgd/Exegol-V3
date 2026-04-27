@@ -10,6 +10,10 @@ from tools.snapshot_tester import capture_snapshot
 from tools.fleet_logger import log_interaction
 from tools.input_sanitizer import sanitize_prompt
 from tools.security_audit_logger import log_security_event
+from tools.web_search import web_search
+from tools.slack_tool import post_to_slack
+from tools.metrics_manager import SuccessMetricsManager
+
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +70,7 @@ class DeveloperDexAgent:
         self.max_steps = 20
         self._steps_used = 0
         self.snapshot_hash = ""
-        self.tools = ["file_editor", "slack_notifier", "agentic_coding", "sandbox_orchestrator"]
+        self.tools = ["file_editor", "slack_notifier", "agentic_coding", "sandbox_orchestrator", "web_search"]
         self.success_metrics = {
             "sandbox_acceptance_rate": {
                 "description": "Percentage of user feedback sessions in sandboxes resulting in 'approved' status",
@@ -84,7 +88,9 @@ class DeveloperDexAgent:
                 "current": None
             }
         }
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+
         self.system_prompt += "\n\nCRITICAL: After completing any coding task or sandbox creation, you MUST hand off to QualityQuigonAgent for validation. Set your next_agent_id to 'quality_quigon'."
 
     def _validate_action_path(self, repo_path: str, relative_path: str) -> bool:
@@ -108,13 +114,17 @@ class DeveloperDexAgent:
 
         prompt_file = os.path.join(repo_path, ".exegol", "active_prompt.md")
         if not os.path.exists(prompt_file):
-            print(f"[{self.name}] No active prompt found.")
-            return "No prompt found in .exegol/active_prompt.md"
-
-        try:
+            if handoff.scheduled_prompt:
+                print(f"[{self.name}] No active prompt file. Using scheduled prompt: {handoff.scheduled_prompt}")
+                raw_prompt = handoff.scheduled_prompt
+            else:
+                print(f"[{self.name}] No active prompt found.")
+                return "No prompt found in .exegol/active_prompt.md"
+        else:
             with open(prompt_file, 'r', encoding='utf-8') as f:
                 raw_prompt = f.read()
-            
+
+        try:
             # --- SECURITY GUARD: Input Sanitization (sec_sec_arch_006) ---
             sanitization_result = sanitize_prompt(raw_prompt)
             active_prompt = sanitization_result["sanitized_text"]
@@ -140,6 +150,14 @@ class DeveloperDexAgent:
             else:
                 # Real coding loop
                 res = self._run_coding_loop(repo_path, active_prompt, handoff)
+            
+            # --- PHASE 3: Update Success Metrics ---
+            metrics = self.metrics_manager.calculate_metrics()
+            scorecard = metrics.get("agent_breakdown", {}).get(self.name, {})
+            print(f"[{self.name}] Current Success Rate: {scorecard.get('success_rate', 0)*100:.1f}%")
+
+            # Notify Slack (arch_dex_slack_integration)
+            self._notify_completion(handoff.session_id, res)
             
             # Ensure handoff to Quigon
             self.next_agent_id = "quality_quigon"
@@ -223,11 +241,18 @@ class DeveloperDexAgent:
         """
         print(f"[{self.name}] Initiating coding cycle...")
         
+        # Step 0: Research Implementation (Phase 2 Integration)
+        print(f"[{self.name}] Researching best practices for task: {active_prompt[:50]}...")
+        search_query = f"best practices and code examples for: {active_prompt[:100]}"
+        research_results = web_search(search_query, num_results=2)
+        
         # Step 1: Analyze and Plan
         regression_note = f"\nREGRESSION WARNING: {handoff.regression_context}" if handoff.regression_context else ""
         planning_prompt = f"""
         User Task: {active_prompt}
         {regression_note}
+        
+        Implementation Research: {json.dumps(research_results)}
         
         Existing Files in Repo: {os.listdir(repo_path)}
         
@@ -342,3 +367,10 @@ class DeveloperDexAgent:
             print(f"[{self.name}] Implementation plan logged to {plan_path}")
         except Exception as e:
             print(f"[{self.name}] Failed to log implementation plan: {e}")
+
+    def _notify_completion(self, session_id: str, summary: str):
+        """Sends a completion notification to Slack."""
+        message = f"✅ *{self.name}* completed task in session `{session_id}`\n"
+        message += f"**Summary:** {summary[:500]}..."
+        post_to_slack(message)
+
