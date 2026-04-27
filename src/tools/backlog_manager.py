@@ -1,11 +1,11 @@
 import os
 import json
 import datetime
-import tempfile
+import sqlite3
 from typing import List, Dict, Any, Optional
 
 class BacklogManager:
-    """Centralized manager for the project backlog and its archive.
+    """Centralized manager for the project backlog and its archive using SQLite.
     
     Handles loading, saving, status updates, and archiving of tasks to ensure
     data integrity and persistence across the fleet.
@@ -14,89 +14,57 @@ class BacklogManager:
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
         self.exegol_dir = os.path.join(repo_path, ".exegol")
-        self.backlog_file = os.path.join(self.exegol_dir, "backlog.json")
-        self.archive_file = os.path.join(self.exegol_dir, "backlog_archive.json")
+        self.db_path = os.path.join(self.exegol_dir, "backlog.db")
+        self.backlog_json = os.path.join(self.exegol_dir, "backlog.json")
+        self.archive_json = os.path.join(self.exegol_dir, "backlog_archive.json")
         os.makedirs(self.exegol_dir, exist_ok=True)
-
-    def load_backlog(self) -> List[Dict[str, Any]]:
-        """Loads the active backlog from backlog.json."""
-        return self._load_json(self.backlog_file)
-
-    def load_archive(self) -> List[Dict[str, Any]]:
-        """Loads the archived tasks from backlog_archive.json."""
-        return self._load_json(self.archive_file)
-
-    def save_backlog(self, backlog: List[Dict[str, Any]]):
-        """Saves the active backlog to backlog.json."""
-        self._save_json(self.backlog_file, backlog)
-
-    def save_archive(self, archive: List[Dict[str, Any]]):
-        """Saves the archived tasks to backlog_archive.json."""
-        self._save_json(self.archive_file, archive)
-
-    def add_task(self, task: Dict[str, Any]) -> bool:
-        """Adds a new task to the backlog if it doesn't already exist.
         
-        Uses 'id' or 'source_requirement_id' for deduplication.
-        """
-        backlog = self.load_backlog()
-        
-        # Check for duplicates
-        task_id = task.get("id")
-        source_id = task.get("source_requirement_id")
-        
-        for t in backlog:
-            if (task_id and t.get("id") == task_id) or \
-               (source_id and t.get("source_requirement_id") == source_id):
-                return False # Duplicate
-                
-        backlog.append(task)
-        self.save_backlog(backlog)
-        return True
+        self._init_db()
+        self._migrate_if_needed()
 
-    def update_task_status(self, task_id: str, new_status: str) -> bool:
-        """Updates the status of a specific task in the active backlog."""
-        backlog = self.load_backlog()
-        updated = False
-        for task in backlog:
-            if task.get("id") == task_id:
-                task["status"] = new_status
-                updated = True
-                break
-        
-        if updated:
-            self.save_backlog(backlog)
-        return updated
+    def _init_db(self):
+        """Initializes the SQLite database and creates the tasks table."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    summary TEXT,
+                    priority TEXT,
+                    type TEXT,
+                    status TEXT,
+                    source_agent TEXT,
+                    rationale TEXT,
+                    created_at TEXT,
+                    archived_at TEXT,
+                    data TEXT
+                )
+            """)
+            conn.commit()
 
-    def archive_completed_tasks(self) -> int:
-        """Moves all tasks with status 'completed' (or 'done') to the archive.
-        
-        Returns the number of tasks archived.
-        """
-        backlog = self.load_backlog()
-        active = []
-        to_archive = []
-        
-        for task in backlog:
-            if task.get("status") in ["completed", "done"]:
-                # Add archival metadata
-                task["archived_at"] = datetime.datetime.now().isoformat()
-                to_archive.append(task)
-            else:
-                active.append(task)
-        
-        if not to_archive:
-            return 0
+    def _migrate_if_needed(self):
+        """Migrates tasks from legacy JSON files if the database is empty."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM tasks")
+            if cursor.fetchone()[0] > 0:
+                return # Already migrated or contains data
+
+            print("[BacklogManager] Migration triggered: importing from JSON...")
             
-        archive = self.load_archive()
-        archive.extend(to_archive)
-        
-        self.save_archive(archive)
-        self.save_backlog(active)
-        
-        return len(to_archive)
+            # Load from active backlog
+            active_tasks = self._load_json_legacy(self.backlog_json)
+            for task in active_tasks:
+                self._insert_task(conn, task, archived=False)
+            
+            # Load from archive
+            archived_tasks = self._load_json_legacy(self.archive_json)
+            for task in archived_tasks:
+                self._insert_task(conn, task, archived=True)
+            
+            conn.commit()
+            print(f"[BacklogManager] Migrated {len(active_tasks)} active and {len(archived_tasks)} archived tasks.")
 
-    def _load_json(self, path: str) -> List[Dict[str, Any]]:
+    def _load_json_legacy(self, path: str) -> List[Dict[str, Any]]:
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -106,16 +74,101 @@ class BacklogManager:
                 return []
         return []
 
-    def _save_json(self, path: str, data: List[Dict[str, Any]]):
-        """Saves data to a JSON file atomically."""
-        dir_name = os.path.dirname(os.path.abspath(path))
-        with tempfile.NamedTemporaryFile("w", dir=dir_name, suffix=".tmp", delete=False, encoding="utf-8") as tmp:
-            json.dump(data, tmp, indent=4)
-            tmp_path = tmp.name
+    def _insert_task(self, conn, task: Dict[str, Any], archived: bool = False):
+        """Inserts a task dictionary into the database."""
+        task_id = task.get("id")
+        if not task_id:
+            return
         
-        try:
-            os.replace(tmp_path, path)
-        except Exception:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            raise
+        archived_at = task.get("archived_at")
+        if archived and not archived_at:
+            archived_at = datetime.datetime.now().isoformat()
+            
+        conn.execute("""
+            INSERT OR IGNORE INTO tasks 
+            (id, summary, priority, type, status, source_agent, rationale, created_at, archived_at, data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            task_id,
+            task.get("summary"),
+            task.get("priority"),
+            task.get("type"),
+            task.get("status"),
+            task.get("source_agent"),
+            task.get("rationale"),
+            task.get("created_at"),
+            archived_at,
+            json.dumps(task)
+        ))
+
+    def load_backlog(self) -> List[Dict[str, Any]]:
+        """Loads the active backlog (not archived)."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE archived_at IS NULL")
+            return [json.loads(row["data"]) for row in cursor.fetchall()]
+
+    def load_archive(self) -> List[Dict[str, Any]]:
+        """Loads the archived tasks."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE archived_at IS NOT NULL")
+            return [json.loads(row["data"]) for row in cursor.fetchall()]
+
+    def add_task(self, task: Dict[str, Any]) -> bool:
+        """Adds a new task to the backlog if it doesn't already exist."""
+        task_id = task.get("id")
+        if not task_id:
+            return False
+            
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
+            if cursor.fetchone():
+                return False # Duplicate
+            
+            self._insert_task(conn, task)
+            conn.commit()
+            return True
+
+    def update_task_status(self, task_id: str, new_status: str) -> bool:
+        """Updates the status of a specific task and refreshes its 'data' blob."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            
+            task = json.loads(row["data"])
+            task["status"] = new_status
+            
+            conn.execute("UPDATE tasks SET status = ?, data = ? WHERE id = ?", 
+                         (new_status, json.dumps(task), task_id))
+            conn.commit()
+            return True
+
+    def archive_completed_tasks(self) -> int:
+        """Moves all completed tasks to archive by setting archived_at."""
+        now_str = datetime.datetime.now().isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Find tasks to archive
+            cursor.execute("SELECT id, data FROM tasks WHERE archived_at IS NULL AND status IN ('completed', 'done')")
+            rows = cursor.fetchall()
+            if not rows:
+                return 0
+            
+            for task_id, data_str in rows:
+                task = json.loads(data_str)
+                task["archived_at"] = now_str
+                conn.execute("UPDATE tasks SET archived_at = ?, data = ? WHERE id = ?",
+                             (now_str, json.dumps(task), task_id))
+            
+            conn.commit()
+            return len(rows)
+

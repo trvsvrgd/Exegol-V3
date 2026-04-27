@@ -15,9 +15,10 @@ import time
 import traceback
 import hmac
 import hashlib
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 from handoff import HandoffContext, SessionResult
+from tools.heartbeat_monitor import HeartbeatMonitor
 
 
 class SessionManager:
@@ -27,6 +28,8 @@ class SessionManager:
         self.log_every_session = log_every_session
         self._last_executions: Dict[str, float] = {}  # agent_id -> timestamp
         self._default_cooldown = 30.0  # seconds
+        # Heartbeat monitors keyed by repo_path (lazy-created per repo)
+        self._heartbeat_monitors: Dict[str, HeartbeatMonitor] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,6 +115,13 @@ class SessionManager:
         agent_instance = None
         start_time = time.time()
 
+        # --- HEARTBEAT: Register session for zombie detection (arch_agent_heartbeat) ---
+        repo_path = handoff.repo_path
+        if repo_path not in self._heartbeat_monitors:
+            self._heartbeat_monitors[repo_path] = HeartbeatMonitor(repo_path)
+        heartbeat = self._heartbeat_monitors[repo_path]
+        heartbeat.start(session_id=handoff.session_id, agent_id=agent_id)
+
         try:
             # 1. Fresh import + instantiation — no cached instances
             agent_instance = self._create_fresh_instance(module_path, class_name, llm_client)
@@ -152,6 +162,9 @@ class SessionManager:
             # 3. Destroy the instance — no state retained
             del agent_instance
 
+            # --- HEARTBEAT: Deregister session on completion or failure ---
+            heartbeat.stop(handoff.session_id)
+
             print(
                 f"[SessionManager] Session {handoff.session_id} finished: "
                 f"{result.outcome} in {elapsed:.2f}s"
@@ -162,6 +175,13 @@ class SessionManager:
             self._persist_session_log(handoff.repo_path, result)
 
         return result
+
+    def shutdown_monitors(self) -> None:
+        """Stop all heartbeat monitor watchdog threads. Call during orchestrator shutdown."""
+        for monitor in self._heartbeat_monitors.values():
+            monitor.stop_watchdog()
+        self._heartbeat_monitors.clear()
+        print("[SessionManager] All heartbeat monitors shut down.")
 
     # ------------------------------------------------------------------
     # Internal helpers

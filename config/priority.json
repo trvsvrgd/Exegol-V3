@@ -4,7 +4,7 @@
       "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3",
       "priority": 1,
       "model_routing_preference": "ollama",
-      "agent_status": "active",
+      "agent_status": "blocked",
       "max_steps_policy": 100,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true

@@ -59,17 +59,19 @@ class TestHandoffContext:
         assert "T" in ctx.timestamp  # ISO format
 
     def test_max_handoff_fields(self):
-        """HandoffContext should stay lean — ceiling is 11 fields.
+        """HandoffContext should stay lean — ceiling is 13 fields.
 
-        The original contract was 9. Two fields were intentionally added by
-        the loop-guard sprint (loop_depth, chain_history) to support
-        circuit-breaker logic in ExegolOrchestrator. Any future additions
-        must justify themselves against the minimal-context principle.
+        Field lineage:
+        - Original contract: 9 fields.
+        - loop_depth, chain_history added by loop-guard sprint (circuit-breaker).
+        - scheduled_prompt added by scheduler sprint (HITL-gate prompts).
+        - signature added by HMAC security sprint.
+        Any future additions must justify themselves against the minimal-context principle.
         """
         import dataclasses
         fields = dataclasses.fields(HandoffContext)
-        assert len(fields) <= 12, (
-            f"HandoffContext has {len(fields)} fields — exceeds the 12-field "
+        assert len(fields) <= 13, (
+            f"HandoffContext has {len(fields)} fields — exceeds the 13-field "
             "contract. Remove or consolidate fields before adding more."
         )
 

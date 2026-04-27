@@ -556,6 +556,10 @@ class ExegolOrchestrator:
         self._should_stop_scheduler = True
         self.is_running_fleet = False
         
+        # Stop heartbeat monitor watchdog threads
+        if hasattr(self, "session_manager"):
+            self.session_manager.shutdown_monitors()
+        
         # Give threads a moment to catch the stop signals
         time.sleep(1)
         

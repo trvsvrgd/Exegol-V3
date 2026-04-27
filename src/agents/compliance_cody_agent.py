@@ -4,6 +4,7 @@ import datetime
 import time
 from tools.web_search import web_search
 from tools.fleet_logger import log_interaction
+from tools.backlog_manager import BacklogManager
 
 
 class ComplianceCodyAgent:
@@ -86,17 +87,7 @@ class ComplianceCodyAgent:
             if not found_requirements:
                 found_requirements = []
 
-            backlog_file = os.path.join(exegol_dir, "backlog.json")
-            exception_log = os.path.join(exegol_dir, "compliance_exceptions.log")
-            
-            backlog = []
-            if os.path.exists(backlog_file):
-                with open(backlog_file, 'r', encoding='utf-8') as f:
-                    try:
-                        backlog = json.load(f)
-                    except:
-                        backlog = []
-
+            bm = BacklogManager(repo_path)
             new_tasks_added = 0
             exceptions_logged = 0
 
@@ -108,27 +99,22 @@ class ComplianceCodyAgent:
                     # Check if system supports this
                     if req.get("required_capability_id") in system_feature_ids:
                         # Support exists, add as a tracking task if not already there
-                        task_exists = any(t.get("source_requirement_id") == req["id"] for t in backlog)
-                        if not task_exists:
-                            task = {
-                                "id": f"comp_{len(backlog)+1:03d}",
-                                "summary": f"Compliance Audit: {req['summary']}",
-                                "description": req["description"],
-                                "priority": req["priority"],
-                                "type": "compliance_certification",
-                                "status": "pending_prioritization",
-                                "source_requirement_id": req["id"]
-                            }
-                            backlog.append(task)
+                        task = {
+                            "id": f"comp_{req['id'].lower()}",
+                            "summary": f"Compliance Audit: {req['summary']}",
+                            "description": req["description"],
+                            "priority": req["priority"],
+                            "type": "compliance_certification",
+                            "status": "pending_prioritization",
+                            "source_requirement_id": req["id"],
+                            "created_at": datetime.datetime.now().isoformat()
+                        }
+                        if bm.add_task(task):
                             new_tasks_added += 1
                     else:
                         # System does NOT support this requirement — LOG EXCEPTION
                         elog.write(f"[EXCEPTION] System lacks capability '{req.get('required_capability_id')}' for requirement {req['id']}: {req['summary']}\n")
                         exceptions_logged += 1
-
-            # Save backlog
-            with open(backlog_file, 'w', encoding='utf-8') as f:
-                json.dump(backlog, f, indent=4)
 
             duration = time.time() - start_time
             summary = f"Compliance sweep complete. Added {new_tasks_added} new tasks to backlog. Logged {exceptions_logged} exceptions."

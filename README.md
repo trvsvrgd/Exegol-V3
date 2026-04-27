@@ -60,6 +60,10 @@ flowchart TD
     L -- "Fleet Summary" --> Report
     FS -- "Costs" --> M["🧠 Intel Ima"]
     M -- "Intel Report" --> Report[("📧 Intelligence Reports")]
+    FS -- "Docs" --> TT["🎯 Technical Tarkin"]
+    TT -- "Technical Docs" --> FS
+    FS -- "Model Selection" --> MRM["🔀 Model Router Mothma"]
+    MRM -- "Routing Config" --> FS
     end
 
     subgraph Governance
@@ -72,7 +76,7 @@ flowchart TD
     end
 
     classDef agent fill:#f9f9f9,stroke:#333,stroke-width:2px;
-    class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,V agent;
+    class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,V,TT,MRM agent;
 ```
 
 
@@ -97,6 +101,8 @@ flowchart TD
 | `assessment_anakin` | Assessment Anakin | Risk & Impact Assessment | `.exegol/assessment_report.json` |
 | `compliance_cody` | Compliance Cody | Regulatory & Compliance Review | `.exegol/backlog.json` |
 | `security_architect` | Security Architect | Security Hardening & Audits | Security Patches & PRs |
+| `technical_tarkin` | Technical Tarkin | Technical Documentation & ADRs | Architecture decision records |
+| `model_router_mothma` | Model Router Mothma | LLM Model Selection & Routing | Routing configuration |
 
 > [!IMPORTANT]
 > **Fleet Governance Rule**: Any new agent added to the `src/agents/` folder and registered in `registry.py` **MUST** be added to the Mermaid diagram and the Agent Fleet table above to maintain architectural transparency.

@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+from tools.backlog_manager import BacklogManager
 
 
 class EvaluatorEzraAgent:
@@ -10,7 +11,7 @@ class EvaluatorEzraAgent:
         self.llm_client = llm_client
         self.name = "EvaluatorEzraAgent"
         self.max_steps = 15
-        self.tools = ["web_search", "arxiv_reader", "backlog_writer"]
+        self.tools = ["web_search", "arxiv_reader", "backlog_writer", "llm_judge"]
         self.success_metrics = {
             "new_techniques_identified": {
                 "description": "At least 1 new eval technique identified per weekly run",
@@ -143,32 +144,20 @@ class EvaluatorEzraAgent:
     @staticmethod
     def _add_to_backlog(repo_path: str, new_reqs: list):
         """Add implementation tasks for new eval requirements to the shared backlog."""
-        exegol_dir = os.path.join(repo_path, ".exegol")
-        os.makedirs(exegol_dir, exist_ok=True)
-        backlog_file = os.path.join(exegol_dir, "backlog.json")
-
-        backlog = []
-        if os.path.exists(backlog_file):
-            try:
-                with open(backlog_file, "r", encoding="utf-8") as f:
-                    backlog = json.load(f)
-            except Exception:
-                pass
+        bm = BacklogManager(repo_path)
 
         for req in new_reqs:
             task = {
-                "id": f"eval_{len(backlog) + 1:03d}",
+                "id": f"eval_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{req['technique_name'][:10].lower().replace(' ', '_')}",
                 "summary": f"Implement eval technique: {req['technique_name']}",
                 "description": req["description"],
                 "priority": req.get("priority", "high"),
                 "type": "eval_implementation",
                 "status": "pending_prioritization",
-                "source_requirement_id": req.get("id", "unknown")
+                "source_requirement_id": req.get("id", "unknown"),
+                "created_at": datetime.datetime.now().isoformat()
             }
-            backlog.append(task)
-
-        with open(backlog_file, "w", encoding="utf-8") as f:
-            json.dump(backlog, f, indent=4)
+            bm.add_task(task)
 
     # ------------------------------------------------------------------
     # Main execution
@@ -249,6 +238,22 @@ class EvaluatorEzraAgent:
                 for r in stale
             ]
         }
+
+        # 8b. Qualitative Evaluation Engine (LLMJudge Integration)
+        try:
+            from tools.llm_judge import LLMJudge
+            print(f"[{self.name}] Running qualitative evaluations on active fleet...")
+            agent_evals = {}
+            # Evaluate key agents
+            for target_agent in ["developer_dex", "product_poe", "architect_artoo", "quality_quigon"]:
+                eval_result = LLMJudge.audit_agent(target_agent, limit=3)
+                if "error" not in eval_result:
+                    agent_evals[target_agent] = eval_result
+            report["agent_evaluations"] = agent_evals
+            print(f"[{self.name}] Completed evaluations for {len(agent_evals)} agents.")
+        except Exception as e:
+            print(f"[{self.name}] Failed to run LLM Judge evaluations: {e}")
+            report["agent_evaluations"] = {"error": str(e)}
 
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)

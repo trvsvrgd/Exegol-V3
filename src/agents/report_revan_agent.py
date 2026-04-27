@@ -3,6 +3,7 @@ import json
 import datetime
 from tools.gmail_tool import send_gmail_message
 from tools.fleet_logger import log_interaction, read_interaction_logs
+from tools.backlog_manager import BacklogManager
 
 
 class ReportRevanAgent:
@@ -48,18 +49,11 @@ class ReportRevanAgent:
         return read_interaction_logs(repo_paths, days=7)
 
     def _load_repo_backlogs(self, repo_paths: list) -> dict:
-        """Load backlog.json for all provided repositories."""
+        """Load backlog for all provided repositories using BacklogManager."""
         backlogs = {}
         for repo_path in repo_paths:
-            backlog_path = os.path.join(repo_path, ".exegol", "backlog.json")
-            if os.path.exists(backlog_path):
-                try:
-                    with open(backlog_path, "r", encoding="utf-8") as f:
-                        backlogs[repo_path] = json.load(f)
-                except Exception as e:
-                    print(f"[{self.name}] Error loading backlog.json at {repo_path}: {e}")
-            else:
-                backlogs[repo_path] = []
+            bm = BacklogManager(repo_path)
+            backlogs[repo_path] = bm.load_backlog()
         return backlogs
 
 

@@ -369,6 +369,12 @@ async def add_thrawn_architecture(req: ThrawnArchitectureRequest):
 
 # --- Epic 5: Fleet Health Dashboard ---
 
+@app.get("/fleet/metrics")
+async def get_fleet_metrics(repo_path: str):
+    from tools.metrics_manager import SuccessMetricsManager
+    mgr = SuccessMetricsManager(repo_path)
+    return mgr.calculate_metrics()
+
 @app.get("/fleet/health")
 async def get_fleet_health():
     """Aggregates health metrics across all managed repositories."""
@@ -415,6 +421,34 @@ async def get_fleet_health():
         })
 
     return health_data
+
+# --- Epic 6: Evaluation Reports ---
+
+@app.get("/evaluations")
+async def get_evaluations(repo_path: str):
+    """Fetch a list of all evaluation reports."""
+    eval_dir = os.path.join(repo_path, ".exegol", "eval_reports")
+    if not os.path.exists(eval_dir):
+        return []
+        
+    reports = []
+    for f in os.listdir(eval_dir):
+        if f.endswith(".json") and not os.path.isdir(os.path.join(eval_dir, f)):
+            reports.append(f)
+            
+    # Sort descending by name (which includes date)
+    reports.sort(reverse=True)
+    return reports
+
+@app.get("/evaluations/{filename}")
+async def get_evaluation_report(filename: str, repo_path: str):
+    """Fetch a specific evaluation report."""
+    report_path = os.path.join(repo_path, ".exegol", "eval_reports", filename)
+    if not os.path.exists(report_path):
+        raise HTTPException(status_code=404, detail="Evaluation report not found.")
+
+    with open(report_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

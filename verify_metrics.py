@@ -1,31 +1,30 @@
-import sys
 import os
+import sys
 import json
 
 # Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from tools.metrics_manager import SuccessMetricsManager
 
-def verify_metrics():
-    print("--- Verifying SuccessMetricsManager ---")
-    repo_path = os.getcwd()
-    manager = SuccessMetricsManager(repo_path)
+def test_metrics():
+    print("Testing Advanced Success Metrics...")
+    manager = SuccessMetricsManager(os.getcwd())
+    report = manager.calculate_metrics(days=30)
     
-    # Calculate metrics
-    report = manager.calculate_metrics(days=7)
+    print(f"Report Timestamp: {report['timestamp']}")
+    print(f"Total Sessions: {report['fleet_aggregate']['total_sessions']}")
+    print(f"Average Recall: {report['fleet_aggregate']['avg_recall']}")
+    print(f"Average Precision: {report['fleet_aggregate']['avg_precision']}")
+    print(f"Overall Drift: {report['fleet_aggregate']['overall_drift']}")
     
-    print(f"Total Sessions analyzed: {report['fleet_aggregate']['total_sessions']}")
-    print(f"Fleet Success Rate: {report['fleet_aggregate']['success_rate']*100:.1f}%")
-    
-    if report['agent_breakdown']:
-        print("\nAgent Breakdown:")
-        for agent, stats in report['agent_breakdown'].items():
-            print(f" - {agent}: {stats['success_rate']*100:.1f}% success ({stats['total_sessions']} sessions)")
-    else:
-        print("\nNo interaction logs found for the last 7 days.")
-    
-    print("\nReport saved to .exegol/fleet_reports/metrics.json")
+    print("\nAgent Breakdown:")
+    for agent_id, stats in report['agent_breakdown'].items():
+        print(f"- {agent_id}:")
+        print(f"  Recall: {stats['recall']}")
+        print(f"  Precision: {stats['precision']}")
+        print(f"  Drift: {stats['drift']}")
+        print(f"  Status: {stats['status']}")
 
 if __name__ == "__main__":
-    verify_metrics()
+    test_metrics()

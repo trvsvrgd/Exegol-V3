@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 from tools.gmail_tool import send_gmail_message
+from tools.backlog_manager import BacklogManager
 
 
 class OptimizerAhsokaAgent:
@@ -260,20 +261,10 @@ Return ONLY the JSON array.
         return []
 
     def _append_to_backlog(self, repo_path: str, new_items: list):
-        """Append items to .exegol/backlog.json."""
-        backlog_file = os.path.join(repo_path, ".exegol", "backlog.json")
-        backlog = []
-        if os.path.exists(backlog_file):
-            try:
-                with open(backlog_file, "r") as f:
-                    backlog = json.load(f)
-            except:
-                pass
-        
-        backlog.extend(new_items)
-        
-        with open(backlog_file, "w") as f:
-            json.dump(backlog, f, indent=4)
+        """Append items to the project backlog via BacklogManager."""
+        bm = BacklogManager(repo_path)
+        for item in new_items:
+            bm.add_task(item)
 
     # ------------------------------------------------------------------
 
