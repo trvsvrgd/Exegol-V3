@@ -117,5 +117,12 @@ AGENT_REGISTRY = {
         "wake_word": "anakin",
         "tools": ["repo_analyzer", "risk_scorer", "backlog_writer"],
         "max_steps": 15
+    },
+    "technical_tarkin": {
+        "class": "TechnicalTarkinAgent",
+        "module": "agents.technical_tarkin_agent",
+        "wake_word": "tarkin",
+        "tools": ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search"],
+        "max_steps": 15
     }
 }

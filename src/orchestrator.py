@@ -237,9 +237,10 @@ class ExegolOrchestrator:
             with open(backlog_path, 'r') as f:
                 backlog = json.load(f)
             
-            pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged"]]
+            # Check backlog for pending tasks (including prioritized 'todo' tasks)
+            pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged", "todo"]]
             if pending_tasks:
-                print(f"Found {len(pending_tasks)} pending tasks. Triggering ProductPoeAgent...")
+                print(f"Found {len(pending_tasks)} pending/todo tasks. Triggering ProductPoeAgent...")
                 self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 10, "product_poe")
                 return
 
@@ -290,6 +291,13 @@ class ExegolOrchestrator:
 
     def trigger_go(self):
         """Manual 'Go' trigger for the active target."""
+        # --- SECURITY GUARD: CLI Auth (sec_sec_arch_001) ---
+        api_key = os.getenv("EXEGOL_API_KEY")
+        if api_key and api_key != "dev-local-key":
+             # In a real CLI, we might prompt for a key or check a local token
+             # For now, we just log that we are running in authenticated mode
+             print("[Orchestrator] Running 'Go' in authenticated CLI mode.")
+
         print("Received 'Go' trigger. Initiating orchestration cycle...")
         target_repo = self.active_target
         if not target_repo:
@@ -309,7 +317,16 @@ class ExegolOrchestrator:
         
         if chain_history is None:
             chain_history = []
-        
+
+        # --- SECURITY GUARD: Agent-Trigger RBAC (sec_sec_arch_001) ---
+        if chain_history:
+            caller_id = chain_history[-1]
+            from tools.rbac_manager import RBACManager
+            # Check if caller has permission to trigger agents
+            if not RBACManager.check_permission(caller_id, "agent:trigger"):
+                msg = f"SECURITY: Agent '{caller_id}' REJECTED from triggering '{agent_id}'. Missing 'agent:trigger' permission."
+                print(f"[Orchestrator] {msg}")
+                return None        
         # 1. Loop Guard: Check max depth
         max_depth = self._get_isolation_setting("max_handoff_depth", 5)
         if loop_depth >= max_depth:

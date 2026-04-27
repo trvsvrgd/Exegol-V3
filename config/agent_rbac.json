@@ -5,14 +5,16 @@
         "filesystem:read",
         "filesystem:write",
         "sandbox:orchestrate",
-        "slack:notify"
+        "slack:notify",
+        "agent:trigger"
       ]
     },
     "architect": {
       "permissions": [
         "filesystem:read",
         "architecture:review",
-        "schema:design"
+        "schema:design",
+        "agent:trigger"
       ]
     },
     "security": {
@@ -26,7 +28,8 @@
       "permissions": [
         "backlog:read",
         "backlog:write",
-        "report:generate"
+        "report:generate",
+        "agent:trigger"
       ]
     },
     "restricted": {

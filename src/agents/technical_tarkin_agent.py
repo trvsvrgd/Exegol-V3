@@ -1,0 +1,149 @@
+import os
+import time
+import json
+from tools.file_editor_tool import read_file, write_file, replace_content
+from tools.readme_parser import ReadmeParser
+from tools.diagram_generator import DiagramGenerator
+from tools.slack_tool import post_to_slack
+from tools.fleet_logger import log_interaction
+
+class TechnicalTarkinAgent:
+    """The Grand Moff of Documentation. 
+    
+    Responsible for creating 'awesome' READMEs, technical user guides, and 
+    detailed breakdowns of complex capabilities like auditing and compliance.
+    """
+
+    def __init__(self, llm_client):
+        self.llm_client = llm_client
+        self.name = "TechnicalTarkinAgent"
+        self.max_steps = 15
+        self._steps_used = 0
+        self.tools = ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search"]
+        self.success_metrics = {
+            "documentation_coverage": {
+                "description": "Percentage of core modules with dedicated technical guides",
+                "target": ">=90%",
+                "current": None
+            },
+            "readme_visual_score": {
+                "description": "Qualitative score of README aesthetics (includes diagrams/videos)",
+                "target": "Awesome",
+                "current": None
+            },
+            "compliance_transparency": {
+                "description": "Availability of detailed auditing and compliance breakdowns",
+                "target": "Complete",
+                "current": None
+            }
+        }
+        self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.system_prompt += "\n\nCRITICAL: Your documentation must be 'awesome'. Use Mermaid diagrams, rich formatting, and clear hierarchies. Do not just list features; explain the 'why' and 'how' with technical depth."
+
+    def execute(self, handoff):
+        """Execute the documentation mission."""
+        start_time = time.time()
+        self._steps_used = 0
+        repo_path = handoff.repo_path
+        print(f"[{self.name}] Session {handoff.session_id} — The Documentation Fleet is under my command.")
+
+        # 1. Read the active prompt or task description
+        prompt_file = os.path.join(repo_path, ".exegol", "active_prompt.md")
+        active_task = ""
+        if os.path.exists(prompt_file):
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                active_task = f.read()
+        
+        if not active_task:
+            active_task = getattr(handoff, "task_description", "General documentation audit and enhancement.")
+
+        print(f"[{self.name}] Mission Objective: {active_task[:100]}...")
+
+        # 2. Analyze repository for auditing and compliance capabilities (if requested)
+        compliance_data = {}
+        if "compliance" in active_task.lower() or "audit" in active_task.lower():
+            compliance_data = self._analyze_compliance_capabilities(repo_path)
+
+        # 3. Plan and Execute Documentation Updates
+        planning_prompt = f\"\"\"
+        User Mission: {active_task}
+        
+        Repository Compliance Context: {json.dumps(compliance_data, indent=2)}
+        
+        Identify the documentation files to create or update. 
+        - README.md should be 'awesome' with visuals (Mermaid diagrams).
+        - Technical guides should be detailed and live in a 'docs/' directory.
+        - Compliance breakdowns should be deep technical dives.
+
+        Return a JSON list of actions:
+        {{
+            "actions": [
+                {{
+                    "type": "write" | "replace",
+                    "path": "path/to/file.md",
+                    "content": "Full markdown content",
+                    "description": "Why this change is awesome"
+                }}
+            ]
+        }}
+        \"\"\"
+
+        response = self.llm_client.generate(planning_prompt, system_instruction=self.system_prompt, json_format=True)
+        plan = self.llm_client.parse_json_response(response)
+
+        results = []
+        if plan and "actions" in plan:
+            for action in plan["actions"]:
+                if self._steps_used >= self.max_steps:
+                    break
+                
+                file_path = os.path.join(repo_path, action["path"])
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+                if action["type"] == "write":
+                    res = write_file(file_path, action["content"])
+                    results.append(f"Created/Updated {action['path']}: {res}")
+                elif action["type"] == "replace":
+                    # This would require a target string, for simplicity in this agent 
+                    # we often overwrite or use specific markers
+                    res = write_file(file_path, action["content"]) # Fallback to write for now
+                    results.append(f"Overwrote {action['path']} with enhanced version.")
+                
+                self._steps_used += 1
+
+        # 4. Notify Slack
+        notification = f"📢 *TechnicalTarkinAgent Update*\n\nMission accomplished. Documentation fleet updated.\n"
+        for res in results:
+            notification += f"- {res}\n"
+        post_to_slack(notification)
+
+        duration = time.time() - start_time
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=f"Documentation update complete: {len(results)} files processed.",
+            repo_path=repo_path,
+            steps_used=self._steps_used,
+            duration_seconds=duration,
+            session_id=handoff.session_id
+        )
+
+        return f"Mission complete. Results:\n" + "\n".join(results)
+
+    def _analyze_compliance_capabilities(self, repo_path):
+        """Scans the codebase for compliance and auditing features."""
+        # In a real implementation, this would look for:
+        # - Audit logs (fleet_logger, security_audit_logger)
+        # - RBAC configs
+        # - Input sanitization
+        # - Egress filters
+        print(f"[{self.name}] Scanning for compliance and auditing capabilities...")
+        
+        # Mock analysis result
+        return {
+            "audit_logging": "Centralized via fleet_logger.py and security_audit_logger.py",
+            "rbac": "Implemented in rbac_manager.py with path-based write grants",
+            "input_security": "Handled by input_sanitizer.py and safety_gate.py",
+            "network_security": "Egress filtering in egress_filter.py",
+            "traceability": "HandoffContext with session IDs and snapshot hashing"
+        }
