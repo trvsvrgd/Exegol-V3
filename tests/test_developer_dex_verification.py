@@ -62,7 +62,7 @@ def test_developer_dex_coding_cycle_mock():
         file_editor_tool.write_file = MagicMock(return_value="Success")
         
         result = agent.execute(handoff)
-        
+        print(f"DEBUG: result is: {result}")
         assert "Coding cycle complete" in result
         assert "Write tests/temp_test_file.txt" in result
         

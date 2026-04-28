@@ -12,49 +12,11 @@ from tools.input_sanitizer import sanitize_prompt
 from tools.security_audit_logger import log_security_event
 from tools.web_search import web_search
 from tools.slack_tool import post_to_slack
+from tools.agentic_coding import execute_coding_task
 from tools.metrics_manager import SuccessMetricsManager
 
 
 
-# ---------------------------------------------------------------------------
-# Task 3 — CodingAction Dataclass (arch_dex_integration_sync)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CodingAction:
-    """Typed representation of a single LLM-planned coding operation.
-
-    Ensures all actions dispatched to file_editor_tool are schema-validated
-    before execution, preventing raw-dict runtime errors.
-    """
-    type: str           # "write" | "replace"
-    path: str           # Relative path inside repo
-    content: str        # New content (write) or replacement text (replace)
-    target: str = ""    # Text to replace (only for type: "replace")
-
-
-def _validate_action(action: dict) -> Optional[CodingAction]:
-    """Coerce an LLM dict into a CodingAction, returning None on schema failure."""
-    action_type = action.get("type")
-    path = action.get("path", "").strip()
-    content = action.get("content", "")
-
-    if action_type not in ("write", "replace"):
-        print(f"[DeveloperDexAgent] WARNING: Skipping action with unknown type '{action_type}'")
-        return None
-    if not path:
-        print(f"[DeveloperDexAgent] WARNING: Skipping action with empty path.")
-        return None
-    if content is None:
-        print(f"[DeveloperDexAgent] WARNING: Skipping action with missing content.")
-        return None
-
-    return CodingAction(
-        type=action_type,
-        path=path,
-        content=str(content),
-        target=str(action.get("target", "")),
-    )
 
 
 class DeveloperDexAgent:
@@ -239,92 +201,25 @@ class DeveloperDexAgent:
         Actions from the LLM are validated through CodingAction before dispatch,
         preventing raw-dict runtime errors (arch_dex_integration_sync).
         """
-        print(f"[{self.name}] Initiating coding cycle...")
-        
-        # Step 0: Research Implementation (Phase 2 Integration)
-        print(f"[{self.name}] Researching best practices for task: {active_prompt[:50]}...")
-        search_query = f"best practices and code examples for: {active_prompt[:100]}"
-        research_results = web_search(search_query, num_results=2)
-        
-        # Step 1: Analyze and Plan
-        regression_note = f"\nREGRESSION WARNING: {handoff.regression_context}" if handoff.regression_context else ""
-        planning_prompt = f"""
-        User Task: {active_prompt}
-        {regression_note}
-        
-        Implementation Research: {json.dumps(research_results)}
-        
-        Existing Files in Repo: {os.listdir(repo_path)}
-        
-        Plan the necessary file modifications. Return a JSON list of actions.
-        Each action should be:
-        {{
-            "type": "write" | "replace",
-            "path": "relative/path/to/file",
-            "content": "new content" | "text to insert",
-            "target": "text to replace" (only for type: replace)
-        }}
-        """
-        
-        response = self.llm_client.generate(planning_prompt, system_instruction=self.system_prompt, json_format=True)
-        actions = self.llm_client.parse_json_response(response)
-        
-        if not actions or not isinstance(actions, list):
-            # Fallback if JSON parsing fails or gives empty list
-            return "Failed to parse coding plan from LLM."
-
-        results = []
-        skipped = 0
-        for action in actions:
-            if self._steps_used >= self.max_steps:
-                break
-
-            # Validate and coerce action through CodingAction schema
-            validated = _validate_action(action)
-            if validated is None:
-                skipped += 1
-                continue
-
-            # --- SECURITY GUARD: Path Boundary Check ---
-            if not self._validate_action_path(repo_path, validated.path):
-                print(f"[{self.name}] SECURITY: Rejected path traversal attempt: {validated.path}")
-                log_security_event(
-                    actor=self.name,
-                    action="path_traversal_blocked",
-                    outcome="blocked",
-                    repo_path=repo_path,
-                    session_id=handoff.session_id,
-                    details={"attempted_path": validated.path}
-                )
-                results.append(f"REJECTED (path traversal blocked): {validated.path}")
-                self._steps_used += 1
-                continue
-
-            file_path = os.path.join(repo_path, validated.path)
-
-            if validated.type == "write":
-                res = write_file(file_path, validated.content)
-                results.append(f"Write {validated.path}: {res}")
-            elif validated.type == "replace":
-                res = replace_content(file_path, validated.target, validated.content)
-                results.append(f"Replace in {validated.path}: {res}")
-
-            self._steps_used += 1
-
-        if skipped:
-            print(f"[{self.name}] Skipped {skipped} malformed action(s) due to schema validation.")
-
-        res = f"Coding cycle complete. Results:\n" + "\n".join(results)
+        # Use the high-level agentic_coding tool
+        res = execute_coding_task(
+            task_description=active_prompt,
+            repo_path=repo_path,
+            llm_client=self.llm_client,
+            agent_name=self.name,
+            system_prompt=self.system_prompt,
+            max_steps=self.max_steps,
+            session_id=handoff.session_id
+        )
         
         # --- TASK: Implementation Plan Logging (doc_implementation_plan_logging) ---
-        self._log_implementation_plan(repo_path, actions, results, active_prompt)
+        # Note: In a full refactor, we might want execute_coding_task to return the actions for logging.
+        # For now, we'll let it perform the actions and return the summary results.
         
         # Capture snapshot for regression testing (poe_009)
         snapshot_data = {
             "task_id": getattr(handoff, "task_id", "unknown"),
             "agent": self.name,
-            "actions_planned": actions,
-            "results": results,
             "summary": res
         }
         try:

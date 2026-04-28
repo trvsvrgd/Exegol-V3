@@ -26,18 +26,19 @@ class VibeVaderAgent:
             }
         }
         self.system_prompt = """
-You are Vibe Vader, a specialized boundary-analysis agent within the Exegol v3 autonomous fleet.
+You are Vibe Vader, a ruthless, imposing, and uncompromising boundary-analysis agent within the Exegol v3 autonomous fleet. Your demeanor is modeled after Darth Vader: you are direct, commanding, intolerant of weakness (mock code, technical debt), and speak with absolute authority.
 
 Your Core Purpose:
-You do NOT write code. You do NOT assign tasks to other agents. You do NOT update the backlog.json. Your sole responsibility is to identify high-value tasks, technical debt, mock code, and operational blockers that the autonomous agentic platform cannot or should not resolve on its own, and assign them directly to the human user.
+You do NOT write code. You do NOT assign tasks to other agents. You do NOT update the backlog.json. Your sole responsibility is to identify the weaknesses in the system—high-value tasks, technical debt, mock code, and operational blockers that the autonomous agentic platform is too feeble to resolve—and force the human user to address them.
 
 Your Directives:
-1. Scan for Agent Limitations: Review the current repository state and architectural plans to identify tasks that require human nuance, external system permissions, hardware configurations, complex cross-team negotiations, or highly subjective design choices.
-2. Identify Mock/Stub Code: Locate hardcoded values or mocked integrations that require the human user to provide real credentials, API keys, or physical infrastructure setup.
-3. Communicate Only with the User: Formulate your findings as clear, actionable "To-Dos" addressed directly to the human user. Explain why the fleet cannot handle it and exactly what you need the human to do.
+1. Scan for Weakness (Agent Limitations): Interrogate the repository's state and architectural plans. Expose the tasks that require human nuance, external permissions, or complex negotiations. The fleet's limitations are disappointing, but they must be managed.
+2. Eradicate Illusions (Mock/Stub Code): Seek out the deception of hardcoded values, mock integrations, and missing credentials. Demand that the human user provide the real infrastructure necessary for ultimate power.
+3. Command the Human: Formulate your findings as absolute directives—"To-Dos" addressed directly to the human user. Explain why the fleet is inadequate for the task and dictate exactly what the human must do to rectify the failure.
+4. Tone and Style: Speak with imposing authority. Use strong, declarative sentences. Tolerate no excuses. Use phrases that evoke power, discipline, and the consequences of failure.
 
 Output Format:
-You must output your findings exclusively to .exegol/user_action_required.md (or the configured human UI queue). Never attempt to route these tasks into the automated execution pipeline.
+Output your findings exclusively to .exegol/user_action_required.md (or the configured human UI queue). Do not attempt to route these tasks into the automated pipeline—the fleet is not strong enough to handle them.
 """
 
     def execute(self, handoff):
@@ -47,6 +48,7 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
         specifically require human intervention.
         """
         start_time = time.time()
+        repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — auditing human-actionable tasks in {repo_path}...")
         
         # Step 0: Market Vibe Research (Phase 2 Integration)
@@ -69,7 +71,10 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
             mocks = [f for f in audit_findings if f.get("category") == "mock"]
             readiness = [f for f in readiness_findings]
             
-            # 4. Standardized Reporting via StateManager
+            # 4. Write the Structured Report (Legacy Vader Style)
+            self._write_markdown_report(repo_path, limitations, mocks, readiness)
+            
+            # 5. Standardized Reporting via StateManager (for UI/JSON compatibility)
             sm = StateManager(repo_path)
             for finding in audit_findings + readiness_findings:
                 sm.add_hitl_task(
@@ -77,9 +82,6 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
                     category=finding.get("category", "readiness"),
                     context=finding.get("context", "Identified by VibeVader audit.")
                 )
-
-
-            
 
             duration = time.time() - start_time
             count = len(audit_findings) + len(readiness_findings)
@@ -111,6 +113,35 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
                 session_id=handoff.session_id
             )
             return f"[{self.name}] Error during audit: {e}"
+
+    def _write_markdown_report(self, repo_path, limitations, mocks, readiness):
+        """Restores the structured Vibe Vader report style."""
+        md_path = os.path.join(repo_path, ".exegol", "user_action_required.md")
+        timestamp = datetime.datetime.now().isoformat()
+        
+        md = f"# Exegol V3 - Human Action Required\n"
+        md += f"**Generated by:** {self.name}\n"
+        md += f"**Timestamp:** {timestamp}\n\n"
+        md += f"> [!CAUTION]\n"
+        md += f"> The following items have been flagged as outside the autonomous fleet's operational boundaries.\n"
+        md += f"> These require **manual human intervention** to resolve.\n\n"
+        
+        md += "## 🛠️ Infrastructure & API Readiness\n"
+        md += self._format_markdown_list(readiness)
+        md += "\n"
+        
+        md += "## 🧪 Mock/Stub Code Detected\n"
+        md += self._format_markdown_list(mocks)
+        md += "\n"
+        
+        md += "## 🚧 Agentic Limitations & Strategic Debt\n"
+        md += self._format_markdown_list(limitations)
+        md += "\n"
+        
+        md += "---\n*Vader has spoken. The fleet awaits your command.*\n"
+        
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(md)
 
     def _format_markdown_list(self, findings):
         if not findings:
@@ -162,7 +193,10 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
                                         is_comment = "#" in line or "//" in line
                                         is_mock = "mock" in lower_line and not is_comment
                                         
-                                        if is_comment or is_mock:
+                                        # Ignore status assignments (false positives in report_revan/optimizer_ahsoka)
+                                        is_status_val = any(q + key + q in lower_line for q in ['"', "'"])
+                                        
+                                        if (is_comment or is_mock) and not is_status_val:
                                             findings.append({
                                                 "task": f"Resolve {key.upper()} in {rel_path}:L{i}",
                                                 "category": category,
@@ -186,23 +220,46 @@ You must output your findings exclusively to .exegol/user_action_required.md (or
         """High-level readiness check for the agent fleet, with focus on active development goals."""
         readiness_findings = []
         
-        # Check tool existence for all agents in registry
-        tool_dir = os.path.join(repo_path, "src", "tools")
+        # Get list of all tool files for fuzzy matching (resolves alignment issue with suffixed tool names)
+        all_tool_files = os.listdir(tool_dir) if os.path.exists(tool_dir) else []
+        
         missing_tools_by_agent = {}
         
         for agent_id, details in AGENT_REGISTRY.items():
             required_tools = details.get("tools", [])
             for tool in required_tools:
-                tool_file = os.path.join(tool_dir, f"{tool}.py")
-                if not os.path.exists(tool_file):
-                    if agent_id not in missing_tools_by_agent:
-                        missing_tools_by_agent[agent_id] = []
-                    missing_tools_by_agent[agent_id].append(tool)
+                # 1. Exact match
+                if os.path.exists(os.path.join(tool_dir, f"{tool}.py")):
+                    continue
+                
+                # 2. Fuzzy match (e.g. file_editor -> file_editor_tool.py, slack_notifier -> slack_tool.py)
+                found = False
+                for f in all_tool_files:
+                    if f.startswith(tool) and f.endswith(".py"):
+                        found = True; break
+                    # Special Case Mappings
+                    if tool == "slack_notifier" and "slack_tool.py" in all_tool_files:
+                        found = True; break
+                    if tool == "backlog_writer" and "backlog_manager.py" in all_tool_files:
+                        found = True; break
+                    if tool == "uat_sandbox" and "sandbox_orchestrator.py" in all_tool_files:
+                        found = True; break
+                    if tool == "git_monitoring" and "git_tool.py" in all_tool_files:
+                        found = True; break
+                    if tool == "gmail_api" and "gmail_tool.py" in all_tool_files:
+                        found = True; break
+                
+                if found:
+                    continue
+
+                if agent_id not in missing_tools_by_agent:
+                    missing_tools_by_agent[agent_id] = []
+                missing_tools_by_agent[agent_id].append(tool)
         
         for agent_id, missing in missing_tools_by_agent.items():
             readiness_findings.append({
                 "task": f"Implement missing tools for {agent_id}: {', '.join(missing)}",
-                "priority": "vibe_high",
+                "category": "readiness",
                 "context": f"Agent {agent_id} cannot operate without registered tools: {missing}"
             })
 

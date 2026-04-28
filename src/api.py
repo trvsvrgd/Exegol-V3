@@ -450,5 +450,20 @@ async def get_evaluation_report(filename: str, repo_path: str):
     with open(report_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+# --- Epic 7: FinOps Cost Dashboard (arch_finops_dashboard) ---
+
+@app.get("/costs")
+async def get_costs(repo_path: str, days: int = 30):
+    """
+    Returns a real FinOps cost report for the given repo, computed from
+    fleet interaction logs by the CostAnalyzer tool (Intel Ima).
+    """
+    from tools.cost_analyzer import get_cost_report
+    try:
+        return get_cost_report(repo_path, days=days)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cost analysis failed: {exc}")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
