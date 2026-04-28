@@ -63,6 +63,39 @@ def log_interaction(
                 print(f"Failed to write interaction log {filename}: {e}")
             else:
                 time.sleep(0.5 * (attempt + 1))
+    
+    # --- UNIVERSAL SELF-HEALING: Auto-report failures to Backlog and Slack ---
+    if outcome == "failure":
+        try:
+            from tools.backlog_manager import BacklogManager
+            from tools.slack_tool import post_to_slack
+            
+            bm = BacklogManager(repo_path)
+            error_id = f"auto_fail_{agent_id}_{int(time.time())}"
+            error_str = "; ".join(errors) if errors else "Unknown error."
+            
+            fail_task = {
+                "id": error_id,
+                "summary": f"FIX: {agent_id} autonomous failure",
+                "priority": "high",
+                "type": "bug",
+                "status": "todo",
+                "source_agent": "FleetLogger",
+                "rationale": f"System-detected failure. Summary: {task_summary}. Errors: {error_str}",
+                "created_at": datetime.datetime.now().isoformat()
+            }
+            bm.add_task(fail_task)
+            
+            # Notify Slack
+            msg = (
+                f"💥 *Agent Failure*: `{agent_id}` reported a failure in `{os.path.basename(repo_path)}`.\n"
+                f"*Summary*: {task_summary}\n"
+                f"*Errors*: `{error_str}`\n"
+                f"A bug report has been injected into the backlog."
+            )
+            post_to_slack(msg)
+        except Exception as e:
+            print(f"[FleetLogger] Failed to auto-report failure: {e}")
                 
     return filepath
 

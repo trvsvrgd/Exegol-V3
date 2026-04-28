@@ -4,6 +4,8 @@ import time
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
 from tools.web_search import web_search
+from tools.backlog_groomer import select_next_task
+from tools.prompt_generator import generate_active_prompt
 
 
 class ProductPoeAgent:
@@ -58,7 +60,7 @@ class ProductPoeAgent:
             bm = BacklogManager(repo_path)
             backlog = bm.load_backlog()
 
-            task, source = self._select_next_task(backlog)
+            task, source = select_next_task(backlog)
 
             if not task:
                 print(f"[{self.name}] No actionable tasks found in backlog or vibe_todo.")
@@ -77,7 +79,7 @@ class ProductPoeAgent:
             if source == "backlog":
                 bm.update_task_status(task.get("id"), "in_progress")
 
-            active_prompt = self._generate_active_prompt(task, repo_path)
+            active_prompt = generate_active_prompt(task, repo_path, self.llm_client, self.system_prompt)
             
             with open(prompt_file, 'w', encoding='utf-8') as f:
                 f.write(active_prompt)
@@ -111,40 +113,3 @@ class ProductPoeAgent:
             )
             return f"[{self.name}] Error during backlog grooming: {e}"
 
-    def _select_next_task(self, backlog):
-        # 1. Backlog 'todo' or 'backlogged' (Prioritize High/Critical)
-        for t in backlog:
-            if t.get("status") in ["todo", "backlogged", "pending_prioritization"]:
-                if t.get("priority") in ["critical", "high"]:
-                    return t, "backlog"
-
-        # 2. Any other 'todo' backlog items
-        for t in backlog:
-            if t.get("status") in ["todo", "backlogged", "pending_prioritization"]:
-                return t, "backlog"
-
-        return None, None
-
-    def _generate_active_prompt(self, task, repo_path):
-        """Uses LLM to context-enrich the task summary into a developer prompt."""
-        # Phase 2: Web Search for Feasibility and Best Practices
-        print(f"[{self.name}] Researching feasibility for: {task.get('summary')}")
-        search_query = f"technical implementation details and best practices for: {task.get('summary')}"
-        research = web_search(search_query, num_results=2)
-        
-        context_prompt = f"""
-        Expand this task into a detailed developer instruction set.
-        Task Summary: {task.get('summary')}
-        Task Description: {task.get('description', 'N/A')}
-        Repository: {repo_path}
-        
-        Implementation Research: {json.dumps(research)}
-        
-        Include relevant files to check and a step-by-step implementation plan.
-        """
-        try:
-            response = self.llm_client.generate(context_prompt, system_instruction=self.system_prompt)
-            return f"# Active Developer Task\n\n**Task ID:** {task.get('id')}\n\n{response}"
-        except Exception:
-            # Fallback
-            return f"# Active Developer Task\n\n**Task ID:** {task.get('id')}\n\n## Instructions\n{task.get('summary')}\n"

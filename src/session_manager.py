@@ -151,9 +151,40 @@ class SessionManager:
 
         except Exception as exc:
             result.outcome = "failure"
-            result.errors.append(f"{type(exc).__name__}: {exc}")
+            error_details = f"{type(exc).__name__}: {exc}"
+            result.errors.append(error_details)
             result.output_summary = "Agent execution failed."
             traceback.print_exc()
+
+            # --- UNIVERSAL SELF-HEALING: Capture hard crashes ---
+            try:
+                from tools.backlog_manager import BacklogManager
+                from tools.slack_tool import post_to_slack
+                import datetime
+
+                repo_path = handoff.repo_path
+                bm = BacklogManager(repo_path)
+                
+                fail_task = {
+                    "id": f"crash_{agent_id}_{int(time.time())}",
+                    "summary": f"CRITICAL: {agent_id} hard crash",
+                    "priority": "critical",
+                    "type": "bug",
+                    "status": "todo",
+                    "source_agent": "SessionManager",
+                    "rationale": f"Agent crashed during execution. Session: {handoff.session_id}. Error: {error_details}",
+                    "created_at": datetime.datetime.now().isoformat()
+                }
+                bm.add_task(fail_task)
+                
+                slack_msg = (
+                    f"💀 *Agent Crash*: `{agent_id}` suffered a hard crash in session `{handoff.session_id}`.\n"
+                    f"*Error*: `{error_details}`\n"
+                    f"A critical bug report has been added to the backlog."
+                )
+                post_to_slack(slack_msg)
+            except Exception as inner_exc:
+                print(f"[SessionManager] Double-fault: Failed to report crash: {inner_exc}")
 
         finally:
             elapsed = time.time() - start_time

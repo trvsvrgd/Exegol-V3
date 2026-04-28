@@ -1,5 +1,6 @@
 import os
-import re
+from tools.markdown_formatter import format_markdown
+from tools.file_namer import generate_filename
 
 
 class MarkdownMaceAgent:
@@ -24,16 +25,6 @@ class MarkdownMaceAgent:
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
 
-    def _generate_filename(self, text: str) -> str:
-        # Take the first 5 words to create a basic slug
-        words = text.split()[:5]
-        slug = "_".join(words).lower()
-        # Remove non-alphanumeric characters
-        slug = re.sub(r'[^a-z0-9_]', '', slug)
-        if not slug:
-            slug = "markdown_output"
-        return f"{slug}.md"
-
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
 
@@ -42,7 +33,7 @@ class MarkdownMaceAgent:
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up to process text into markdown...")
 
-        # Read input from filesystem instead of a method parameter
+        # Read input from filesystem
         pending_file = os.path.join(repo_path, ".exegol", "pending_format.txt")
         if os.path.exists(pending_file):
             with open(pending_file, 'r', encoding='utf-8') as f:
@@ -50,12 +41,14 @@ class MarkdownMaceAgent:
         else:
             input_text = "No pending content to format."
 
-        filename = self._generate_filename(input_text)
-
-        # Here would go the complex logic to use an LLM or similar
-        # to format the input_text into proper Markdown structure.
-        # For now, we perform a basic placeholder structuring.
-        markdown_content = f"# Generated Document\n\n{input_text}\n"
+        # 1. Generate filename based on context
+        filename = generate_filename(input_text)
+        
+        # 2. Format content using the tool
+        # In a real scenario, we might use an LLM first to structure it,
+        # then the formatter to clean it up.
+        raw_markdown = f"# Generated Document\n\n{input_text}"
+        markdown_content = format_markdown(raw_markdown)
 
         print(f"[{self.name}] Generated file name: {filename}")
         print(f"[{self.name}] Formatted content into markdown.")

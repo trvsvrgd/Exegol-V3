@@ -52,11 +52,43 @@ def cleanup_sandbox(sandbox_path: str):
     if path.exists() and ".exegol/sandboxes" in str(path):
         shutil.rmtree(path)
 
-def run_sandbox_command(sandbox_path: str, command: str):
+def run_sandbox_command(sandbox_path: str, command: str) -> Dict[str, str]:
     """
-    Execution logic would go here. For initial implementation, 
-    we might return a command string for the user to run, 
-    or use subprocess for safe local execution.
+    Executes a command within the specified sandbox directory.
+    Returns a dictionary with 'stdout', 'stderr', and 'exit_code'.
     """
-    # Placeholder for actual execution logic
-    pass
+    import subprocess
+    
+    path = Path(sandbox_path)
+    if not path.exists():
+        return {"error": f"Sandbox path {sandbox_path} does not exist."}
+
+    try:
+        # Run the command with a timeout to prevent runaway processes
+        result = subprocess.run(
+            command,
+            cwd=str(path),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30  # 30 second timeout for sandbox commands
+        )
+        
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "error": "Command timed out",
+            "stdout": e.stdout.decode() if e.stdout else "",
+            "stderr": e.stderr.decode() if e.stderr else "",
+            "exit_code": -1
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "exit_code": -1
+        }
+

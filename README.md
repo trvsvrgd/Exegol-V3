@@ -181,7 +181,7 @@ The snapshot below captures a live moment in the Exegol development loop. This i
 ### Key Observations:
 
 *   **The Active Prompt in Motion**: This demonstrates `.exegol/active_prompt.md` in action. It serves as the ephemeral "working memory" for the fleet—dynamically generated, executed against, and then replaced.
-*   **The "Go" Command & Autonomous Pivoting**: When the user issues a `go` command, the system performs a strategic pivot. Instead of following a linear path, **Developer Dex** analyzed the backlog and autonomously shifted to the most logical next action.
+*   **The "Go" Command & Autonomous Pivoting**: When the user issues a `go` command, the system performs a strategic pivot. Instead of following a linear path, **Developer Dex** analyzed the backlog and autonomously shifted to the most logical next action. Were this running outside of the IDE autonomously, Dex would've received Poe's handoff. The 'go' command was an example of how the stateless system functions.
 *   **Seamless Handoffs by Poe**: This context was prepared by **Product Poe**, who manages the transition between planning and implementation, ensuring the executing agent has zero ambiguity.
 *   **Continuous State Replacement**: The updates (indicated by green/red diffs in the logs) show how the active prompt is continuously overwritten. Exegol doesn't accumulate "chat history"; it maintains a clean, updated state.
 *   **Radical Persona Divergence**: Note the specific style of the implementation. Each agent brings a radically different "vibe" and technical approach, moving away from generic AI responses toward specialized expertise.

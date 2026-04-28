@@ -3,14 +3,15 @@ import json
 import datetime
 from tools.web_search import web_search
 from tools.cost_analyzer import get_cost_report
+from tools.drive_sync import drive_sync_file
+from tools.gmail_tool import send_gmail_message
 
 
 class IntelImaAgent:
     """Generates intelligence reports, cost analysis summaries, and delivers weekly email digests.
     
-    Phase 3 (arch_finops_dashboard): cost_breakdown is now powered by the real
-    CostAnalyzer tool, which reads fleet interaction logs to compute per-agent
-    token consumption and spend estimates.
+    Phase 4: drive_sync integration enabled. Intelligence reports are automatically
+    synced to the cloud for NotebookLM consumption.
     """
 
     def __init__(self, llm_client):
@@ -36,17 +37,17 @@ class IntelImaAgent:
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
 
-        Generates an intelligence report from real filesystem data via CostAnalyzer.
+        Generates an intelligence report and syncs it to Google Drive.
         """
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
-        print(f"[{self.name}] Researching latest AI cost trends...")
         
-        # Phase 2: Web Search Integration for Intelligence
+        # 1. Market Research
+        print(f"[{self.name}] Researching latest AI cost trends...")
         market_query = "latest LLM API pricing trends and open source inference cost 2024 2025"
         market_intel = web_search(market_query, num_results=3)
         
-        # Phase 3: Real cost analysis via CostAnalyzer (arch_finops_dashboard)
+        # 2. Cost Analysis
         print(f"[{self.name}] Running real cost analysis via CostAnalyzer...")
         try:
             cost_report = get_cost_report(repo_path, days=30)
@@ -64,18 +65,15 @@ class IntelImaAgent:
             cloud_status = "Unknown"
             remaining_quota = 0.0
 
+        # 3. Generate JSON Report
         print(f"[{self.name}] Generating intelligence report...")
-
         exegol_dir = os.path.join(repo_path, ".exegol")
-        os.makedirs(exegol_dir, exist_ok=True)
-
         reports_dir = os.path.join(exegol_dir, "intel_reports")
         os.makedirs(reports_dir, exist_ok=True)
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = os.path.join(reports_dir, f"weekly_{timestamp}.json")
 
-        # Real report — cost data sourced from CostAnalyzer (not mocked)
         report = {
             "type": "weekly",
             "generated_at": timestamp,
@@ -84,7 +82,7 @@ class IntelImaAgent:
                 f"Fleet nominal. Total spend: ${total_spend:.4f}. "
                 f"Status: {cloud_status}. Remaining quota: ${remaining_quota:.2f}."
             ),
-            "market_intel_snippet": str(market_intel)[:200],
+            "market_intel_snippet": str(market_intel)[:500],
             "cost_breakdown": cost_breakdown,
             "provider_breakdown": provider_breakdown,
             "total_spend": total_spend,
@@ -98,8 +96,24 @@ class IntelImaAgent:
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=4)
 
-        print(f"[{self.name}] Report saved to {report_file}")
-        return f"Intelligence report generated: {report_file}. Spend: ${total_spend:.4f}. Status: {cloud_status}."
+        # 4. Cloud Sync (drive_sync)
+        print(f"[{self.name}] Syncing report to Google Drive...")
+        sync_result = drive_sync_file(report_file)
+        print(f"[{self.name}] {sync_result}")
+
+        # 5. Email Delivery (gmail_api)
+        email_recipient = os.getenv("INTEL_REPORT_RECIPIENT")
+        email_status = "Skipped (no recipient configured)"
+        if email_recipient:
+            print(f"[{self.name}] Delivering report to {email_recipient}...")
+            try:
+                subject = f"Exegol Intelligence Report - {timestamp}"
+                body = f"Fleet status: {cloud_status}. Total spend: ${total_spend:.4f}.\n\nFull report: {report_file}"
+                email_status = send_gmail_message(to=email_recipient, subject=subject, body=body)
+            except Exception as e:
+                email_status = f"Failed: {str(e)}"
+        
+        return f"Report generated and synced. Drive: {sync_result}. Email: {email_status}."
 
     def _generate_recommendations(self, total_spend: float, cloud_status: str, agent_costs: dict) -> list:
         """Generates cost recommendations based on real spend data."""

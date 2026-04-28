@@ -3,6 +3,7 @@ import json
 import datetime
 import importlib
 from tools.gmail_tool import send_gmail_message
+from tools.agent_introspection import introspect_agent
 
 
 class ChiefOfStaffChewieAgent:
@@ -116,13 +117,13 @@ class ChiefOfStaffChewieAgent:
     # Load declared success metrics from agent class
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _load_agent_success_metrics(module_path: str, class_name: str) -> dict:
+    def _load_agent_success_metrics(self, module_path: str, class_name: str) -> dict:
         """Dynamically import an agent module and read its success_metrics."""
         try:
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
-            instance = cls()
+            # Most agents expect an llm_client in their constructor
+            instance = cls(self.llm_client)
             return getattr(instance, "success_metrics", {})
         except Exception as e:
             return {"_load_error": str(e)}
@@ -254,9 +255,10 @@ class ChiefOfStaffChewieAgent:
             )
 
         # Metrics assessment
-        if "_load_error" in declared_metrics:
+        if not declared_metrics or "_load_error" in declared_metrics:
+            error_msg = declared_metrics.get('_load_error', 'No success_metrics defined') if declared_metrics else 'No success_metrics defined'
             review["findings"].append(
-                f"Could not load success_metrics: {declared_metrics['_load_error']}"
+                f"Could not load success_metrics: {error_msg}"
             )
             penalty_points += 1
 
@@ -406,6 +408,180 @@ class ChiefOfStaffChewieAgent:
     # ------------------------------------------------------------------
     # Main execution
     # ------------------------------------------------------------------
+
+    def run_monthly_review(self, handoff):
+        """Execute a comprehensive monthly review of the agent fleet.
+        
+        Ensures all agents have success criteria, creates backlog tasks for improvements 
+        (routed to Product Poe), requests clarifications via Thoughtful Thrawn (Slack), 
+        and emails the report.
+        """
+        from agents.registry import AGENT_REGISTRY
+        from tools.backlog_manager import BacklogManager
+        from tools.slack_tool import post_to_slack
+
+        repo_path = handoff.repo_path
+        print(f"[{self.name}] Session {handoff.session_id} — monthly performance review starting.")
+
+        # Temporarily set review period to 30 days for monthly review
+        original_period = self.review_period_days
+        self.review_period_days = 30
+
+        logs = self._load_interaction_logs(repo_path)
+        agent_stats = self._aggregate_stats(logs)
+        
+        bm = BacklogManager(repo_path)
+        reviews = []
+        improvements = []
+        clarifications = []
+
+        for agent_id, entry in AGENT_REGISTRY.items():
+            if agent_id == "chief_of_staff_chewie":
+                continue
+
+            module_path = entry.get("module", "")
+            class_name = entry.get("class", "")
+
+            declared_metrics = self._load_agent_success_metrics(module_path, class_name)
+            
+            review = self._grade_agent(agent_id, entry, agent_stats.get(agent_id), declared_metrics)
+            reviews.append(review)
+
+            # Check for missing success criteria
+            if not declared_metrics or "_load_error" in declared_metrics:
+                task_id = f"improve_{agent_id}_metrics_{int(datetime.datetime.now().timestamp())}"
+                task = {
+                    "id": task_id,
+                    "summary": f"Define and implement success criteria for {class_name}",
+                    "priority": "high",
+                    "type": "architecture_improvement",
+                    "status": "todo",
+                    "source_agent": self.name,
+                    "rationale": "Monthly review identified missing success criteria. Routing to Product Poe for prioritization.",
+                    "created_at": datetime.datetime.now().isoformat()
+                }
+                bm.add_task(task)
+                improvements.append(task)
+                clarifications.append(f"What should the success criteria be for {class_name}?")
+
+            # If grade indicates underperformance, create optimization task
+            if review["grade"] in ["C", "D", "F"]:
+                task_id = f"optimize_{agent_id}_{int(datetime.datetime.now().timestamp())}"
+                task = {
+                    "id": task_id,
+                    "summary": f"Optimize and improve {class_name} performance (Grade: {review['grade']})",
+                    "priority": "high",
+                    "type": "bug",
+                    "status": "todo",
+                    "source_agent": self.name,
+                    "rationale": f"Monthly review flagged {class_name} with grade {review['grade']}. Findings: {'; '.join(review['findings'])}",
+                    "created_at": datetime.datetime.now().isoformat()
+                }
+                bm.add_task(task)
+                improvements.append(task)
+
+        # Send clarifications to Thoughtful Thrawn to discuss with human
+        if clarifications:
+            msg = f"🤔 *Monthly Review Clarification Needed (Routing to Thoughtful Thrawn)*:\n"
+            for c in clarifications:
+                msg += f"• {c}\n"
+            msg += "\n_Please provide answers to unblock agent optimizations._"
+            post_to_slack(msg)
+
+        # Fleet summary
+        grade_dist = {}
+        for r in reviews:
+            g = r["grade"]
+            grade_dist[g] = grade_dist.get(g, 0) + 1
+        underperformers = [r for r in reviews if r["grade"] in ("C", "D", "F")]
+
+        fleet_summary = {
+            "total_reviewed": len(reviews),
+            "grade_distribution": grade_dist,
+            "underperformers": len(underperformers)
+        }
+
+        # Compose email
+        email_payload = self._compose_review_email(reviews, fleet_summary)
+        email_payload["subject"] = email_payload["subject"].replace("Week", "Month")
+        
+        # Save report
+        exegol_dir = os.path.join(repo_path, ".exegol")
+        reports_dir = os.path.join(exegol_dir, "performance_reviews")
+        os.makedirs(reports_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_file = os.path.join(reports_dir, f"monthly_review_{timestamp}.json")
+
+        report_data = {
+            "generated_at": timestamp,
+            "review_period_days": self.review_period_days,
+            "fleet_summary": fleet_summary,
+            "reviews": reviews,
+            "improvements_identified": len(improvements),
+            "email_subject": email_payload["subject"],
+            "email_to": email_payload["to"]
+        }
+        with open(report_file, "w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=4, default=str)
+
+        # 7. Send email via real gmail_api tool
+        print(f"[{self.name}] Sending monthly review to {self.report_email}...")
+        
+        text_body = (
+            f"Chief of Staff — Monthly Agent Performance Review\n"
+            f"Total Reviewed: {fleet_summary['total_reviewed']}\n"
+            f"Underperformers: {fleet_summary['underperformers']}\n"
+            f"Improvements Identified: {len(improvements)}\n"
+            f"Please view in an HTML-compatible email client for full details."
+        )
+        
+        try:
+            result = send_gmail_message(
+                to=self.report_email,
+                subject=email_payload["subject"],
+                body=text_body,
+                body_html=email_payload["body_html"]
+            )
+            print(f"[{self.name}] {result}")
+        except Exception as e:
+            error_msg = f"Gmail Send Failure: {str(e)}"
+            print(f"[{self.name}] CRITICAL: {error_msg}")
+            
+            # 8. Self-Healing: Route own failure to Product Poe and Thoughtful Thrawn
+            error_task = {
+                "id": f"fix_gmail_integration_{int(datetime.datetime.now().timestamp())}",
+                "summary": "Fix Gmail API Integration / Refresh OAuth Token",
+                "priority": "critical",
+                "type": "bug",
+                "status": "todo",
+                "source_agent": self.name,
+                "rationale": f"Monthly review failed to send report via Gmail. Error: {error_msg}. Manual token refresh or dependency check required.",
+                "created_at": datetime.datetime.now().isoformat()
+            }
+            bm.add_task(error_task)
+            
+            # Notify Thrawn/Slack about the block
+            slack_msg = (
+                f"🚨 *CRITICAL BLOCKER*: `{self.name}` failed to deliver the Monthly Review.\n"
+                f"*Error*: `{error_msg}`\n"
+                f"*Action Required*: Please run `python generate_token.py` or check dependencies to unblock fleet reporting."
+            )
+            post_to_slack(slack_msg)
+            
+            return (
+                f"Monthly review generated but email delivery FAILED. "
+                f"A critical task has been added to the backlog and Thrawn has been notified. "
+                f"Report saved: {report_file}"
+            )
+
+        # Restore review period
+        self.review_period_days = original_period
+
+        return (
+            f"Monthly performance review complete. {len(reviews)} agents reviewed. "
+            f"Grades: {grade_dist}. {len(improvements)} improvement tasks added to backlog. "
+            f"Report saved: {report_file}"
+        )
 
     def execute(self, handoff):
         """Run the performance review cycle for all registered agents.

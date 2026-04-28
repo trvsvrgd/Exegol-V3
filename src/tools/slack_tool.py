@@ -73,7 +73,34 @@ class SlackManager:
                 print(f"[SlackManager] Webhook post failed: {e}")
                 return f"Error: {str(e)}"
 
-        return f"[MOCK SLACK] Message: {text}"
+        # 3. Final Fail-Safe: Report tool failure to Backlog
+        error_msg = f"Slack Communication Failure. tokens/webhook failed."
+        print(f"[SlackManager] {error_msg}")
+        
+        try:
+            # Get the current repo path from environment or default to current
+            repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
+            from tools.backlog_manager import BacklogManager
+            import datetime
+            import time
+            
+            bm = BacklogManager(repo_path)
+            fail_task = {
+                "id": f"slack_fail_{int(time.time())}",
+                "summary": "FIX: Slack Integration Failure detected",
+                "priority": "high",
+                "type": "bug",
+                "status": "todo",
+                "source_agent": "SlackManager",
+                "rationale": f"The Slack tool failed to deliver a message. This is a communication blackout. Text: {text[:100]}...",
+                "created_at": datetime.datetime.now().isoformat()
+            }
+            bm.add_task(fail_task)
+            print(f"[SlackManager] Failure reported to backlog.")
+        except Exception as inner_e:
+            print(f"[SlackManager] Double-fault: Failed to log Slack failure: {inner_e}")
+
+        return f"Error: Slack delivery failed. Task added to backlog."
 
     def setup_listener(self, command_handler: Callable[[str, str], None]):
         """Starts Socket Mode listener in a background thread."""

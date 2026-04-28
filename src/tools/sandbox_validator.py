@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any
 import jsonschema
+from tools.linter import run_lint
+from tools.test_runner import run_tests
 
 def validate_app_schema(sandbox_path: str, schema_path: str) -> Dict[str, Any]:
     """
@@ -40,46 +42,13 @@ def validate_app_schema(sandbox_path: str, schema_path: str) -> Dict[str, Any]:
 
 def run_sandbox_lint(sandbox_path: str) -> Dict[str, Any]:
     """
-    Performs basic linting checks on the sandbox code.
-    Checks for hardcoded absolute paths and basic Python syntax errors.
+    Performs linting checks on the sandbox code using the standardized linter tool.
     """
-    root = Path(sandbox_path)
-    issues = []
-    
-    for py_file in root.rglob("*.py"):
-        try:
-            with open(py_file, "r", encoding="utf-8") as f:
-                content = f.read()
-                # Check for hardcoded paths
-                if "C:\\" in content or "/home/" in content or "/Users/" in content:
-                    issues.append(f"Hardcoded absolute path found in {py_file.name}")
-                
-                # Check for basic syntax errors
-                compile(content, py_file, 'exec')
-        except SyntaxError as se:
-            issues.append(f"Syntax error in {py_file.name}: {str(se)}")
-        except Exception as e:
-            issues.append(f"Error linting {py_file.name}: {str(e)}")
-            
-    if issues:
-        return {"status": "fail", "issues": issues}
-    return {"status": "pass", "message": "Linting passed"}
+    return run_lint(sandbox_path)
 
 def run_sandbox_tests(sandbox_path: str) -> Dict[str, Any]:
     """
-    Discovers and executes tests within the sandbox.
-    In this version, we simulate a pytest run by checking for test files.
+    Discovers and executes tests within the sandbox using the standardized test_runner tool.
     """
-    root = Path(sandbox_path)
-    test_files = list(root.rglob("test_*.py"))
-    
-    if not test_files:
-        return {"status": "warning", "message": "No test files found in sandbox"}
-    
-    # In a full production env, we'd run:
-    # import subprocess
-    # res = subprocess.run(["pytest", str(root)], capture_output=True, text=True)
-    # return {"status": "pass" if res.returncode == 0 else "fail", "output": res.stdout}
-    
-    return {"status": "pass", "message": f"Found {len(test_files)} test files. Sandbox ready for UAT."}
+    return run_tests(sandbox_path)
 
