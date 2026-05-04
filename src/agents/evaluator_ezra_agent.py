@@ -1,7 +1,11 @@
 import os
 import json
 import datetime
+import time
 from tools.backlog_manager import BacklogManager
+from tools.arxiv_reader import search_arxiv
+from tools.web_search import web_search
+from tools.fleet_logger import log_interaction
 
 
 class EvaluatorEzraAgent:
@@ -71,14 +75,30 @@ class EvaluatorEzraAgent:
         Dynamically researches arXiv, blogs, and benchmarks via web_search.
         """
         print(f"[{self.name}] Searching for latest agentic evaluation techniques...")
-        search_query = "latest autonomous agent evaluation techniques benchmarks 2024 2025 arXiv"
-        from tools.web_search import web_search
+        search_query = "latest autonomous agent evaluation techniques benchmarks 2024 2025"
+        
+        # 1. Search Web
         search_results = web_search(search_query, num_results=5)
+        
+        # 2. Search arXiv
+        arxiv_results = search_arxiv("agent evaluation benchmarks", max_results=5)
+        
+        # Combine results for analysis
+        combined_research = {
+            "web": search_results,
+            "arxiv": [
+                {
+                    "title": r["title"],
+                    "summary": r["summary"],
+                    "url": r["link"]
+                } for r in arxiv_results
+            ]
+        }
 
         # Use LLM to extract specific techniques from search results
         analysis_prompt = f"""
         Research Task: Identify specific, actionable agentic evaluation techniques from these search results.
-        Search Results: {json.dumps(search_results)}
+        Research Results: {json.dumps(combined_research)}
         
         Return a JSON list of technique objects. Each object should have:
         - 'technique_name': Name of the technique
@@ -169,6 +189,7 @@ class EvaluatorEzraAgent:
         Accepts a HandoffContext — no prior session memory required.
         All state is read fresh from the filesystem.
         """
+        start_time = time.time()
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — weekly eval research cycle starting.")
         print(f"[{self.name}] Target repo: {repo_path}")
@@ -260,10 +281,22 @@ class EvaluatorEzraAgent:
 
         print(f"[{self.name}] Weekly eval report saved to {report_file}")
 
-        return (
+        duration = time.time() - start_time
+        summary_msg = (
             f"Eval research cycle complete. "
             f"{len(new_reqs)} new requirements added, "
             f"{len(stale)} stale flagged. "
             f"Total requirements: {len(all_reqs)}. "
             f"Report: {report_file}"
         )
+
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=summary_msg,
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            state_changes={"report_file": report_file}
+        )
+
+        return summary_msg

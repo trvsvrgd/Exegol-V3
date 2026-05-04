@@ -10,6 +10,7 @@ from tools.state_manager import StateManager
 from tools.web_search import web_search
 from tools.repo_analyzer import analyze_repository
 from tools.todo_reporter import report_todos
+from tools.metrics_manager import SuccessMetricsManager
 
 
 class VibeVaderAgent:
@@ -26,6 +27,33 @@ class VibeVaderAgent:
                 "target": ">=1 per report",
                 "current": None
             }
+        }
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates strategic surfacing metrics based on recent logs."""
+        logs = self.metrics_manager.load_logs(days=7)
+        agent_logs = [l for l in logs if l.get("agent_id") == self.name]
+        
+        if not agent_logs:
+            return {
+                "human_tasks_reported": 0
+            }
+
+        # Count tasks reported in the summaries
+        total_tasks = 0
+        for l in agent_logs:
+            summary = l.get("task_summary", "")
+            # Look for "X items reported"
+            import re
+            match = re.search(r"(\d+) items reported", summary)
+            if match:
+                total_tasks += int(match.group(1))
+        
+        avg_tasks = total_tasks / len(agent_logs) if agent_logs else 0
+        
+        return {
+            "human_tasks_reported": round(avg_tasks, 1)
         }
         self.system_prompt = """
 You are Vibe Vader, a ruthless, imposing, and uncompromising boundary-analysis agent within the Exegol v3 autonomous fleet. Your demeanor is modeled after Darth Vader: you are direct, commanding, intolerant of weakness (mock code, technical debt), and speak with absolute authority.
@@ -53,6 +81,11 @@ Output your findings exclusively to .exegol/user_action_required.md (or the conf
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — auditing human-actionable tasks in {repo_path}...")
         
+        # --- PHASE 4: Context Propagation (arch_dex_context_upgrade) ---
+        target_context = handoff.scheduled_prompt if handoff.scheduled_prompt else "General repository health and technical debt audit."
+        if handoff.scheduled_prompt:
+            print(f"[{self.name}] Targeted Audit Request: {target_context}")
+
         # Step 0: Market Vibe Research (Phase 2 Integration)
         print(f"[{self.name}] Researching latest AI agent market vibes...")
         market_query = "latest trending features for autonomous AI development fleets 2024 2025"
@@ -79,6 +112,7 @@ Output your findings exclusively to .exegol/user_action_required.md (or the conf
             duration = time.time() - start_time
             count = len(all_findings)
             
+            metrics = self._calculate_success_metrics(repo_path)
             log_interaction(
                 agent_id=self.name,
                 outcome="success",
@@ -86,7 +120,8 @@ Output your findings exclusively to .exegol/user_action_required.md (or the conf
                 repo_path=repo_path,
                 steps_used=1,
                 duration_seconds=duration,
-                session_id=handoff.session_id
+                session_id=handoff.session_id,
+                metrics=metrics
             )
             # Vibe Vader is a terminal agent in the autonomous chain; no next_agent_id
             self.next_agent_id = None
@@ -127,18 +162,36 @@ Output your findings exclusively to .exegol/user_action_required.md (or the conf
                 # 2. Fuzzy match (e.g. file_editor -> file_editor_tool.py, slack_notifier -> slack_tool.py)
                 found = False
                 for f in all_tool_files:
-                    if f.startswith(tool) and f.endswith(".py"):
+                    if not f.endswith(".py"):
+                        continue
+                    
+                    base_name = f[:-3]
+                    
+                    # Exact start or reverse mapping
+                    if base_name.startswith(tool) or tool.startswith(base_name):
                         found = True; break
+                    
+                    # Suffix normalization (grooming -> groomer, generation -> generator)
+                    normalized_tool = tool.replace("ing", "").replace("ion", "")
+                    normalized_file = base_name.replace("er", "").replace("or", "").replace("_tool", "")
+                    
+                    if normalized_tool == normalized_file or normalized_tool.startswith(normalized_file):
+                        found = True; break
+
                     # Special Case Mappings
-                    if tool == "slack_notifier" and "slack_tool.py" in all_tool_files:
-                        found = True; break
-                    if tool == "backlog_writer" and "backlog_manager.py" in all_tool_files:
-                        found = True; break
-                    if tool == "uat_sandbox" and "sandbox_orchestrator.py" in all_tool_files:
-                        found = True; break
-                    if tool == "git_monitoring" and "git_tool.py" in all_tool_files:
-                        found = True; break
-                    if tool == "gmail_api" and "gmail_tool.py" in all_tool_files:
+                    special_cases = {
+                        "slack_notifier": ["slack_tool"],
+                        "backlog_writer": ["backlog_manager"],
+                        "uat_sandbox": ["sandbox_orchestrator"],
+                        "git_monitoring": ["git_tool"],
+                        "gmail_api": ["gmail_tool"],
+                        "log_reader": ["interaction_log_reader"],
+                        "repo_scanner": ["repo_analyzer"], # Temporary alias until real scanner implemented
+                        "backlog_grooming": ["backlog_groomer"],
+                        "prompt_generation": ["prompt_generator"]
+                    }
+                    
+                    if tool in special_cases and base_name in special_cases[tool]:
                         found = True; break
                 
                 if found:
@@ -155,43 +208,7 @@ Output your findings exclusively to .exegol/user_action_required.md (or the conf
                 "context": f"Agent {agent_id} cannot operate without registered tools: {missing}"
             })
 
-        # Specific check for Cameraman Cassian video capabilities
-        if "cameraman_cassian" in AGENT_REGISTRY:
-            cassian_tasks = self._check_cassian_readiness(repo_path)
-            readiness_findings.extend(cassian_tasks)
-            
+
         return readiness_findings
 
-    def _check_cassian_readiness(self, repo_path):
-        """Specifically audits for video recording capabilities."""
-        findings = []
-        
-        # 1. Check Playwright
-        if not importlib.util.find_spec("playwright"):
-            findings.append({
-                "task": "Install Playwright in the environment (`pip install playwright` and `playwright install`)",
-                "priority": "vibe_critical",
-                "context": "CameramanCassianAgent requires playwright for screen recording."
-            })
-            
-        # 2. Check FFmpeg
-        if not shutil.which("ffmpeg"):
-            findings.append({
-                "task": "Install FFmpeg and ensure it is in the system PATH",
-                "priority": "vibe_critical",
-                "context": "CameramanCassianAgent requires FFmpeg for video clipping and processing."
-            })
-            
-        # 3. Check requirements.txt
-        req_path = os.path.join(repo_path, "requirements.txt")
-        if os.path.exists(req_path):
-            with open(req_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if "playwright" not in content.lower():
-                    findings.append({
-                        "task": "Add `playwright` to requirements.txt",
-                        "priority": "vibe_medium",
-                        "context": "Keep the project dependencies synchronized."
-                    })
 
-        return findings

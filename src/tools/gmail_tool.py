@@ -11,8 +11,6 @@ def send_gmail_message(to: str, subject: str, body: str, body_html: Optional[str
     2. Download `credentials.json`.
     3. Run a local script to generate `token.json` (OAuth2 flow).
     4. Place `token.json` in the root directory (or set GMAIL_TOKEN_PATH).
-
-    Fallback: Mocks the send if dependencies or credentials are missing.
     """
     try:
         from google.oauth2.credentials import Credentials

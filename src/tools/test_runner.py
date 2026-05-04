@@ -2,6 +2,7 @@ import subprocess
 import json
 import os
 from typing import Dict, Any
+from tools.fatal_error_router import check_and_route_terminal_output
 
 def run_tests(path: str) -> Dict[str, Any]:
     """
@@ -13,13 +14,16 @@ def run_tests(path: str) -> Dict[str, Any]:
     print(f"[test_runner] Running pytest on {path}...")
     try:
         # Run pytest and capture output
-        # We use --json-report or similar if available, but for now we'll parse exit code
+        command = f"python -m pytest {path} -v --tb=short"
         result = subprocess.run(
-            ["pytest", path, "-v", "--tb=short"],
+            ["python", "-m", "pytest", path, "-v", "--tb=short"],
             capture_output=True,
             text=True,
             timeout=60
         )
+        
+        # Always route terminal errors with 'FATAL' to the Exegol Fleet
+        check_and_route_terminal_output(path, result.stdout, result.stderr, command)
         
         status = "pass" if result.returncode == 0 else "fail"
         
@@ -33,7 +37,11 @@ def run_tests(path: str) -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"status": "error", "message": "Tests timed out after 60 seconds"}
     except Exception as e:
-        return {"status": "error", "message": f"Execution error: {str(e)}"}
+        error_msg = f"Execution error: {str(e)}"
+        if "FATAL" in error_msg:
+             from tools.fatal_error_router import route_fatal_error
+             route_fatal_error(path, error_msg)
+        return {"status": "error", "message": error_msg}
 
 if __name__ == "__main__":
     # Test execution

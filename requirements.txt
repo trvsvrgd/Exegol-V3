@@ -12,3 +12,7 @@ uvicorn
 ddgs
 anthropic
 schedule
+psutil
+mcp
+httpx
+pylint

@@ -1,5 +1,5 @@
 {
-    "product_poe": "gemini",
+    "product_poe": "ollama",
     "developer_dex": "ollama",
     "architect_artoo": "ollama",
     "report_revan": "ollama",
@@ -8,5 +8,15 @@
     "compliance_cody": "ollama",
     "evaluator_ezra": "ollama",
     "optimizer_ahsoka": "ollama",
-    "cameraman_cassian": "ollama"
+    "cameraman_cassian": "ollama",
+    "vibe_vader": "ollama",
+    "watcher_wedge": "ollama",
+    "chief_of_staff_chewie": "ollama",
+    "productive_puck": "ollama",
+    "report_razor": "ollama",
+    "thoughtful_thrawn": "ollama",
+    "intel_ima": "ollama",
+    "assessment_anakin": "ollama",
+    "technical_tarkin": "ollama",
+    "model_router_mothma": "ollama"
 }

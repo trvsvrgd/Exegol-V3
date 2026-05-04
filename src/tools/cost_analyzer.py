@@ -25,6 +25,10 @@ from tools.fleet_logger import read_interaction_logs
 
 DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
     # model_key: {input_per_1m, output_per_1m}
+    "gemini":            {"input": 0.10,  "output": 0.40},   # assume flash by default
+    "gpt":               {"input": 0.15,  "output": 0.60},   # assume mini by default
+    "gemini-1.5-pro":    {"input": 1.25,  "output": 10.00},
+    "gemini-1.5-flash":  {"input": 0.075, "output": 0.30},
     "gemini-2.5-pro":    {"input": 1.25,  "output": 10.00},
     "gemini-2.0-flash":  {"input": 0.10,  "output": 0.40},
     "gpt-4o":            {"input": 2.50,  "output": 10.00},
@@ -160,7 +164,22 @@ class CostAnalyzer:
 
     def _resolve_model(self, agent_id: str) -> str:
         """Maps agent_id to a pricing model key."""
-        raw_model = self._agent_models.get(agent_id, "default").lower()
+        # 1. Try exact match from agent_models.json
+        raw_model = self._agent_models.get(agent_id)
+        
+        # 2. Try fuzzy matching (e.g., "DeveloperDexAgent" vs "developer_dex")
+        if not raw_model:
+            import re
+            snake_id = re.sub(r'(?<!^)(?=[A-Z])', '_', agent_id).lower().replace("_agent", "")
+            for k in self._agent_models:
+                if k in snake_id or snake_id in k:
+                    raw_model = self._agent_models[k]
+                    break
+        
+        if not raw_model:
+            raw_model = "default"
+
+        raw_model = raw_model.lower()
 
         for key in DEFAULT_PRICING:
             if key in raw_model:

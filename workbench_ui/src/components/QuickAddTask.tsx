@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from 'react';
+import { useState } from 'react';
+import { apiPost } from '../app/api-client';
 
 export default function QuickAddTask({ repoPath, onTaskAdded }: { repoPath: string, onTaskAdded: () => void }) {
     const [summary, setSummary] = useState("");
@@ -12,16 +13,9 @@ export default function QuickAddTask({ repoPath, onTaskAdded }: { repoPath: stri
 
         setIsSubmitting(true);
         try {
-            const res = await fetch('http://localhost:8000/backlog/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_path: repoPath, summary })
-            });
-
-            if (res.ok) {
-                setSummary("");
-                onTaskAdded();
-            }
+            await apiPost('/backlog/add', { repo_path: repoPath, summary });
+            setSummary("");
+            onTaskAdded();
         } catch (err) {
             console.error("Failed to add task:", err);
         } finally {

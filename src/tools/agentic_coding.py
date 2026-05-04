@@ -89,25 +89,54 @@ def execute_coding_task(
         if not path or content is None:
             continue
             
+        # Pulse heartbeat to signal progress (arch_agent_heartbeat)
+        from tools.heartbeat_monitor import HeartbeatMonitor
+        HeartbeatMonitor.pulse_session(repo_path, session_id)
+            
         file_path = os.path.join(repo_path, path)
         
         try:
             if action_type == "write":
                 res = write_file(file_path, content, reason=reason)
                 results.append(f"Write {path}: {res}")
+                outcome = "success"
             elif action_type == "replace":
                 res = replace_content(file_path, target, content, reason=reason)
                 results.append(f"Replace in {path}: {res}")
+                outcome = "success"
             elif action_type == "regex":
                 res = search_replace_regex(file_path, target, content, reason=reason)
                 results.append(f"Regex in {path}: {res}")
+                outcome = "success"
             else:
                 results.append(f"Unknown action type: {action_type}")
                 continue
                 
             steps_used += 1
+            
+            # Log individual interaction (arch_dex_granular_logging)
+            log_interaction(
+                agent_id=agent_name,
+                outcome=outcome,
+                task_summary=f"{action_type.capitalize()} {path}: {reason}",
+                repo_path=repo_path,
+                steps_used=1,
+                session_id=session_id,
+                state_changes={"file_modified": path}
+            )
+
         except Exception as e:
-            results.append(f"Error executing action on {path}: {str(e)}")
+            error_msg = str(e)
+            results.append(f"Error executing action on {path}: {error_msg}")
+            log_interaction(
+                agent_id=agent_name,
+                outcome="failure",
+                task_summary=f"Failed {action_type} on {path}",
+                repo_path=repo_path,
+                steps_used=1,
+                session_id=session_id,
+                errors=[error_msg]
+            )
 
     summary = f"Coding cycle complete for {agent_name}. Results:\n" + "\n".join(results)
     return summary

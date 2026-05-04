@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 
+import { apiGet } from "../app/api-client";
+
 interface HealthMetric {
   name: string;
   path: string;
@@ -26,19 +28,15 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
   const [metrics, setMetrics] = useState<HealthMetric[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchHealth = () => {
-    fetch("http://localhost:8000/fleet/health", {
-        headers: { "X-API-Key": "dev-local-key" }
-    })
-      .then(res => res.json())
-      .then(data => {
-        setMetrics(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Failed to fetch fleet health:", err);
-        setLoading(false);
-      });
+  const fetchHealth = async () => {
+    try {
+      const data = await apiGet<HealthMetric[]>("/fleet/health");
+      setMetrics(data);
+      setLoading(false);
+    } catch (err) {
+      console.error("Failed to fetch fleet health:", err);
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

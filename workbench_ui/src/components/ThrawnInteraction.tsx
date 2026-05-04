@@ -67,6 +67,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
   const handleAskThrawn = async () => {
     if (!newQuestion.trim()) return;
     try {
+      setStatus("Sending question to Thrawn...");
       await apiPost("/thrawn/ask", { repo_path: repoPath, question: newQuestion });
       setNewQuestion("");
       setStatus("Question added for Thrawn!");
@@ -79,17 +80,18 @@ export default function ThrawnInteraction({ repoPath }: Props) {
 
   const handleTriggerThrawn = async () => {
     try {
-      setStatus("Triggering Thrawn analysis...");
+      setStatus("Triggering strategic analysis sequence...");
       await apiPost("/run-task", {
         repo_path: repoPath,
         agent_id: "thoughtful_thrawn",
-        model: "gemini-2.0-flash", // Default or read from settings
+        model: "gemini-2.0-flash", 
         task_prompt: "Review the current intent and open questions. Generate new insights or questions if needed."
       });
-      setStatus("Thrawn analysis started!");
+      setStatus("Thrawn analysis initiated. Checking logs...");
       setTimeout(() => setStatus(null), 5000);
     } catch (err) {
-      setStatus("Failed to trigger Thrawn");
+      setStatus("Error: Thrawn communications offline.");
+      setTimeout(() => setStatus(null), 5000);
     }
   };
 
@@ -139,7 +141,10 @@ export default function ThrawnInteraction({ repoPath }: Props) {
                       setStatus("Pattern added!");
                       setTimeout(() => setStatus(null), 3000);
                       fetchIntel();
-                    } catch (err) {}
+                    } catch (err) {
+                      console.error("Failed to add architecture pattern:", err);
+                      setStatus("Error adding pattern.");
+                    }
                   }
                 }
               }}
@@ -186,6 +191,11 @@ export default function ThrawnInteraction({ repoPath }: Props) {
             type="text" 
             value={newQuestion}
             onChange={(e) => setNewQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleAskThrawn();
+              }
+            }}
             placeholder="Ask Thrawn a strategic question..." 
             className="thrawn-input-small"
           />
@@ -201,11 +211,36 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       </div>
 
       <style jsx>{`
+        .thrawn-loading {
+          padding: 2rem;
+          text-align: center;
+          color: #4a90e2;
+          font-weight: 600;
+          letter-spacing: 1px;
+          background: rgba(10, 20, 40, 0.4);
+          border-radius: 12px;
+          margin-top: 2rem;
+          border: 1px solid rgba(74, 144, 226, 0.2);
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
         .thrawn-container {
           margin-top: 2rem;
           padding: 1.5rem;
           border-left: 4px solid #4a90e2;
-          background: rgba(10, 20, 40, 0.4);
+          background: rgba(10, 20, 40, 0.6) !important;
+          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+          overflow: hidden;
+          position: relative;
+        }
+        .thrawn-container::after {
+          content: "";
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 150px;
+          height: 150px;
+          background: radial-gradient(circle at top right, rgba(74, 144, 226, 0.15), transparent 70%);
+          pointer-events: none;
         }
         .thrawn-header {
           margin-bottom: 1.5rem;

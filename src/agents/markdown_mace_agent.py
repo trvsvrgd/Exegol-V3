@@ -1,6 +1,8 @@
 import os
+import time
 from tools.markdown_formatter import format_markdown
 from tools.file_namer import generate_filename
+from tools.fleet_logger import log_interaction
 
 
 class MarkdownMaceAgent:
@@ -30,6 +32,7 @@ class MarkdownMaceAgent:
 
         Reads raw text from .exegol/pending_format.txt if available.
         """
+        start_time = time.time()
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up to process text into markdown...")
 
@@ -44,14 +47,36 @@ class MarkdownMaceAgent:
         # 1. Generate filename based on context
         filename = generate_filename(input_text)
         
-        # 2. Format content using the tool
-        # In a real scenario, we might use an LLM first to structure it,
-        # then the formatter to clean it up.
-        raw_markdown = f"# Generated Document\n\n{input_text}"
+        # 2. Use LLM to intelligently structure the content
+        structuring_prompt = (
+            "You are a professional technical writer. Convert the following raw text into a "
+            "well-structured Markdown document. Use appropriate headers, bold text for emphasis, "
+            "bullet points for lists, and tables for data where they add clarity. "
+            "Output ONLY the markdown content, no preamble.\n\n"
+            f"RAW TEXT:\n{input_text}"
+        )
+        
+        print(f"[{self.name}] Analyzing content structure via LLM...")
+        raw_markdown = self.llm_client.generate(structuring_prompt)
+        
+        # 3. Format/Lint the generated markdown
         markdown_content = format_markdown(raw_markdown)
 
         print(f"[{self.name}] Generated file name: {filename}")
         print(f"[{self.name}] Formatted content into markdown.")
+
+        summary_msg = f"Markdown processing complete. Formatted content for {filename}."
+        
+        duration = time.time() - start_time
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=summary_msg,
+            repo_path=repo_path,
+            duration_seconds=duration,
+            session_id=handoff.session_id,
+            state_changes={"filename": filename}
+        )
 
         return {
             "status": "Success",

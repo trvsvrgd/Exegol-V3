@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 
+import { apiGet, apiPost } from "../api-client";
+
 interface Agent {
     id: string;
     name: string;
@@ -15,38 +17,30 @@ export default function Settings() {
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        // Fetch agents
-        fetch("http://localhost:8000/agents")
-            .then(res => res.json())
-            .then(data => setAgents(data))
-            .catch(err => console.error("Agents fetch error", err));
-
-        // Fetch mappings
-        fetch("http://localhost:8000/agent-models")
-            .then(res => res.json())
-            .then(data => setMappings(data))
-            .catch(err => console.error("Mappings fetch error", err));
-
-        // Fetch local models
-        fetch("http://localhost:8000/local-models")
-            .then(res => res.json())
-            .then(data => setLocalModels(data))
-            .catch(err => console.error("Local models fetch error", err));
+        const loadData = async () => {
+            try {
+                const [agentsData, mappingsData, modelsData] = await Promise.all([
+                    apiGet<Agent[]>("/agents"),
+                    apiGet<Record<string, string>>("/agent-models"),
+                    apiGet<any[]>("/local-models")
+                ]);
+                setAgents(agentsData);
+                setMappings(mappingsData);
+                setLocalModels(modelsData);
+            } catch (err) {
+                console.error("Settings load error", err);
+            }
+        };
+        loadData();
     }, []);
 
     const saveSettings = async () => {
         setSaving(true);
         try {
-            const res = await fetch("http://localhost:8000/agent-models", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    mappings: Object.entries(mappings).map(([id, model]) => ({ agent_id: id, model }))
-                })
+            await apiPost("/agent-models", { 
+                mappings: Object.entries(mappings).map(([id, model]) => ({ agent_id: id, model }))
             });
-            if (res.ok) {
-                alert("Configuration synchronized with Exegol backend.");
-            }
+            alert("Configuration synchronized with Exegol backend.");
         } catch (err) {
             console.error(err);
             alert("Sync failed.");

@@ -47,8 +47,8 @@ class SlackManager:
         # 1. Try Bot Client
         if self.client:
             try:
-                # Default to 'general' or first joined channel if not specified
-                target_channel = channel or "general"
+                # Default to 'exegol' or first joined channel if not specified
+                target_channel = channel or "exegol"
                 response = self.client.chat_postMessage(
                     channel=target_channel,
                     text=text,

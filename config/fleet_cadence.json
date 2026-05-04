@@ -31,6 +31,13 @@
       "frequency": "friday",
       "at": "15:00",
       "enabled": true
+    },
+    {
+      "id": "hourly_ops_intel",
+      "agent_id": "watcher_wedge",
+      "summary": "Hourly Operational Intelligence Scan",
+      "frequency": "every_1_hour",
+      "enabled": true
     }
   ],
   "global_settings": {

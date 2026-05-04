@@ -13,7 +13,8 @@
     "localhost",
     "127.0.0.1",
     "host.docker.internal",
-    "anthropic.com"
+    "anthropic.com",
+    "arxiv.org"
   ],
   "allowed_ips": [],
   "blocked_domains": [

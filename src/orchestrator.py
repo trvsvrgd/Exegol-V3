@@ -206,8 +206,9 @@ class ExegolOrchestrator:
         print("\nStarting Fleet Cycle...")
         self.is_running_fleet = True
         
-        # Monthly Compliance Check Trigger
+        # Periodic Audits
         self.check_compliance_monitoring()
+        self.check_vibe_monitoring()
 
         repos = self.priority_config.get("repositories", [])
         active_repos = [r for r in repos if r.get('agent_status', 'idle') == 'active']
@@ -221,12 +222,46 @@ class ExegolOrchestrator:
         print("Fleet Cycle complete.")
         self.is_running_fleet = False
 
+    def check_vibe_monitoring(self):
+        """Checks if a weekly vibe audit is due and triggers Vader."""
+        global_settings = self.priority_config.get("global_settings", {})
+        monitoring = global_settings.get("vibe_audit", {})
+        if not monitoring:
+            # Initialize if missing
+            monitoring = {"last_run": "1970-01-01", "frequency_days": 7}
+            global_settings["vibe_audit"] = monitoring
+
+        last_run_str = monitoring.get("last_run", "1970-01-01")
+        frequency_days = monitoring.get("frequency_days", 7)
+
+        try:
+            from datetime import datetime, timedelta
+            last_run = datetime.fromisoformat(last_run_str)
+            if datetime.now() > last_run + timedelta(days=frequency_days):
+                print(f"[Vibe] Weekly audit is due (last run: {last_run_str}). Waking VibeVader...")
+                target = self.get_highest_priority_task()
+                if target:
+                    result = self.wake_and_execute_agent(
+                        repo_info=target,
+                        routing=target.get("model_routing_preference", "ollama"),
+                        max_steps=20,
+                        agent_id="vibe_vader",
+                        scheduled_prompt="Proactive Weekly Vibe Audit"
+                    )
+                    if result and result.outcome == "success":
+                        monitoring["last_run"] = datetime.now().date().isoformat()
+                        self.save_config()
+            else:
+                print(f"[Vibe] Weekly audit not due. Next run after: {(last_run + timedelta(days=frequency_days)).date()}")
+        except Exception as e:
+            print(f"[Vibe] Error checking monitoring: {e}")
+
     def process_repo(self, repo_info: Dict[str, Any]):
         """Decides which agent to wake for a given repo based on its current state."""
         repo_path = repo_info.get("repo_path")
         print(f"\nChecking repo: {repo_path}")
         
-        # Check if .exegol exists, otherwise trigger Thunderbird (onboarding)
+        # Check if .exegol exists, otherwise trigger Thrawn (onboarding)
         exegol_dir = os.path.join(repo_path, ".exegol")
         if not os.path.exists(exegol_dir):
             print(f"[Onboarding] No .exegol found. Triggering ThoughtfulThrawnAgent...")
@@ -476,9 +511,78 @@ class ExegolOrchestrator:
         
         print(f"[Orchestrator] Escalated to human: {message}")
 
+    def display_help(self, channel: str = None):
+        """Displays a rich help message in Slack with available commands and agents."""
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "👋 *Exegol V3 Orchestrator Help*\nI'm listening for several commands and agent wake-words. Here's what I can do:"
+                }
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Global Fleet Commands:*\n"
+                            "• `go` — Triggers the highest priority task on the active repository.\n"
+                            "• `fleet` — Initiates a full cycle through all active repositories.\n"
+                            "• `backlog <task>` — Adds a task directly to the active repo's backlog.\n"
+                            "• `stop` — Gracefully shuts down the orchestrator.\n"
+                            "• `help` / `info` — Shows this message."
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Available Agents (Who is listening):*\n"
+                            "Wake an agent by name followed by your request (e.g., `dex fix the bug`)."
+                }
+            }
+        ]
+
+        # Add agent info (chunked if too many)
+        agent_fields = []
+        for agent_id, details in AGENT_REGISTRY.items():
+            wake_word = details["wake_word"]
+            tools = ", ".join(details["tools"][:3])
+            agent_fields.append({
+                "type": "mrkdwn",
+                "text": f"*{agent_id}* (`{wake_word}`)\n_{tools}_"
+            })
+            
+            # Slack sections allow max 10 fields
+            if len(agent_fields) >= 10:
+                blocks.append({"type": "section", "fields": agent_fields})
+                agent_fields = []
+        
+        if agent_fields:
+            blocks.append({"type": "section", "fields": agent_fields})
+
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "💡 *Tip*: Use `poe: <idea>` to have Poe groom your request into a proper backlog item."
+                }
+            ]
+        })
+
+        slack_manager.post_message("Exegol Help", blocks=blocks, channel=channel)
+
     def handle_wake_word(self, command_string: str, channel: str = None):
-        """Processes CLI input to trigger specific agents or default 'go' behavior."""
+        """Processes CLI/Slack input to trigger specific agents or default 'go' behavior."""
         cmd = command_string.lower()
+
+        if "help" in cmd or "info" in cmd:
+            self.display_help(channel=channel)
+            return
 
         if "fleet" in cmd:
             slack_manager.post_message("🚀 Fleet cycle starting — processing all active repos...", channel=channel)
@@ -497,7 +601,7 @@ class ExegolOrchestrator:
                 content = content[1:].strip()
                 
             if not content:
-                slack_manager.post_message("❌ Please provide a task description. Example: `add to backlog review PRs`", channel=channel)
+                slack_manager.post_message("❌ Please provide a task description. Example: `backlog review PRs`", channel=channel)
                 return
 
             target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
@@ -505,7 +609,7 @@ class ExegolOrchestrator:
             
             bm = BacklogManager(repo_path)
             new_task = {
-                "id": str(uuid.uuid4()),
+                "id": f"slack_{uuid.uuid4().hex[:6]}",
                 "summary": content,
                 "status": "pending_prioritization",
                 "priority": "medium",
@@ -520,9 +624,17 @@ class ExegolOrchestrator:
             return
 
         for agent_id, details in AGENT_REGISTRY.items():
-            if details["wake_word"] in cmd:
-                print(f"Triggering specific agent: {agent_id} by wake word '{details['wake_word']}'")
-                slack_manager.post_message(f"🤖 Waking `{agent_id}`...", channel=channel)
+            wake_word = details["wake_word"]
+            if wake_word in cmd:
+                # Extract context after wake word
+                idx = cmd.find(wake_word)
+                raw_context = command_string[idx + len(wake_word):].strip()
+                if raw_context.startswith(":") or raw_context.startswith("-"):
+                    raw_context = raw_context[1:].strip()
+                
+                print(f"Triggering specific agent: {agent_id} by wake word '{wake_word}'")
+                slack_manager.post_message(f"🤖 Waking `{agent_id}`... {f'Context: _{raw_context}_' if raw_context else ''}", channel=channel)
+                
                 target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
                 routing = target.get("model_routing_preference", "ollama")
                 self.wake_and_execute_agent(
@@ -530,6 +642,7 @@ class ExegolOrchestrator:
                     routing=routing,
                     max_steps=details["max_steps"],
                     agent_id=agent_id,
+                    scheduled_prompt=raw_context
                 )
                 return
 
@@ -546,7 +659,7 @@ class ExegolOrchestrator:
 
         print(f"Unknown command or wake word in: '{command_string}'")
         slack_manager.post_message(
-            f"❓ Unknown command: `{command_string}`\nTry: `go`, `fleet`, or an agent wake word.",
+            f"❓ Unknown command: `{command_string}`\nType `help` for available commands.",
             channel=channel
         )
 

@@ -1,13 +1,13 @@
 import json
 from typing import List, Dict, Any
 
-def refine_strategic_questions(context: str, llm_client, system_prompt: str) -> List[str]:
+def refine_strategic_questions(context: str, llm_client, system_prompt: str, count: int = 3) -> List[str]:
     """
     Uses an LLM to analyze the repository context and formulate precise, strategic clarifying questions.
     """
     prompt = f"""
     Analyze the following repository context and identify strategic flaws, architectural oversights, or missing intent details.
-    Formulate exactly 1-3 surgical, high-impact clarifying questions for the user.
+    Formulate exactly {count} surgical, high-impact clarifying questions for the user to drive the next evolution of the application.
     
     Context:
     {context}

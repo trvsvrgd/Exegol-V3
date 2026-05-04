@@ -82,9 +82,5 @@ if __name__ == "__main__":
     # Test execution
     import sys
     repo = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-    dummy_findings = [
-        {"task": "Test Readiness Task", "category": "readiness", "context": "Testing todo_reporter"},
-        {"task": "Test Mock Task", "category": "mock", "context": "Testing todo_reporter"},
-        {"task": "Test Limitation Task", "category": "limitation", "context": "Testing todo_reporter"}
-    ]
-    print(report_todos(repo, dummy_findings))
+    # Real test with empty findings
+    print(report_todos(repo, []))

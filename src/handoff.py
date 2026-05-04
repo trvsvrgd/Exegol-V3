@@ -62,7 +62,8 @@ class SessionResult:
     status_update: str = ""           # "idle", "active", or "blocked"
     next_agent_id: str = ""           # ID of the agent that should be triggered next (autonomous chaining)
     snapshot_hash: str = ""           # SHA-256 hash of the codebase state after modifications
-    regression_context: str = ""      # Details if a failure was detected
+    token_usage: int = 0
+    prompt_count: int = 0
 
     def to_dict(self) -> dict:
         """Serialize for JSON persistence in interaction_logs/."""
@@ -79,5 +80,7 @@ class SessionResult:
             "next_agent_id": self.next_agent_id,
             "snapshot_hash": self.snapshot_hash,
             "regression_context": self.regression_context,
+            "token_usage": self.token_usage,
+            "prompt_count": self.prompt_count,
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds")
         }

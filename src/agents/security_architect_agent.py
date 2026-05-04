@@ -6,6 +6,8 @@ import time
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
 from tools.web_search import web_search
+from tools.repo_scanner import scan_for_security_vulnerabilities
+
 
 
 class SecurityArchitectAgent:
@@ -495,30 +497,50 @@ class SecurityArchitectAgent:
         print(f"[{self.name}] Session {handoff.session_id} — initiating security architecture scan for: {repo_path}")
 
         try:
-            # Step 1: Zero-Day Pattern Detection
-            print(f"[{self.name}] [1/4] Scanning for zero-day vulnerability patterns...")
+            # Step 1: Zero-Day Pattern Detection (Internal)
+            print(f"[{self.name}] [1/5] Scanning for internal zero-day patterns...")
             findings = self._scan_for_zero_day_patterns(repo_path)
             self._steps_used += 1
 
-            # Step 1b: External CVE/Vulnerability Research (Phase 2 Integration)
-            print(f"[{self.name}] [1b/4] Researching external vulnerabilities for stack...")
+            # Step 1b: External Security Scanner (Phase 3 Integration)
+            print(f"[{self.name}] [1b/5] Running external repo_scanner tool...")
+            external_findings = scan_for_security_vulnerabilities(repo_path)
+            # Map external findings to the internal format if needed
+            for ef in external_findings:
+                findings.append({
+                    "vuln_id": "SEC-EXT-TOOL",
+                    "name": ef["task"],
+                    "cwe": "CWE-Unknown",
+                    "severity": "HIGH",
+                    "file": ef["file_path"],
+                    "line": ef["line_number"],
+                    "evidence": ef["context"],
+                    "description": "Security finding from external repo_scanner tool.",
+                    "recommendation": "Review the identified code for potential security risks."
+                })
+            self._steps_used += 1
+
+            # Step 1c: External CVE/Vulnerability Research
+            print(f"[{self.name}] [1c/5] Researching external vulnerabilities for stack...")
             findings += self._research_external_vulnerabilities(repo_path)
             self._steps_used += 1
 
+
             # Step 2: Architectural Gap Analysis
-            print(f"[{self.name}] [2/4] Evaluating agent fleet architecture...")
+            print(f"[{self.name}] [2/5] Evaluating agent fleet architecture...")
             gaps = self._evaluate_architecture(repo_path)
             self._steps_used += 1
 
             # Step 3: Submit to Backlog
-            print(f"[{self.name}] [3/4] Submitting findings to backlog...")
+            print(f"[{self.name}] [3/5] Submitting findings to backlog...")
             backlog_count = self._submit_to_backlog(repo_path, findings, gaps)
             self._steps_used += 1
 
             # Step 4: Write Report
-            print(f"[{self.name}] [4/4] Writing security report...")
+            print(f"[{self.name}] [4/5] Writing security report...")
             report_file = self._write_security_report(repo_path, findings, gaps, backlog_count)
             self._steps_used += 1
+
 
             duration = time.time() - start_time
             zero_day_count = len(findings)

@@ -2,6 +2,11 @@
 
 import { useState, useEffect } from "react";
 
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-local-key";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
+
+
 interface EvalRequirement {
   id: string;
   technique_name: string;
@@ -28,11 +33,11 @@ export default function EvaluationsDashboard() {
   const [reports, setReports] = useState<string[]>([]);
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
   const [reportData, setReportData] = useState<EvalReport | null>(null);
-  const repoPath = "c:/Users/travi/Documents/Python_Projects/Exegol_v3"; // Default for now, could be dynamic
+
 
   useEffect(() => {
-    fetch(`http://localhost:8000/evaluations?repo_path=${encodeURIComponent(repoPath)}`, {
-      headers: { "X-API-Key": "dev-local-key" }
+    fetch(`${API_BASE_URL}/evaluations?repo_path=${encodeURIComponent(REPO_PATH)}`, {
+      headers: { "X-API-Key": API_KEY }
     })
       .then(res => res.json())
       .then(data => {
@@ -46,8 +51,8 @@ export default function EvaluationsDashboard() {
 
   useEffect(() => {
     if (selectedReport) {
-      fetch(`http://localhost:8000/evaluations/${selectedReport}?repo_path=${encodeURIComponent(repoPath)}`, {
-        headers: { "X-API-Key": "dev-local-key" }
+      fetch(`${API_BASE_URL}/evaluations/${selectedReport}?repo_path=${encodeURIComponent(REPO_PATH)}`, {
+        headers: { "X-API-Key": API_KEY }
       })
         .then(res => res.json())
         .then(data => setReportData(data))

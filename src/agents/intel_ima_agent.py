@@ -5,6 +5,11 @@ from tools.web_search import web_search
 from tools.cost_analyzer import get_cost_report
 from tools.drive_sync import drive_sync_file
 from tools.gmail_tool import send_gmail_message
+from tools.fleet_logger import log_interaction
+from tools.metrics_manager import SuccessMetricsManager
+from tools.thrawn_intel_manager import ThrawnIntelManager
+from tools.todo_reporter import report_todos
+from tools.state_manager import StateManager
 
 
 class IntelImaAgent:
@@ -32,6 +37,82 @@ class IntelImaAgent:
             }
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
+        self.next_agent_id = None
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates intelligence reporting metrics based on recent logs."""
+        logs = self.metrics_manager.load_logs(days=7)
+        agent_logs = [l for l in logs if l.get("agent_id") == self.name]
+        
+        if not agent_logs:
+            return {
+                "weekly_reports_delivered": 0.0,
+                "cost_anomalies_flagged": 0
+            }
+
+        successful_reports = [l for l in agent_logs if l.get("outcome") == "success" and "report generated" in l.get("task_summary", "").lower()]
+        delivery_rate = len(successful_reports) / 1.0 # Target is 1 per week
+        
+        # Count anomalies flagged in the summaries
+        anomalies = len([l for l in agent_logs if "anomaly" in l.get("task_summary", "").lower() or "spike" in l.get("task_summary", "").lower()])
+
+        return {
+            "weekly_reports_delivered": round(min(delivery_rate, 1.0) * 100, 1),
+            "cost_anomalies_flagged": anomalies
+        }
+
+    def _is_waiting_for_input(self, repo_path: str) -> bool:
+        """Checks if there are any pending HITL tasks for this agent."""
+        hitl_path = os.path.join(repo_path, ".exegol", "user_action_required.json")
+        if not os.path.exists(hitl_path):
+            return False
+        try:
+            with open(hitl_path, 'r', encoding='utf-8') as f:
+                tasks = json.load(f)
+            return any(t.get("status") == "pending" and "intel_ima" in t.get("task", "").lower() for t in tasks)
+        except:
+            return False
+
+    def _process_evaluation_mechanisms(self, repo_path: str):
+        """Identifies outstanding evaluation mechanisms and feeds them to Thrawn and Vader."""
+        eval_req_path = os.path.join(repo_path, ".exegol", "eval_requirements.json")
+        if not os.path.exists(eval_req_path):
+            print(f"[{self.name}] No eval_requirements.json found.")
+            return 0
+
+        try:
+            with open(eval_req_path, 'r', encoding='utf-8') as f:
+                eval_reqs = json.load(f)
+        except Exception as e:
+            print(f"[{self.name}] Error reading eval_requirements.json: {e}")
+            return 0
+
+        pending_evals = [e for e in eval_reqs if e.get("status") == "pending"]
+        if not pending_evals:
+            return 0
+
+        print(f"[{self.name}] Found {len(pending_evals)} outstanding evaluation mechanisms. Informing Thrawn and Vader...")
+
+        # 1. Inform Thrawn (Roadmap & Intent)
+        thrawn_mgr = ThrawnIntelManager(repo_path)
+        for e in pending_evals:
+            # Add to roadmap for strategic review
+            thrawn_mgr.add_roadmap_item("Strategic Evaluation", f"Implement {e['technique_name']} ({e['category']})")
+            # Update architecture intent
+            thrawn_mgr.add_architecture(f"Evaluation: {e['technique_name']}")
+
+        # 2. Inform Vader (Human Action Required)
+        # We add them to the StateManager HITL queue so Vader's next audit sees them
+        sm = StateManager(repo_path)
+        for e in pending_evals:
+            sm.add_hitl_task(
+                summary=f"Approve implementation of {e['technique_name']}",
+                category="limitation",
+                context=f"Outstanding evaluation mechanism identified by IntelIma. Needs human review: {e['description']}"
+            )
+            
+        return len(pending_evals)
 
 
     def execute(self, handoff):
@@ -41,6 +122,14 @@ class IntelImaAgent:
         """
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
+        
+        # Phase 4.1: Process outstanding evaluation mechanisms
+        eval_count = self._process_evaluation_mechanisms(repo_path)
+        
+        # Check if we are blocked and need to hand off
+        if self._is_waiting_for_input(repo_path):
+            print(f"[{self.name}] Agent is waiting for human input. Handing off to Thrawn/Vader for strategic review.")
+            self.next_agent_id = "thoughtful_thrawn"
         
         # 1. Market Research
         print(f"[{self.name}] Researching latest AI cost trends...")
@@ -71,12 +160,13 @@ class IntelImaAgent:
         reports_dir = os.path.join(exegol_dir, "intel_reports")
         os.makedirs(reports_dir, exist_ok=True)
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_file = os.path.join(reports_dir, f"weekly_{timestamp}.json")
+        timestamp_fs = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp_iso = datetime.datetime.now().isoformat()
+        report_file = os.path.join(reports_dir, f"weekly_{timestamp_fs}.json")
 
         report = {
             "type": "weekly",
-            "generated_at": timestamp,
+            "generated_at": timestamp_iso,
             "session_id": handoff.session_id,
             "summary": (
                 f"Fleet nominal. Total spend: ${total_spend:.4f}. "
@@ -107,13 +197,26 @@ class IntelImaAgent:
         if email_recipient:
             print(f"[{self.name}] Delivering report to {email_recipient}...")
             try:
-                subject = f"Exegol Intelligence Report - {timestamp}"
+                subject = f"Exegol Intelligence Report - {timestamp_fs}"
                 body = f"Fleet status: {cloud_status}. Total spend: ${total_spend:.4f}.\n\nFull report: {report_file}"
                 email_status = send_gmail_message(to=email_recipient, subject=subject, body=body)
             except Exception as e:
                 email_status = f"Failed: {str(e)}"
         
-        return f"Report generated and synced. Drive: {sync_result}. Email: {email_status}."
+        res = f"Report generated and synced. Drive: {sync_result}. Email: {email_status}."
+        
+        metrics = self._calculate_success_metrics(repo_path)
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=res,
+            repo_path=repo_path,
+            steps_used=1,
+            duration_seconds=(datetime.datetime.now() - datetime.datetime.fromisoformat(report["generated_at"])).total_seconds(), # Rough estimate
+            session_id=handoff.session_id,
+            metrics=metrics
+        )
+        return res
 
     def _generate_recommendations(self, total_spend: float, cloud_status: str, agent_costs: dict) -> list:
         """Generates cost recommendations based on real spend data."""

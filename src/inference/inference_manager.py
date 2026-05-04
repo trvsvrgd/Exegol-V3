@@ -34,7 +34,24 @@ class InferenceManager:
     @staticmethod
     def check_vram_usage():
         """
-        Placeholder for real VRAM monitoring logic.
-        In a production implementation, this would query nvidia-smi or similar.
+        Uses HardwareScanner to retrieve real VRAM monitoring data.
         """
-        return "VRAM monitoring not yet implemented."
+        try:
+            from tools.hardware_scanner import HardwareScanner
+            scanner = HardwareScanner()
+            profile = scanner.scan()
+            gpu = profile.get("gpu", {})
+            if gpu.get("detected"):
+                total = gpu.get("vram_total_mb", 0)
+                free = gpu.get("vram_free_mb", 0)
+                used = total - free
+                return {
+                    "status": "success",
+                    "vram_total_mb": total,
+                    "vram_free_mb": free,
+                    "vram_used_mb": used,
+                    "usage_percent": round((used / total) * 100, 2) if total > 0 else 0
+                }
+            return {"status": "error", "message": gpu.get("reason", "GPU not detected")}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}

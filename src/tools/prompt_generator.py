@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Dict, Any
 from tools.web_search import web_search
 
 def generate_active_prompt(task: Dict[str, Any], repo_path: str, llm_client, system_prompt: str) -> str:

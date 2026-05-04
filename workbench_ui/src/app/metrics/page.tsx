@@ -1,16 +1,25 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import LogDrillDown from "@/components/LogDrillDown";
+
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-local-key";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
+
 
 interface AgentMetrics {
   total_sessions: number;
-  successes: number;
-  failures: number;
-  avg_steps: number;
-  total_duration: number;
-  bugs_introduced: number;
   success_rate: number;
+  recall?: number;
+  precision?: number;
+  drift?: number;
+  avg_steps: number;
   avg_duration: number;
+  avg_prompts?: number;
+  avg_tokens?: number;
+  bugs_introduced: number;
+  tools_accessible?: string[];
 }
 
 interface FleetMetricsReport {
@@ -26,11 +35,14 @@ interface FleetMetricsReport {
 export default function MetricsDashboard() {
   const [metrics, setMetrics] = useState<FleetMetricsReport | null>(null);
   const [loading, setLoading] = useState(true);
-  const repoPath = "c:/Users/travi/Documents/Python_Projects/Exegol_v3";
+  const [drillDownOpen, setDrillDownOpen] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+  const [selectedOutcome, setSelectedOutcome] = useState<string | undefined>(undefined);
+
 
   const fetchMetrics = () => {
-    fetch(`http://localhost:8000/fleet/metrics?repo_path=${encodeURIComponent(repoPath)}`, {
-      headers: { "X-API-Key": "dev-local-key" }
+    fetch(`${API_BASE_URL}/fleet/metrics?repo_path=${encodeURIComponent(REPO_PATH)}`, {
+      headers: { "X-API-Key": API_KEY }
     })
       .then(res => res.json())
       .then(data => {
@@ -94,6 +106,10 @@ export default function MetricsDashboard() {
             <div className="metrics-grid">
               {Object.entries(metrics.agent_breakdown).map(([agentId, stats]) => {
                 const adv = getAdvancedStats(agentId, stats.success_rate);
+                const precision = stats.precision !== undefined ? (stats.precision * 100).toFixed(1) : adv.precision;
+                const recall = stats.recall !== undefined ? (stats.recall * 100).toFixed(1) : adv.recall;
+                const drift = stats.drift !== undefined ? (stats.drift * 100).toFixed(2) : adv.drift;
+
                 return (
                   <div key={agentId} className="metric-card glass">
                     <div className="card-header">
@@ -113,33 +129,54 @@ export default function MetricsDashboard() {
                     </div>
 
                     <div className="advanced-metrics">
-                      <div className="metric-bar">
+                      <div 
+                        className="metric-bar clickable" 
+                        onClick={() => {
+                          setSelectedAgent(agentId);
+                          setSelectedOutcome("failure");
+                          setDrillDownOpen(true);
+                        }}
+                      >
                         <div className="bar-label">
                           <span>Precision</span>
-                          <span>{adv.precision}%</span>
+                          <span>{precision}%</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill precision" style={{ width: `${adv.precision}%` }}></div>
+                          <div className="bar-fill precision" style={{ width: `${precision}%` }}></div>
                         </div>
                       </div>
                       
-                      <div className="metric-bar">
+                      <div 
+                        className="metric-bar clickable"
+                        onClick={() => {
+                          setSelectedAgent(agentId);
+                          setSelectedOutcome(undefined);
+                          setDrillDownOpen(true);
+                        }}
+                      >
                         <div className="bar-label">
                           <span>Recall</span>
-                          <span>{adv.recall}%</span>
+                          <span>{recall}%</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill recall" style={{ width: `${adv.recall}%` }}></div>
+                          <div className="bar-fill recall" style={{ width: `${recall}%` }}></div>
                         </div>
                       </div>
 
-                      <div className="metric-bar">
+                      <div 
+                        className="metric-bar clickable"
+                        onClick={() => {
+                          setSelectedAgent(agentId);
+                          setSelectedOutcome(undefined);
+                          setDrillDownOpen(true);
+                        }}
+                      >
                         <div className="bar-label">
                           <span>Concept Drift</span>
-                          <span className={parseFloat(adv.drift) > 5 ? 'text-red' : 'text-green'}>{adv.drift}%</span>
+                          <span className={parseFloat(drift) > 5 ? 'text-red' : 'text-green'}>{drift}%</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill drift" style={{ width: `${Math.min(100, parseFloat(adv.drift) * 10)}%` }}></div>
+                          <div className="bar-fill drift" style={{ width: `${Math.min(100, Math.abs(parseFloat(drift)) * 10)}%` }}></div>
                         </div>
                       </div>
                     </div>
@@ -154,10 +191,40 @@ export default function MetricsDashboard() {
                         <span className="stat-value small">{stats.avg_duration.toFixed(1)}s</span>
                       </div>
                       <div className="stat">
+                        <span className="stat-label">Avg Prompts</span>
+                        <span className="stat-value small">{stats.avg_prompts?.toFixed(1) || '0.0'}</span>
+                      </div>
+                      <div className="stat">
+                        <span className="stat-label">Avg Tokens</span>
+                        <span className="stat-value small">{stats.avg_tokens?.toLocaleString() || '0'}</span>
+                      </div>
+                      <div className="stat">
                         <span className="stat-label">Bugs</span>
                         <span className={`stat-value small ${stats.bugs_introduced > 0 ? 'text-red' : ''}`}>{stats.bugs_introduced}</span>
                       </div>
                     </div>
+
+                    {stats.tools_accessible && (
+                      <div className="tool-chips">
+                        {stats.tools_accessible.slice(0, 3).map(tool => (
+                          <span key={tool} className="tool-chip">{tool}</span>
+                        ))}
+                        {stats.tools_accessible.length > 3 && (
+                          <span className="tool-chip more">+{stats.tools_accessible.length - 3}</span>
+                        )}
+                      </div>
+                    )}
+
+                    <button 
+                      className="drill-down-btn"
+                      onClick={() => {
+                        setSelectedAgent(agentId);
+                        setSelectedOutcome(undefined);
+                        setDrillDownOpen(true);
+                      }}
+                    >
+                      View Interaction Logs
+                    </button>
                   </div>
                 );
               })}
@@ -168,6 +235,16 @@ export default function MetricsDashboard() {
           </section>
         </>
       )}
+
+      <LogDrillDown 
+        isOpen={drillDownOpen}
+        onClose={() => setDrillDownOpen(false)}
+        repoPath={REPO_PATH}
+        apiKey={API_KEY}
+        apiBaseUrl={API_BASE_URL}
+        initialAgentId={selectedAgent}
+        initialOutcome={selectedOutcome}
+      />
 
       <style jsx>{`
         .metrics-page {
@@ -180,7 +257,7 @@ export default function MetricsDashboard() {
           margin-bottom: 4rem;
         }
         .subtitle {
-          color: var(--text-secondary);
+          color: #888;
           opacity: 0.7;
           margin-top: 0.5rem;
           font-size: 1.1rem;
@@ -212,7 +289,7 @@ export default function MetricsDashboard() {
           font-size: 0.8rem;
           text-transform: uppercase;
           letter-spacing: 2px;
-          color: var(--text-secondary);
+          color: #888;
           margin-bottom: 1rem;
         }
         .summary-card .value {
@@ -318,6 +395,13 @@ export default function MetricsDashboard() {
           flex-direction: column;
           gap: 0.5rem;
         }
+        .metric-bar.clickable {
+          cursor: pointer;
+          transition: transform 0.2s;
+        }
+        .metric-bar.clickable:hover {
+          transform: translateX(5px);
+        }
         .bar-label {
           display: flex;
           justify-content: space-between;
@@ -344,9 +428,49 @@ export default function MetricsDashboard() {
 
         .secondary-stats {
           border-bottom: none;
-          margin-bottom: 0;
+          margin-bottom: 1.5rem;
           padding-bottom: 0;
           opacity: 0.8;
+        }
+
+        .drill-down-btn {
+          width: 100%;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: #4dabf7;
+          padding: 0.75rem;
+          border-radius: 8px;
+          font-size: 0.8rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          cursor: pointer;
+          transition: all 0.2s;
+          margin-top: auto;
+        }
+        .drill-down-btn:hover {
+          background: rgba(77, 171, 247, 0.1);
+          border-color: #4dabf7;
+          color: #fff;
+        }
+        
+        .tool-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          margin-bottom: 1.5rem;
+        }
+        .tool-chip {
+          font-size: 0.6rem;
+          text-transform: uppercase;
+          background: rgba(255, 255, 255, 0.05);
+          color: #aaa;
+          padding: 2px 6px;
+          border-radius: 4px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .tool-chip.more {
+          color: #4dabf7;
         }
         
         .loading {

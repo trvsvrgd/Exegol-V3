@@ -8,6 +8,7 @@ from tools.readme_parser import ReadmeParser
 from tools.diagram_generator import DiagramGenerator
 from tools.architecture_reviewer import ArchitectureReviewer
 from tools.schema_designer import SchemaDesigner
+from tools.fleet_logger import log_interaction
 
 
 class ArchitectArtooAgent:
@@ -50,12 +51,17 @@ class ArchitectArtooAgent:
 
         # 1. Check if there were any commits in the past week
         has_new_commits = has_commits_since(repo_path, timeframe="1 week ago")
-        if not has_new_commits:
-            print(f"[{self.name}] No new commits in the last week. Going back to sleep.")
+        is_analysis_request = "analyze" in (handoff.scheduled_prompt or "").lower() or "ops_intel" in (handoff.scheduled_prompt or "").lower()
+
+        if not has_new_commits and not is_analysis_request:
+            print(f"[{self.name}] No new commits and no analysis request. Going back to sleep.")
             return "No architecture updates needed (no commits)."
 
-        recent_commits = get_recent_commits(repo_path, timeframe="1 week ago")
-        print(f"[{self.name}] {len(recent_commits)} new commit(s) detected. Analyzing architecture...")
+        if is_analysis_request:
+            print(f"[{self.name}] Analysis request detected. Reviewing operational logs...")
+        elif has_new_commits:
+            recent_commits = get_recent_commits(repo_path, timeframe="1 week ago")
+            print(f"[{self.name}] {len(recent_commits)} new commit(s) detected. Analyzing architecture...")
 
         bm = BacklogManager(repo_path)
         tasks_added = []
@@ -237,4 +243,17 @@ class ArchitectArtooAgent:
             f"Diagram Presence {self.success_metrics['repos_with_arch_diagram']['current']}."
         )
         print(f"[{self.name}] {summary}")
+
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=summary,
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            metrics={
+                "schema_adherence": self.success_metrics['schema_adherence_rate']['current'],
+                "diagram_presence": self.success_metrics['repos_with_arch_diagram']['current']
+            }
+        )
+
         return summary

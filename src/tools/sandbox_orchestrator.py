@@ -74,6 +74,10 @@ def run_sandbox_command(sandbox_path: str, command: str) -> Dict[str, str]:
             timeout=30  # 30 second timeout for sandbox commands
         )
         
+        # Always route terminal errors with 'FATAL' to the Exegol Fleet
+        from tools.fatal_error_router import check_and_route_terminal_output
+        check_and_route_terminal_output(sandbox_path, result.stdout, result.stderr, command)
+        
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
@@ -87,8 +91,12 @@ def run_sandbox_command(sandbox_path: str, command: str) -> Dict[str, str]:
             "exit_code": -1
         }
     except Exception as e:
+        error_msg = str(e)
+        if "FATAL" in error_msg.upper():
+             from tools.fatal_error_router import route_fatal_error
+             route_fatal_error(sandbox_path, error_msg)
         return {
-            "error": str(e),
+            "error": error_msg,
             "exit_code": -1
         }
 

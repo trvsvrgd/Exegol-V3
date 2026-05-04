@@ -9,6 +9,8 @@ Each agent in the fleet is **stateless by design**. Instead of relying on fragil
 
 The result: a **self-sustaining development loop** that can be triggered with a single word — `go`.
 
+![Exegol Fleet Dashboard](control-tower-demo.webp)
+
 ---
 
 ## 🔄 Agent Handoff Loop
@@ -18,37 +20,39 @@ The Exegol ecosystem operates on a non-cyclical, state-driven loop. Each agent w
 ```mermaid
 flowchart TD
     subgraph Initialization
-    A["🔵 Onboarding Thrawn"] -- "Captures Intent" --> FS[("📁 .exegol Backlog")]
+    A["🔵 Onboarding Thrawn"] -- "Captures Intent" --> FS[("📁 .exegol Context")]
     V["🔴 Vibe Vader"] -- "Detects Debt" --> FS
     end
 
+    subgraph Venture Strategy
+    FS -- "Concept" --> S["🧠 Strategist Sloane"]
+    S -- "Strategy Brief" --> FS
+    FS -- "Strategy" --> G["📈 Growth Galen"]
+    G -- "GTM Plan" --> FS
+    FS -- "Business Model" --> FF["💰 Finance Fennec"]
+    FF -- "Unit Economics" --> FS
+    end
+
     subgraph Product & Design
-    FS -- "Pending Tasks" --> B["⚪ Product Poe"]
+    FS -- "Briefs & Economics" --> B["⚪ Product Poe"]
     B -- "Prioritized Task / Active Prompt" --> FS
     FS -- "Architecture Needed" --> C["🤖 Architect Artoo"]
     C -- "Design Docs" --> FS
     end
 
     subgraph Implementation & Quality
-    FS -- "Active Prompt & Design" --> D["👨‍🔧 Developer Dex"]
+    FS -- "Active Prompt & Design" --> D["👨🔧 Developer Dex"]
     D -- "Code Implementation" --> FS
     FS -- "Test Required" --> E["⚔️ Quality Qui-Gon"]
     E -- "Pass: Mark Complete" --> FS
     E -- "Fail: Log Bug" --> B
     end
 
-    subgraph Research & Standards
-    FS -- "Research Needed" --> F["🔫 Research Rex"]
-    F -- "Enriched Tasks" --> FS
-    FS -- "Standards Check" --> G["📖 Evaluator Ezra"]
-    G -- "Evaluation Criteria" --> FS
-    end
-
     subgraph Polish & Evidence
     FS -- "Docs Needed" --> H["🟪 Markdown Mace"]
     H -- "Markdown Polished" --> FS
     FS -- "Ready for Demo" --> I["🎥 Cameraman Cassian"]
-    I -- "Video Evidence" --> FS
+    I -- "Visual Assets" --> FS
     end
 
     subgraph Oversight
@@ -57,34 +61,24 @@ flowchart TD
     FS -- "Logs" --> K["🦍 Chief of Staff Chewie"]
     K -- "Performance Review" --> Report
     FS -- "Metrics" --> L["🎭 Report Revan"]
-    L -- "Fleet Summary" --> Report
+    L -- "Venture Summary" --> Report
     FS -- "Costs" --> M["🧠 Intel Ima"]
-    M -- "Intel Report" --> Report[("📧 Intelligence Reports")]
-    FS -- "Docs" --> TT["🎯 Technical Tarkin"]
-    TT -- "Technical Docs" --> FS
-    FS -- "Model Selection" --> MRM["🔀 Model Router Mothma"]
-    MRM -- "Routing Config" --> FS
-    end
-
-    subgraph Governance
-    FS -- "Risk Check" --> N["🌋 Assessment Anakin"]
-    N -- "Risk Report" --> FS
-    FS -- "Compliance Check" --> O["👮 Compliance Cody"]
-    O -- "Compliance Gaps" --> FS
-    FS -- "Security Audit" --> P["🛡️ Security Architect"]
-    P -- "Security Hardening" --> FS
+    M -- "Cloud/API Costs" --> FF
+    Report[("📧 Intelligence Reports")]
     end
 
     classDef agent fill:#f9f9f9,stroke:#333,stroke-width:2px;
-    class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,V,TT,MRM agent;
+    class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,V,TT,MRM,S,G,FF agent;
 ```
-
 
 ## 🤖 The Agent Fleet
 
 | Agent ID | Alliterative Name | Core Responsibility | Primary Handoff Output |
 | :--- | :--- | :--- | :--- |
 | `thoughtful_thrawn` | Thoughtful Thrawn | Onboarding & User Intent | `.exegol/backlog.json` |
+| `strategist_sloane` | Strategist Sloane | Market Intelligence & Business Strategy | `.exegol/strategy_brief.md` |
+| `growth_galen` | Growth Galen | GTM Strategy & Outreach | `.exegol/gtm_plan.md` |
+| `finance_fennec` | Finance Fennec | Economic Modeling & Pricing | `.exegol/unit_economics.json` |
 | `product_poe` | Product Poe | Backlog Grooming & Prioritization | `.exegol/active_prompt.md` |
 | `architect_artoo` | Architect Artoo | Architecture & Design Review | Architecture Diagrams/Docs |
 | `research_rex` | Research Rex | Research & Web Intent | Backlog enrichment |
@@ -103,10 +97,10 @@ flowchart TD
 | `security_architect` | Security Architect | Security Hardening & Audits | Security Patches & PRs |
 | `technical_tarkin` | Technical Tarkin | Technical Documentation & ADRs | Architecture decision records |
 | `model_router_mothma` | Model Router Mothma | LLM Model Selection & Routing | Routing configuration |
+| `watcher_wedge` | Watcher Wedge | System Health & Failure Monitoring | Backlog escalated items |
 
 > [!IMPORTANT]
 > **Fleet Governance Rule**: Any new agent added to the `src/agents/` folder and registered in `registry.py` **MUST** be added to the Mermaid diagram and the Agent Fleet table above to maintain architectural transparency.
-
 
 ## 🏗️ Technical Architecture
 
@@ -127,6 +121,7 @@ Exegol agents are **radically stateless**. There is no shared database, no messa
 This design means any agent can be **killed and restarted at any time** without data loss. The fleet is inherently resilient, horizontally scalable, and completely debuggable — just `cat` a file to understand the full system state.
 
 ### Priority-Based Orchestration
+
 The `ExegolOrchestrator` runs a continuous **Fleet Cycle**, making intelligent dispatch decisions in real-time:
 
 1. 🔍 **Evaluate** — Reads `config/priority.json` to rank active repositories by urgency.
@@ -150,6 +145,10 @@ cp .env.example .env  # Add your API keys
 
 # 3. Launch the fleet
 python src/orchestrator.py --fleet
+
+# 🚀 Launch the Workbench (One-Click)
+# This starts the API, the UI, and opens your browser automatically.
+.\Start_Exegol.bat
 ```
 
 Or, if you already know what you want: just say **`go`** and Exegol will identify the highest-priority repository and execute the predefined task suite for the appropriate agent — automatically.
@@ -178,12 +177,12 @@ The snapshot below captures a live moment in the Exegol development loop. This i
 
 ![Active Prompt Example](image.png)
 
-### Key Observations:
+### Key Observations
 
-*   **The Active Prompt in Motion**: This demonstrates `.exegol/active_prompt.md` in action. It serves as the ephemeral "working memory" for the fleet—dynamically generated, executed against, and then replaced.
-*   **The "Go" Command & Autonomous Pivoting**: When the user issues a `go` command, the system performs a strategic pivot. Instead of following a linear path, **Developer Dex** analyzed the backlog and autonomously shifted to the most logical next action. Were this running outside of the IDE autonomously, Dex would've received Poe's handoff. The 'go' command was an example of how the stateless system functions.
-*   **Seamless Handoffs by Poe**: This context was prepared by **Product Poe**, who manages the transition between planning and implementation, ensuring the executing agent has zero ambiguity.
-*   **Continuous State Replacement**: The updates (indicated by green/red diffs in the logs) show how the active prompt is continuously overwritten. Exegol doesn't accumulate "chat history"; it maintains a clean, updated state.
-*   **Radical Persona Divergence**: Note the specific style of the implementation. Each agent brings a radically different "vibe" and technical approach, moving away from generic AI responses toward specialized expertise.
-*   **Backlog Integrity**: This shows that only formal agent calls or the global `go` command can modify the `.exegol/backlog.json`. This strict governance ensures a perfect audit trail of every decision.
-*   **Abstraction to No-Code**: This entire mechanical process is the engine for a future **No-Code UI**. By abstracting these agent loops, we enable complex development through high-level intent rather than manual syntax.
+* **The Active Prompt in Motion**: This demonstrates `.exegol/active_prompt.md` in action. It serves as the ephemeral "working memory" for the fleet—dynamically generated, executed against, and then replaced.
+* **The "Go" Command & Autonomous Pivoting**: When the user issues a `go` command, the system performs a strategic pivot. Instead of following a linear path, **Developer Dex** analyzed the backlog and autonomously shifted to the most logical next action. Were this running outside of the IDE autonomously, Dex would've received Poe's handoff. The 'go' command was an example of how the stateless system functions.
+* **Seamless Handoffs by Poe**: This context was prepared by **Product Poe**, who manages the transition between planning and implementation, ensuring the executing agent has zero ambiguity.
+* **Continuous State Replacement**: The updates (indicated by green/red diffs in the logs) show how the active prompt is continuously overwritten. Exegol doesn't accumulate "chat history"; it maintains a clean, updated state.
+* **Radical Persona Divergence**: Note the specific style of the implementation. Each agent brings a radically different "vibe" and technical approach, moving away from generic AI responses toward specialized expertise.
+* **Backlog Integrity**: This shows that only formal agent calls or the global `go` command can modify the `.exegol/backlog.json`. This strict governance ensures a perfect audit trail of every decision.
+* **Abstraction to No-Code**: This entire mechanical process is the engine for a future **No-Code UI**. By abstracting these agent loops, we enable complex development through high-level intent rather than manual syntax.

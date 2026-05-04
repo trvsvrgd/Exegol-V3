@@ -14,7 +14,10 @@ def log_interaction(
     duration_seconds: float = 0.0,
     errors: Optional[List[str]] = None,
     session_id: Optional[str] = None,
-    state_changes: Optional[Dict[str, Any]] = None
+    state_changes: Optional[Dict[str, Any]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+    token_usage: int = 0,
+    prompt_count: int = 0
 ) -> str:
     """
     Logs an agent's interaction to the .exegol/interaction_logs directory in JSON format.
@@ -46,6 +49,9 @@ def log_interaction(
         "duration_seconds": round(duration_seconds, 2),
         "errors": errors or [],
         "state_changes": state_changes or {},
+        "metrics": metrics or {},
+        "token_usage": token_usage,
+        "prompt_count": prompt_count,
         "repo_path": repo_path
     }
     

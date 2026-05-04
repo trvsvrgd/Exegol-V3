@@ -137,8 +137,9 @@ export default function CostDashboard() {
   const repoPath =
     typeof window !== "undefined"
       ? localStorage.getItem("exegol_repo_path") ||
-        "c:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3"
-      : "c:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3";
+        process.env.NEXT_PUBLIC_REPO_PATH ||
+        ""
+      : process.env.NEXT_PUBLIC_REPO_PATH || "";
 
   const fetchCosts = useCallback(async () => {
     setLoading(true);

@@ -4,6 +4,7 @@ import datetime
 import importlib
 from tools.gmail_tool import send_gmail_message
 from tools.agent_introspection import introspect_agent
+from tools.fleet_logger import log_interaction
 
 
 class ChiefOfStaffChewieAgent:
@@ -86,7 +87,13 @@ class ChiefOfStaffChewieAgent:
         """Group log entries by agent_id and compute summary stats."""
         stats: dict = {}
         for entry in logs:
-            aid = entry.get("agent_id", "unknown")
+            raw_aid = entry.get("agent_id", "unknown")
+            # Normalize aid to snake_case and strip suffix for registry lookup
+            import re
+            aid = re.sub(r'(?<!^)(?=[A-Z])', '_', raw_aid).lower()
+            if aid.endswith("_agent"):
+                aid = aid[:-6]
+            
             if aid not in stats:
                 stats[aid] = {
                     "runs": 0,
@@ -449,7 +456,7 @@ class ChiefOfStaffChewieAgent:
 
             # Check for missing success criteria
             if not declared_metrics or "_load_error" in declared_metrics:
-                task_id = f"improve_{agent_id}_metrics_{int(datetime.datetime.now().timestamp())}"
+                task_id = f"improve_{agent_id}_metrics"
                 task = {
                     "id": task_id,
                     "summary": f"Define and implement success criteria for {class_name}",
@@ -466,7 +473,7 @@ class ChiefOfStaffChewieAgent:
 
             # If grade indicates underperformance, create optimization task
             if review["grade"] in ["C", "D", "F"]:
-                task_id = f"optimize_{agent_id}_{int(datetime.datetime.now().timestamp())}"
+                task_id = f"optimize_{agent_id}"
                 task = {
                     "id": task_id,
                     "summary": f"Optimize and improve {class_name} performance (Grade: {review['grade']})",
@@ -482,7 +489,7 @@ class ChiefOfStaffChewieAgent:
 
         # Send clarifications to Thoughtful Thrawn to discuss with human
         if clarifications:
-            msg = f"🤔 *Monthly Review Clarification Needed (Routing to Thoughtful Thrawn)*:\n"
+            msg = f"Monthly Review Clarification Needed (Routing to Thoughtful Thrawn):\n"
             for c in clarifications:
                 msg += f"• {c}\n"
             msg += "\n_Please provide answers to unblock agent optimizations._"
@@ -568,6 +575,15 @@ class ChiefOfStaffChewieAgent:
             )
             post_to_slack(slack_msg)
             
+            log_interaction(
+                agent_id=self.name,
+                outcome="failure",
+                task_summary=f"Monthly review delivery FAILED: {error_msg}",
+                repo_path=repo_path,
+                session_id=handoff.session_id,
+                errors=[error_msg]
+            )
+
             return (
                 f"Monthly review generated but email delivery FAILED. "
                 f"A critical task has been added to the backlog and Thrawn has been notified. "
@@ -576,6 +592,19 @@ class ChiefOfStaffChewieAgent:
 
         # Restore review period
         self.review_period_days = original_period
+
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=f"Monthly performance review complete. {len(reviews)} agents reviewed.",
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            metrics={
+                "total_reviewed": len(reviews),
+                "underperformers": len(underperformers),
+                "improvements": len(improvements)
+            }
+        )
 
         return (
             f"Monthly performance review complete. {len(reviews)} agents reviewed. "
@@ -626,9 +655,9 @@ class ChiefOfStaffChewieAgent:
             )
             reviews.append(review)
 
-            grade_emoji = {"A": "🟢", "B": "🟡", "C": "🟠",
-                           "D": "🔴", "F": "⛔"}.get(review["grade"], "❓")
-            print(f"[{self.name}] {grade_emoji} {class_name}: "
+            grade_label = {"A": "[A]", "B": "[B]", "C": "[C]",
+                           "D": "[D]", "F": "[F]"}.get(review["grade"], "[?]")
+            print(f"[{self.name}] {grade_label} {class_name}: "
                   f"Grade {review['grade']}")
 
         # 4. Fleet summary
@@ -647,7 +676,7 @@ class ChiefOfStaffChewieAgent:
         print(f"[{self.name}] Reviews complete: {len(reviews)} agents reviewed.")
         print(f"[{self.name}] Grade distribution: {grade_dist}")
         if underperformers:
-            print(f"[{self.name}] ⚠ {len(underperformers)} underperformer(s) flagged.")
+            print(f"[{self.name}] ALERT: {len(underperformers)} underperformer(s) flagged.")
 
         # 5. Compose email
         email_payload = self._compose_review_email(reviews, fleet_summary)
@@ -692,6 +721,18 @@ class ChiefOfStaffChewieAgent:
             body_html=email_payload["body_html"]
         )
         print(f"[{self.name}] {result}")
+
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=f"Performance review complete. {len(reviews)} agents reviewed. Grades: {grade_dist}.",
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            metrics={
+                "total_reviewed": len(reviews),
+                "underperformers": len(underperformers)
+            }
+        )
 
         return (
             f"Performance review complete. {len(reviews)} agents reviewed. "

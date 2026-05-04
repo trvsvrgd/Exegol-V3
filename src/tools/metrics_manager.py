@@ -3,6 +3,7 @@ import json
 import datetime
 from typing import List, Dict, Any, Tuple
 from tools.fleet_logger import read_interaction_logs
+from agents.registry import AGENT_REGISTRY
 
 class SuccessMetricsManager:
     """Calculates and persists agent success metrics across the fleet.
@@ -15,6 +16,8 @@ class SuccessMetricsManager:
         self.metrics_dir = os.path.join(repo_path, ".exegol", "fleet_reports")
         os.makedirs(self.metrics_dir, exist_ok=True)
         self.metrics_file = os.path.join(self.metrics_dir, "metrics.json")
+        self.judge_dir = os.path.join(repo_path, ".exegol", "optimizer_reports", "judge_evals")
+        os.makedirs(self.judge_dir, exist_ok=True)
 
     def calculate_metrics(self, days: int = 30) -> Dict[str, Any]:
         """Analyzes interaction logs to calculate advanced per-agent metrics."""
@@ -27,7 +30,8 @@ class SuccessMetricsManager:
         recent_stats = self._process_logs(recent_logs)
         
         agent_breakdown = {}
-        all_agent_ids = set(baseline_stats.keys()) | set(recent_stats.keys())
+        # Ensure all registered agents are included, even with zero logs
+        all_agent_ids = set(AGENT_REGISTRY.keys()) | set(baseline_stats.keys()) | set(recent_stats.keys())
         
         for agent_id in all_agent_ids:
             b_stats = baseline_stats.get(agent_id, {})
@@ -40,10 +44,9 @@ class SuccessMetricsManager:
             # Recall = Success Rate
             recall = successes / total_sessions if total_sessions > 0 else 0
             
-            # Precision = Successes that are qualitatively high quality
-            # (In this version, we mock precision based on successful outcomes without errors)
-            # In a full impl, this would join with LLMJudge scores.
-            precision = max(0.0, (successes - b_stats.get("errors_count", 0)) / successes) if successes > 0 else 0
+            # Precision = Qualitative quality score from LLM Judge
+            # We fetch cached judge scores or sample recent sessions for auditing.
+            precision = self._calculate_real_precision(agent_id, b_stats.get("logs", []))
             
             # Drift = Recent Success Rate - Baseline Success Rate
             recent_success_rate = r_stats.get("success_rate", 0)
@@ -54,10 +57,15 @@ class SuccessMetricsManager:
                 "recall": round(recall, 2),
                 "precision": round(precision, 2),
                 "drift": round(drift, 2),
+                "success_rate": round(recall, 2),
                 "avg_steps": round(b_stats.get("avg_steps", 0), 1),
                 "avg_duration": round(b_stats.get("avg_duration", 0), 1),
+                "avg_prompts": round(b_stats.get("avg_prompts", 0), 1),
+                "avg_tokens": round(b_stats.get("avg_tokens", 0), 0),
                 "total_sessions": total_sessions,
-                "status": "improving" if drift > 0.05 else "declining" if drift < -0.05 else "stable"
+                "status": "improving" if drift > 0.05 else "declining" if drift < -0.05 else "stable",
+                "tools_accessible": AGENT_REGISTRY.get(agent_id, {}).get("tools", []),
+                "custom_metrics": b_stats.get("latest_metrics", {})
             }
 
         report = {
@@ -86,8 +94,14 @@ class SuccessMetricsManager:
 
     def _process_logs(self, logs: List[dict]) -> Dict[str, Any]:
         stats = {}
+        # Map class names to IDs to handle mixed logging
+        class_to_id = {v["class"]: k for k, v in AGENT_REGISTRY.items()}
+        
         for log in logs:
-            agent_id = log.get("agent_id", "unknown")
+            raw_id = log.get("agent_id", "unknown")
+            # Normalize to snake_case ID from registry
+            agent_id = raw_id if raw_id in AGENT_REGISTRY else class_to_id.get(raw_id, raw_id)
+            
             if agent_id not in stats:
                 stats[agent_id] = {
                     "total_sessions": 0,
@@ -95,11 +109,15 @@ class SuccessMetricsManager:
                     "failures": 0,
                     "avg_steps": 0,
                     "total_duration": 0,
-                    "errors_count": 0
+                    "total_prompts": 0,
+                    "total_tokens": 0,
+                    "errors_count": 0,
+                    "logs": []
                 }
             
             s = stats[agent_id]
             s["total_sessions"] += 1
+            s["logs"].append(log)
             if log.get("outcome") == "success":
                 s["successes"] += 1
             elif log.get("outcome") == "failure":
@@ -108,12 +126,93 @@ class SuccessMetricsManager:
             s["errors_count"] += len(log.get("errors", []))
             s["avg_steps"] = (s["avg_steps"] * (s["total_sessions"] - 1) + log.get("steps_used", 0)) / s["total_sessions"]
             s["total_duration"] += log.get("duration_seconds", 0)
+            s["total_prompts"] += log.get("prompt_count", 0)
+            s["total_tokens"] += log.get("token_usage", 0)
+            
+            # Capture latest custom metrics
+            if log.get("metrics"):
+                s["latest_metrics"] = log.get("metrics")
 
         for agent_id, s in stats.items():
             s["success_rate"] = s["successes"] / s["total_sessions"] if s["total_sessions"] > 0 else 0
             s["avg_duration"] = s["total_duration"] / s["total_sessions"] if s["total_sessions"] > 0 else 0
+            s["avg_prompts"] = s["total_prompts"] / s["total_sessions"] if s["total_sessions"] > 0 else 0
+            s["avg_tokens"] = s["total_tokens"] / s["total_sessions"] if s["total_sessions"] > 0 else 0
             
         return stats
+
+    def _calculate_real_precision(self, agent_id: str, logs: List[dict]) -> float:
+        """Calculates a qualitative precision score by sampling sessions with LLMJudge."""
+        if not logs:
+            return 0.0
+            
+        from tools.llm_judge import LLMJudge
+        
+        # 1. Look for existing judge evaluations in the judge_dir
+        scored_sessions = 0
+        total_score = 0.0
+        
+        # Sample up to 5 successful sessions for auditing if not already judged
+        successful_logs = [l for l in logs if l.get("outcome") == "success"]
+        if not successful_logs:
+            return 0.0
+            
+        sample_size = min(len(successful_logs), 3)
+        import random
+        # Use a stable seed for consistent reporting within a day
+        random.seed(datetime.date.today().toordinal())
+        sample = random.sample(successful_logs, sample_size)
+        
+        for log in sample:
+            session_id = log.get("session_id", "unknown")
+            judge_file = os.path.join(self.judge_dir, f"judge_{session_id}.json")
+            
+            evaluation = None
+            if os.path.exists(judge_file):
+                try:
+                    with open(judge_file, "r") as f:
+                        evaluation = json.load(f)
+                except:
+                    pass
+            
+            # 2. Try to get precision from QualityQuigon metrics in related logs
+            if not evaluation:
+                # Look for a QualityQuigon log in the same session
+                quigon_logs = [l for l in logs if l.get("agent_id") == "QualityQuigonAgent" and l.get("session_id") == session_id]
+                if quigon_logs:
+                    q_log = quigon_logs[0]
+                    der_str = q_log.get("metrics", {}).get("defect_escape_rate", "100%").replace("%", "")
+                    try:
+                        der = float(der_str) / 100.0
+                        total_score += (1.0 - der)
+                        scored_sessions += 1
+                        continue # Found a good metric, skip LLM Judge
+                    except:
+                        pass
+
+            # 3. Last resort: Proactively audit with LLM Judge
+            if not evaluation or evaluation.get("error"):
+                print(f"[SuccessMetricsManager] Auditing session {session_id} for {agent_id}...")
+                evaluation = LLMJudge.evaluate_session(log)
+                if evaluation and not evaluation.get("error"):
+                    try:
+                        with open(judge_file, "w") as f:
+                            json.dump(evaluation, f, indent=2)
+                    except:
+                        pass
+
+            if evaluation and "score" in evaluation:
+                # Score is 0-10, normalize to 0.0-1.0
+                total_score += (evaluation["score"] / 10.0)
+                scored_sessions += 1
+                
+        if scored_sessions > 0:
+            return round(total_score / scored_sessions, 2)
+            
+        # 4. Ultimate Fallback: Heuristic based on errors in the provided logs
+        successes = len(successful_logs)
+        errors = sum(len(l.get("errors", [])) for l in successful_logs)
+        return max(0.0, (successes - errors) / successes) if successes > 0 else 0.0
 
     def _save_report(self, report: Dict[str, Any]):
         try:
@@ -121,6 +220,11 @@ class SuccessMetricsManager:
                 json.dump(report, f, indent=4)
         except Exception as e:
             print(f"[SuccessMetricsManager] Failed to save metrics: {e}")
+
+    def load_logs(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Wraps fleet_logger.read_interaction_logs for convenience."""
+        return read_interaction_logs([self.repo_path], days=days)
+
 
     def get_agent_scorecard(self, agent_id: str) -> Dict[str, Any]:
         """Returns a concise scorecard for a specific agent."""

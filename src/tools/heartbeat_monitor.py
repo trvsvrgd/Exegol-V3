@@ -262,3 +262,26 @@ class HeartbeatMonitor:
                 json.dump(metadata, f, indent=4)
         except OSError as exc:
             print(f"[HeartbeatMonitor] Warning: Could not write heartbeat file: {exc}")
+
+    @staticmethod
+    def pulse_session(repo_path: str, session_id: str) -> None:
+        """Static helper to refresh a heartbeat file without an active monitor instance.
+        
+        Useful for tools or agents to signal they are alive during long-running operations.
+        """
+        hb_dir = os.path.join(repo_path, ".exegol", _HEARTBEAT_DIR_NAME)
+        hb_path = os.path.join(hb_dir, f"{session_id}.json")
+        
+        if not os.path.exists(hb_path):
+            return
+            
+        try:
+            with open(hb_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            data["last_pulse"] = datetime.now().isoformat()
+            
+            with open(hb_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+        except (OSError, json.JSONDecodeError):
+            pass

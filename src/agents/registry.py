@@ -1,11 +1,11 @@
 AGENT_REGISTRY = {
-    "cameraman_cassian": {
-        "class": "CameramanCassianAgent",
-        "module": "agents.cameraman_cassian_agent",
-        "wake_word": "cassian",
-        "tools": ["playwright_recorder", "video_clipper"],
-        "max_steps": 10
-    },
+#    "cameraman_cassian": {
+#        "class": "CameramanCassianAgent",
+#        "module": "agents.cameraman_cassian_agent",
+#        "wake_word": "cassian",
+#        "tools": ["playwright_recorder", "video_clipper"],
+#        "max_steps": 10
+#    },
     "intel_ima": {
         "class": "IntelImaAgent",
         "module": "agents.intel_ima_agent",
@@ -131,5 +131,33 @@ AGENT_REGISTRY = {
         "wake_word": "mothma",
         "tools": ["web_search", "file_editor"],
         "max_steps": 15
+    },
+    "watcher_wedge": {
+        "class": "WatcherWedgeAgent",
+        "module": "agents.watcher_wedge_agent",
+        "wake_word": "wedge",
+        "tools": ["log_reader", "repo_scanner", "backlog_writer", "slack_notifier"],
+        "max_steps": 10
+    },
+    "strategist_sloane": {
+        "class": "StrategistSloaneAgent",
+        "module": "agents.strategist_sloane_agent",
+        "wake_word": "sloane",
+        "tools": ["web_search", "diagram_generator", "backlog_writer"],
+        "max_steps": 10
+    },
+    "growth_galen": {
+        "class": "GrowthGalenAgent",
+        "module": "agents.growth_galen_agent",
+        "wake_word": "galen",
+        "tools": ["web_search", "slack_notifier", "backlog_writer"],
+        "max_steps": 10
+    },
+    "finance_fennec": {
+        "class": "FinanceFennecAgent",
+        "module": "agents.finance_fennec_agent",
+        "wake_word": "fennec",
+        "tools": ["cost_analyzer", "web_search"],
+        "max_steps": 10
     }
 }

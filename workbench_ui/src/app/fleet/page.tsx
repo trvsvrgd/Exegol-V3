@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import FleetHealth from "../../components/FleetHealth";
 
+import { apiGet } from "../api-client";
+
 interface FleetSummary {
   totalRepos: number;
   totalBacklog: number;
@@ -19,25 +21,23 @@ export default function FleetDashboard() {
     activeAgents: 0,
   });
 
-  const fetchHealth = () => {
-    fetch("http://localhost:8000/fleet/health", {
-      headers: { "X-API-Key": "dev-local-key" }
-    })
-      .then(res => res.json())
-      .then(data => {
-        setMetrics(data);
-        const totalBacklog = data.reduce((acc: number, curr: any) => acc + curr.backlog_count, 0);
-        const avgSuccess = data.reduce((acc: number, curr: any) => acc + curr.success_rate, 0) / data.length;
-        const activeCount = data.filter((m: any) => m.status === "active").length;
-        
-        setSummary({
-          totalRepos: data.length,
-          totalBacklog,
-          avgSuccessRate: avgSuccess,
-          activeAgents: activeCount,
-        });
-      })
-      .catch(err => console.error("Failed to fetch fleet health:", err));
+  const fetchHealth = async () => {
+    try {
+      const data = await apiGet<any[]>("/fleet/health");
+      setMetrics(data);
+      const totalBacklog = data.reduce((acc: number, curr: any) => acc + curr.backlog_count, 0);
+      const avgSuccess = data.length > 0 ? data.reduce((acc: number, curr: any) => acc + curr.success_rate, 0) / data.length : 0;
+      const activeCount = data.filter((m: any) => m.status === "active").length;
+      
+      setSummary({
+        totalRepos: data.length,
+        totalBacklog,
+        avgSuccessRate: avgSuccess,
+        activeAgents: activeCount,
+      });
+    } catch (err) {
+      console.error("Failed to fetch fleet health:", err);
+    }
   };
 
   useEffect(() => {

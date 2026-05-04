@@ -65,7 +65,7 @@ class TechnicalTarkinAgent:
             compliance_data = self._analyze_compliance_capabilities(repo_path)
 
         # 3. Plan and Execute Documentation Updates
-        planning_prompt = f\"\"\"
+        planning_prompt = f"""
         User Mission: {active_task}
         
         Repository Compliance Context: {json.dumps(compliance_data, indent=2)}
@@ -86,7 +86,7 @@ class TechnicalTarkinAgent:
                 }}
             ]
         }}
-        \"\"\"
+        """
 
         response = self.llm_client.generate(planning_prompt, system_instruction=self.system_prompt, json_format=True)
         plan = self.llm_client.parse_json_response(response)
@@ -118,6 +118,10 @@ class TechnicalTarkinAgent:
         post_to_slack(notification)
 
         duration = time.time() - start_time
+        
+        # Calculate success metrics before logging
+        metrics = self._calculate_success_metrics(repo_path)
+        
         log_interaction(
             agent_id=self.name,
             outcome="success",
@@ -125,25 +129,117 @@ class TechnicalTarkinAgent:
             repo_path=repo_path,
             steps_used=self._steps_used,
             duration_seconds=duration,
-            session_id=handoff.session_id
+            session_id=handoff.session_id,
+            metrics=metrics
         )
 
         return f"Mission complete. Results:\n" + "\n".join(results)
 
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates documentation quality metrics."""
+        metrics = {
+            "documentation_coverage": 0.0,
+            "readme_visual_score": 0.0,
+            "compliance_transparency": 0.0
+        }
+        
+        # 1. Documentation Coverage
+        src_dir = os.path.join(repo_path, "src")
+        python_files = []
+        for root, _, files in os.walk(src_dir):
+            for f in files:
+                if f.endswith(".py") and "__init__" not in f:
+                    python_files.append(f)
+        
+        if python_files:
+            docs_dir = os.path.join(repo_path, "docs")
+            documented_files = 0
+            readme_content = ""
+            readme_path = os.path.join(repo_path, "README.md")
+            if os.path.exists(readme_path):
+                with open(readme_path, 'r', encoding='utf-8') as f:
+                    readme_content = f.read()
+            
+            for py_file in python_files:
+                base_name = py_file.replace(".py", "")
+                # Check in docs/
+                doc_found = False
+                if os.path.exists(docs_dir):
+                    for df in os.listdir(docs_dir):
+                        if base_name.lower() in df.lower():
+                            doc_found = True
+                            break
+                # Check in README
+                if not doc_found and base_name.lower() in readme_content.lower():
+                    doc_found = True
+                
+                if doc_found:
+                    documented_files += 1
+            
+            metrics["documentation_coverage"] = round(documented_files / len(python_files), 2)
+
+        # 2. Visual Score (Mermaid blocks)
+        visual_score = 0
+        all_md_content = ""
+        # Check README
+        readme_path = os.path.join(repo_path, "README.md")
+        if os.path.exists(readme_path):
+            with open(readme_path, 'r', encoding='utf-8') as f:
+                all_md_content += f.read()
+        
+        # Check docs/
+        docs_dir = os.path.join(repo_path, "docs")
+        if os.path.exists(docs_dir):
+            for root, _, files in os.walk(docs_dir):
+                for f in files:
+                    if f.endswith(".md"):
+                        with open(os.path.join(root, f), 'r', encoding='utf-8') as md_f:
+                            all_md_content += md_f.read()
+        
+        mermaid_blocks = all_md_content.count("```mermaid")
+        if mermaid_blocks >= 3:
+            visual_score = 1.0
+        elif mermaid_blocks >= 1:
+            visual_score = 0.5
+        
+        metrics["readme_visual_score"] = visual_score
+
+        # 3. Compliance Transparency
+        security_files = ["security_audit_logger.py", "rbac_manager.py", "egress_filter.py", "safety_gate.py"]
+        documented_security = 0
+        for sec_f in security_files:
+            if sec_f.replace(".py", "").lower() in all_md_content.lower():
+                documented_security += 1
+        
+        metrics["compliance_transparency"] = round(documented_security / len(security_files), 2)
+
+        return metrics
+
     def _analyze_compliance_capabilities(self, repo_path):
         """Scans the codebase for compliance and auditing features."""
-        # In a real implementation, this would look for:
-        # - Audit logs (fleet_logger, security_audit_logger)
-        # - RBAC configs
-        # - Input sanitization
-        # - Egress filters
         print(f"[{self.name}] Scanning for compliance and auditing capabilities...")
         
-        # Mock analysis result
-        return {
-            "audit_logging": "Centralized via fleet_logger.py and security_audit_logger.py",
-            "rbac": "Implemented in rbac_manager.py with path-based write grants",
-            "input_security": "Handled by input_sanitizer.py and safety_gate.py",
-            "network_security": "Egress filtering in egress_filter.py",
-            "traceability": "HandoffContext with session IDs and snapshot hashing"
+        tools_dir = os.path.join(repo_path, "src", "tools")
+        capabilities = {}
+        
+        check_map = {
+            "audit_logging": ["fleet_logger.py", "security_audit_logger.py"],
+            "rbac": ["rbac_manager.py"],
+            "input_security": ["input_sanitizer.py", "safety_gate.py"],
+            "network_security": ["egress_filter.py"],
+            "traceability": ["snapshot_tester.py"]
         }
+        
+        for cap, files in check_map.items():
+            found = []
+            for f in files:
+                if os.path.exists(os.path.join(tools_dir, f)):
+                    found.append(f)
+            
+            if found:
+                capabilities[cap] = f"Implemented via {', '.join(found)}"
+            else:
+                capabilities[cap] = "Not detected / Missing implementation"
+
+        return capabilities
+

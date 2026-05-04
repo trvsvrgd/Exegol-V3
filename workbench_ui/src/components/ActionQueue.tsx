@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { apiGet, apiPost } from '../app/api-client';
 
 interface ActionItem {
     id: string;
@@ -18,9 +19,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
 
     const fetchQueue = async () => {
         try {
-            const res = await fetch(`http://localhost:8000/human-queue?repo_path=${encodeURIComponent(repoPath)}`);
-            if (!res.ok) throw new Error("Failed to fetch");
-            const data = await res.json();
+            const data = await apiGet<ActionItem[]>(`/human-queue?repo_path=${encodeURIComponent(repoPath)}`);
             setQueue(data);
             setLoading(false);
         } catch (err) {
@@ -35,11 +34,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
 
     const handleAction = async (itemId: string, action: string, notes?: string) => {
         try {
-            await fetch('http://localhost:8000/human-queue/action', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_path: repoPath, action, item_id: itemId, notes })
-            });
+            await apiPost('/human-queue/action', { repo_path: repoPath, action, item_id: itemId, notes });
             fetchQueue();
         } catch (err) {
             console.error(`Failed to perform action ${action}:`, err);

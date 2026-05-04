@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { apiGet, apiPost } from '../app/api-client';
 
 interface Task {
     id: string;
@@ -18,9 +19,7 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
 
     const fetchBacklog = async () => {
         try {
-            const res = await fetch(`http://localhost:8000/backlog?repo_path=${encodeURIComponent(repoPath)}`);
-            if (!res.ok) throw new Error("Fetch failed");
-            const data = await res.json();
+            const data = await apiGet<Task[]>(`/backlog?repo_path=${encodeURIComponent(repoPath)}`);
             setBacklog(data);
             setLoading(false);
         } catch (err) {
@@ -35,12 +34,8 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
 
     const handleUpdate = async (taskId: string, updates: any) => {
         try {
-            const res = await fetch('http://localhost:8000/backlog/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_path: repoPath, task_id: taskId, updates })
-            });
-            if (res.ok) fetchBacklog();
+            await apiPost('/backlog/update', { repo_path: repoPath, task_id: taskId, updates });
+            fetchBacklog();
         } catch (err) {
             console.error(err);
         }
@@ -66,13 +61,9 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
 
         // Persist the new order to the backend
         try {
-            await fetch('http://localhost:8000/backlog/reorder', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    repo_path: repoPath, 
-                    task_ids: newBacklog.map(t => t.id) 
-                })
+            await apiPost('/backlog/reorder', { 
+                repo_path: repoPath, 
+                task_ids: newBacklog.map(t => t.id) 
             });
         } catch (err) {
             console.error("Failed to persist reorder:", err);

@@ -83,6 +83,10 @@
     "compliance_monitoring": {
       "last_run": "2026-04-19",
       "frequency_days": 30
+    },
+    "vibe_audit": {
+      "last_run": "2026-05-02",
+      "frequency_days": 7
     }
   }
 }

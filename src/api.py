@@ -17,6 +17,8 @@ from agents.registry import AGENT_REGISTRY
 from tools.state_manager import StateManager
 from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.egress_filter import EgressFilter
+from tools.fleet_logger import read_interaction_logs
+from tools.tool_registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -52,7 +54,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     """Validates X-API-Key header on all non-public endpoints."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in _PUBLIC_PATHS:
+        if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
 
         provided_key = request.headers.get("X-API-Key", "")
@@ -157,7 +159,12 @@ async def get_repos():
 @app.get("/agents")
 async def get_agents():
     return [
-        {"id": k, "name": v["class"], "wake_word": v["wake_word"], "tools": v["tools"]}
+        {
+            "id": k, 
+            "name": v["class"], 
+            "wake_word": v["wake_word"], 
+            "tools": [ToolRegistry.get_tool(t_id) | {"id": t_id} for t_id in v["tools"]]
+        }
         for k, v in AGENT_REGISTRY.items()
     ]
 
@@ -375,6 +382,26 @@ async def get_fleet_metrics(repo_path: str):
     mgr = SuccessMetricsManager(repo_path)
     return mgr.calculate_metrics()
 
+@app.get("/fleet/interactions")
+async def get_fleet_interactions(
+    repo_path: str, 
+    agent_id: Optional[str] = None, 
+    outcome: Optional[str] = None, 
+    days: int = 30
+):
+    """Fetches detailed interaction logs for drill-down analysis."""
+    logs = read_interaction_logs([repo_path], days=days)
+    
+    # Filtering
+    if agent_id:
+        logs = [l for l in logs if l.get("agent_id") == agent_id]
+    if outcome:
+        logs = [l for l in logs if l.get("outcome") == outcome]
+        
+    # Sort by timestamp descending
+    logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return logs
+
 @app.get("/fleet/health")
 async def get_fleet_health():
     """Aggregates health metrics across all managed repositories."""
@@ -422,6 +449,44 @@ async def get_fleet_health():
 
     return health_data
 
+@app.get("/fleet/tools")
+async def get_fleet_tools(repo_path: str):
+    """Returns the comprehensive tool registry with usage statistics."""
+    from tools.fleet_logger import read_interaction_logs
+    from agents.registry import AGENT_REGISTRY
+    
+    logs = read_interaction_logs([repo_path], days=30)
+    tool_usage = {}
+    
+    # 1. Map agents to tools
+    agent_tools = {k: v["tools"] for k, v in AGENT_REGISTRY.items()}
+    
+    # 2. Count tool usage from logs (if logged)
+    # Note: Currently tools are not explicitly logged in interaction_logs.
+    # We can infer usage from agent logs for now.
+    for log in logs:
+        agent_id = log.get("agent_id")
+        if agent_id in agent_tools:
+            for t_id in agent_tools[agent_id]:
+                tool_usage[t_id] = tool_usage.get(t_id, 0) + 1
+
+    registry = ToolRegistry.get_all_tools()
+    result = []
+    for t_id, info in registry.items():
+        # Find which agents have this tool
+        owners = [a_id for a_id, tools in agent_tools.items() if t_id in tools]
+        
+        result.append({
+            "id": t_id,
+            "description": info["description"],
+            "risk": info["risk"],
+            "category": info["category"],
+            "agents": owners,
+            "usage_count": tool_usage.get(t_id, 0)
+        })
+    
+    return result
+
 # --- Epic 6: Evaluation Reports ---
 
 @app.get("/evaluations")
@@ -450,19 +515,39 @@ async def get_evaluation_report(filename: str, repo_path: str):
     with open(report_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# --- Epic 7: FinOps Cost Dashboard (arch_finops_dashboard) ---
+# --- Epic 8: MCP & Error Handling ---
 
-@app.get("/costs")
-async def get_costs(repo_path: str, days: int = 30):
+@app.post("/fatal-error")
+async def handle_fatal_error(req: Dict[str, Any]):
     """
-    Returns a real FinOps cost report for the given repo, computed from
-    fleet interaction logs by the CostAnalyzer tool (Intel Ima).
+    Handles terminal errors marked as 'FATAL'. 
+    Routes them to the backlog for immediate developer attention.
     """
-    from tools.cost_analyzer import get_cost_report
-    try:
-        return get_cost_report(repo_path, days=days)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Cost analysis failed: {exc}")
+    repo_path = req.get("repo_path")
+    error_message = req.get("error_message")
+    context = req.get("context", "")
+
+    if not repo_path or not error_message:
+        raise HTTPException(status_code=400, detail="Missing repo_path or error_message")
+
+    sm = StateManager(repo_path)
+    backlog = sm.read_json(".exegol/backlog.json") or []
+
+    new_task = {
+        "id": f"fatal_{uuid.uuid4().hex[:6]}",
+        "summary": f"🚨 FATAL ERROR: {error_message}",
+        "description": f"Context: {context}",
+        "priority": "critical",
+        "status": "todo",
+        "target_agent": "developer_dex",
+        "source": "antigravity_mcp",
+        "created_at": datetime.datetime.now().isoformat(),
+    }
+
+    backlog.insert(0, new_task) # Priority at the top
+    sm.write_json(".exegol/backlog.json", backlog)
+    
+    return {"status": "success", "task_id": new_task["id"]}
 
 
 if __name__ == "__main__":

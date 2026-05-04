@@ -46,6 +46,28 @@ class LLMClient(ABC):
                 except: pass
             return {"error": "Invalid JSON", "raw": text}
 
+class TrackingLLMClient(LLMClient):
+    """Wraps an LLMClient to track usage metrics."""
+    def __init__(self, base_client: LLMClient):
+        super().__init__(base_client.model)
+        self.base_client = base_client
+        self.prompt_count = 0
+        self.token_usage = 0
+
+    def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
+        self.prompt_count += 1
+        # Simple heuristic: 1 token ~= 4 characters for now
+        self.token_usage += (len(prompt) + (len(system_instruction) if system_instruction else 0)) // 4
+        
+        response = self.base_client.generate(prompt, system_instruction, json_format)
+        
+        # Add response tokens
+        self.token_usage += len(response) // 4
+        return response
+
+    def generate_system_prompt(self, agent: Any) -> str:
+        return self.base_client.generate_system_prompt(agent)
+
 class OllamaClient(LLMClient):
     def __init__(self, model: Optional[str] = None):
         super().__init__(model or os.getenv("OLLAMA_MODEL", "llama3"))
@@ -90,14 +112,59 @@ class GeminiClient(LLMClient):
             return f"Gemini Error: {e}"
 
 class VLLMClient(LLMClient):
-    """Placeholder for high-throughput vLLM backend."""
+    """Client for high-throughput vLLM backend, following OpenAI API standards."""
+    def __init__(self, model: Optional[str] = None):
+        super().__init__(model or os.getenv("VLLM_MODEL", "facebook/opt-125m"))
+        self.api_url = os.getenv("VLLM_URL", "http://localhost:8000/v1/chat/completions")
+        self.api_key = os.getenv("VLLM_API_KEY", "EMPTY")
+
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
-        return "vLLM Provider not yet implemented."
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_instruction or "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 4096
+        }
+        try:
+            if not EgressFilter.is_url_allowed(self.api_url):
+                return f"Security Error: Blocked attempt to access non-allowlisted host in vLLM URL: {self.api_url}"
+                
+            response = requests.post(
+                self.api_url, 
+                json=payload, 
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=120
+            )
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            return f"vLLM Error: {e}"
 
 class LlamaCppClient(LLMClient):
-    """Placeholder for memory-efficient llama.cpp backend."""
+    """Client for memory-efficient llama.cpp backend, following OpenAI API standards."""
+    def __init__(self, model: Optional[str] = None):
+        super().__init__(model or os.getenv("LLAMACPP_MODEL", "local-model"))
+        self.api_url = os.getenv("LLAMACPP_URL", "http://localhost:8080/v1/chat/completions")
+
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
-        return "llama.cpp Provider not yet implemented."
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_instruction or "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+        try:
+            if not EgressFilter.is_url_allowed(self.api_url):
+                return f"Security Error: Blocked attempt to access non-allowlisted host in llama.cpp URL: {self.api_url}"
+                
+            response = requests.post(self.api_url, json=payload, timeout=120)
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            return f"llama.cpp Error: {e}"
 
 class AnthropicClient(LLMClient):
     """Client for Anthropic Claude models via official SDK."""

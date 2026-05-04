@@ -3,6 +3,7 @@ import json
 import datetime
 from tools.gmail_tool import send_gmail_message
 from tools.backlog_manager import BacklogManager
+from tools.fleet_logger import log_interaction
 
 
 class OptimizerAhsokaAgent:
@@ -496,6 +497,19 @@ Return ONLY the JSON array.
         # 8. Check for usage milestones (e.g. 20 runs) and perform deep analysis
         all_logs = self._load_interaction_logs(repo_path, days=0)
         self._check_milestones(repo_path, all_logs, AGENT_REGISTRY)
+
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=f"Weekly optimization report generated and emailed to {self.report_email}.",
+            repo_path=repo_path,
+            session_id=handoff.session_id,
+            metrics={
+                "agents_analyzed": len(suggestions),
+                "free_tool": free_tool['name'],
+                "paid_tool": paid_tool['name']
+            }
+        )
 
         return (
             f"Weekly optimization report generated and emailed. "

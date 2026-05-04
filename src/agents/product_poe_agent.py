@@ -6,6 +6,8 @@ from tools.backlog_manager import BacklogManager
 from tools.web_search import web_search
 from tools.backlog_groomer import select_next_task
 from tools.prompt_generator import generate_active_prompt
+from tools.metrics_manager import SuccessMetricsManager
+from tools.heartbeat_monitor import HeartbeatMonitor
 
 
 class ProductPoeAgent:
@@ -38,6 +40,40 @@ class ProductPoeAgent:
             }
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates grooming and readiness metrics based on recent logs."""
+        logs = self.metrics_manager.load_logs(days=7)
+        agent_logs = [l for l in logs if l.get("agent_id") == self.name]
+        
+        if not agent_logs:
+            return {
+                "app_definition_readiness": 0.0,
+                "backlog_grooming_completeness": 0.0,
+                "prompt_rejection_rate": 0.0
+            }
+
+        successful_runs = [l for l in agent_logs if l.get("outcome") == "success"]
+        readiness = len(successful_runs) / len(agent_logs) if agent_logs else 0.0
+        
+        # Heuristic for grooming: count tasks in 'in_progress' or 'completed'
+        bm = BacklogManager(repo_path)
+        backlog = bm.load_backlog()
+        total_tasks = len(backlog)
+        groomed_tasks = len([t for t in backlog if t.get("status") in ["in_progress", "completed"]])
+        grooming_completeness = groomed_tasks / total_tasks if total_tasks else 1.0
+
+        # Heuristic for rejection: check logs for 'retry' or 'rejected' keywords in task summaries
+        rejections = len([l for l in logs if "rejected" in l.get("task_summary", "").lower()])
+        total_prompts = len([l for l in agent_logs if "prompt" in l.get("task_summary", "").lower()])
+        rejection_rate = rejections / total_prompts if total_prompts else 0.0
+
+        return {
+            "app_definition_readiness": round(readiness * 100, 1),
+            "backlog_grooming_completeness": round(grooming_completeness * 100, 1),
+            "prompt_rejection_rate": round(rejection_rate * 100, 1)
+        }
 
 
     def execute(self, handoff):
@@ -60,7 +96,21 @@ class ProductPoeAgent:
             bm = BacklogManager(repo_path)
             backlog = bm.load_backlog()
 
-            task, source = select_next_task(backlog)
+            # 1. Check for external instruction (from Slack/Scheduler)
+            if handoff.scheduled_prompt:
+                print(f"[{self.name}] Received scheduled prompt: {handoff.scheduled_prompt}")
+                task = {
+                    "id": f"poe_{int(time.time())}",
+                    "summary": handoff.scheduled_prompt,
+                    "priority": "high",
+                    "status": "todo",
+                    "source": "slack"
+                }
+                source = "external"
+                # Save to backlog for tracking
+                bm.add_task(task)
+            else:
+                task, source = select_next_task(backlog)
 
             if not task:
                 print(f"[{self.name}] No actionable tasks found in backlog or vibe_todo.")
@@ -79,15 +129,25 @@ class ProductPoeAgent:
             if source == "backlog":
                 bm.update_task_status(task.get("id"), "in_progress")
 
+            # Pulse heartbeat (arch_agent_heartbeat)
+            HeartbeatMonitor.pulse_session(repo_path, handoff.session_id)
+
             active_prompt = generate_active_prompt(task, repo_path, self.llm_client, self.system_prompt)
             
             with open(prompt_file, 'w', encoding='utf-8') as f:
                 f.write(active_prompt)
 
-            self.next_agent_id = "developer_dex"
-            res = f"Active task set: {task.get('id')} ({task.get('summary')}). Handing off to DeveloperDex."
+            # Dynamic Handoff Routing
+            if task.get("type") == "analysis" or "analyze" in task.get("summary", "").lower():
+                self.next_agent_id = "architect_artoo"
+            else:
+                self.next_agent_id = "developer_dex"
+
+            res = f"Active task set: {task.get('id')} ({task.get('summary')}). Handing off to {self.next_agent_id}."
             
             duration = time.time() - start_time
+            metrics = self._calculate_success_metrics(repo_path)
+            
             log_interaction(
                 agent_id=self.name,
                 outcome="success",
@@ -95,7 +155,8 @@ class ProductPoeAgent:
                 repo_path=repo_path,
                 steps_used=1,
                 duration_seconds=duration,
-                session_id=handoff.session_id
+                session_id=handoff.session_id,
+                metrics=metrics
             )
             return res
             

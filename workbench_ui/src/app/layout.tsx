@@ -25,6 +25,7 @@ export default function RootLayout({
               <a href="/ab-test" className="active">A/B Testing</a>
               <a href="/fleet">Fleet Status</a>
               <a href="/metrics">Metrics</a>
+              <a href="/tools">Tool Registry</a>
             </div>
           </div>
         </nav>

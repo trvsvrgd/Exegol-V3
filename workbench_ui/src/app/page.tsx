@@ -8,6 +8,8 @@ import QuickAddTask from "../components/QuickAddTask";
 import ThrawnInteraction from "../components/ThrawnInteraction";
 import FleetHealth from "../components/FleetHealth";
 
+import { apiGet } from "../app/api-client";
+
 interface Repo {
   repo_path: string;
   model_routing_preference: string;
@@ -20,22 +22,17 @@ export default function Home() {
   const [activeRepo, setActiveRepo] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const fetchRepos = useCallback(() => {
-    fetch("http://localhost:8000/repos")
-      .then((res) => {
-        if (!res.ok) throw new Error("Repo request failed");
-        return res.json();
-      })
-      .then((data) => {
-        setRepos(data);
-        if (data.length > 0 && !activeRepo) {
-          setActiveRepo(data[0].repo_path);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to fetch repos:", err);
-        setFetchError("Unable to load repository list. Check backend connectivity.");
-      });
+  const fetchRepos = useCallback(async () => {
+    try {
+      const data = await apiGet<Repo[]>("/repos");
+      setRepos(data);
+      if (data.length > 0 && !activeRepo) {
+        setActiveRepo(data[0].repo_path);
+      }
+    } catch (err) {
+      console.error("Failed to fetch repos:", err);
+      setFetchError("Unable to load repository list. Check backend connectivity.");
+    }
   }, [activeRepo]);
 
   useEffect(() => {

@@ -110,7 +110,9 @@ class SessionManager:
             return result
 
         from inference.inference_manager import InferenceManager
-        llm_client = InferenceManager.get_client(provider=handoff.model_routing)
+        from inference.llm_client import TrackingLLMClient
+        base_llm = InferenceManager.get_client(provider=handoff.model_routing)
+        llm_client = TrackingLLMClient(base_llm)
 
         agent_instance = None
         start_time = time.time()
@@ -135,6 +137,10 @@ class SessionManager:
             result.output_summary = str(output) if output else ""
             result.steps_used = getattr(agent_instance, "_steps_used", 1)
             
+            # Capture tracking metrics
+            result.prompt_count = llm_client.prompt_count
+            result.token_usage = llm_client.token_usage
+            
             # Extract autonomous handoff request and snapshots if present
             next_id = getattr(agent_instance, "next_agent_id", "")
             if next_id:
@@ -155,6 +161,14 @@ class SessionManager:
             result.errors.append(error_details)
             result.output_summary = "Agent execution failed."
             traceback.print_exc()
+
+            # Always route terminal errors with 'FATAL' to the Exegol Fleet
+            if "FATAL" in error_details.upper():
+                try:
+                    from tools.fatal_error_router import route_fatal_error
+                    route_fatal_error(handoff.repo_path, error_details)
+                except Exception as route_err:
+                    print(f"[SessionManager] Failed to route fatal error: {route_err}")
 
             # --- UNIVERSAL SELF-HEALING: Capture hard crashes ---
             try:

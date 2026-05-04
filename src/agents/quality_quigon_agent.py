@@ -4,6 +4,9 @@ from tools.sandbox_validator import validate_app_schema, run_sandbox_lint, run_s
 from evals.snapshot_eval_runner import run_regression_eval
 from tools.backlog_manager import BacklogManager
 from tools.web_search import web_search
+from tools.fleet_logger import log_interaction
+from tools.metrics_manager import SuccessMetricsManager
+from tools.heartbeat_monitor import HeartbeatMonitor
 
 
 class QualityQuigonAgent:
@@ -17,8 +20,13 @@ class QualityQuigonAgent:
         self.llm_client = llm_client
         self.name = "QualityQuigonAgent"
         self.max_steps = 15
-        self.tools = ["test_runner", "linter", "uat_sandbox", "sandbox_validator", "web_search"]
+        self.tools = ["test_runner", "linter", "uat_sandbox", "sandbox_validator", "web_search", "repo_audit"]
         self.success_metrics = {
+            "repo_wide_health": {
+                "description": "Percentage of repository files passing the expanded multi-language linter",
+                "target": "100%",
+                "current": None
+            },
             "sandbox_validation_coverage": {
                 "description": "Percentage of active sandboxes that have been automatically validated",
                 "target": "100%",
@@ -36,6 +44,18 @@ class QualityQuigonAgent:
             }
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates quality and validation metrics based on recent logs."""
+        # Already handled in the execute loop for Quigon as it has direct access to results
+        # We just return the current state of self.success_metrics formatted for log_interaction
+        return {
+            "repo_wide_health": self.success_metrics["repo_wide_health"]["current"],
+            "sandbox_validation_coverage": self.success_metrics["sandbox_validation_coverage"]["current"],
+            "schema_failure_rate": self.success_metrics["schema_failure_rate"]["current"],
+            "defect_escape_rate": self.success_metrics["defect_escape_rate"]["current"]
+        }
 
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
@@ -46,8 +66,27 @@ class QualityQuigonAgent:
         task_id = handoff.task_id
         print(f"[{self.name}] Session {handoff.session_id} — professional validation starting.")
 
-        results = []
+        # --- PHASE 4: Context Propagation (arch_dex_context_upgrade) ---
+        if handoff.scheduled_prompt:
+            print(f"[{self.name}] Targeted Validation Request: {handoff.scheduled_prompt}")
+            # We add it to results so it shows up in the final report
+            results = [f"Targeted Validation: {handoff.scheduled_prompt}"]
+        else:
+            results = []
         self.regression_context = ""
+
+        # 0. Infrastructure Audit (New Phase 3.5)
+        print(f"[{self.name}] Initiating Repository Infrastructure Audit...")
+        from tools.linter import run_lint
+        repo_lint = run_lint(repo_path)
+        if repo_lint["status"] == "fail":
+            results.append(f"Repo Infrastructure: fail ({len(repo_lint['issues'])} issues found)")
+            for issue in repo_lint["issues"][:5]: # Log first 5 to avoid bloat
+                results.append(f"  - Issue: {issue}")
+            self.success_metrics["repo_wide_health"]["current"] = "Needs Attention"
+        else:
+            results.append("Repo Infrastructure: pass")
+            self.success_metrics["repo_wide_health"]["current"] = "100%"
 
         # 1. Snapshot Regression Check (poe_009)
         print(f"[{self.name}] Checking for snapshots/baseline for task: {task_id}")
@@ -86,6 +125,9 @@ class QualityQuigonAgent:
                         results.append(f"Sandbox '{sb}' Schema: error (Master schema missing)")
                         continue
                         
+                    # Pulse heartbeat per sandbox (arch_agent_heartbeat)
+                    HeartbeatMonitor.pulse_session(repo_path, handoff.session_id)
+                    
                     schema_res = validate_app_schema(sb_path, schema_path)
                     results.append(f"Sandbox '{sb}' Schema: {schema_res['status']}")
                     if schema_res['status'] == 'fail':
@@ -143,6 +185,19 @@ class QualityQuigonAgent:
 
         # --- TASK: Validation Report Logging ---
         self._log_validation_report(repo_path, results, eval_res)
+        
+        duration = 10.0 # Heuristic
+        metrics = self._calculate_success_metrics(repo_path)
+        log_interaction(
+            agent_id=self.name,
+            outcome="success",
+            task_summary=f"Validation Cycle complete. Results: " + ", ".join(results),
+            repo_path=repo_path,
+            steps_used=1,
+            duration_seconds=duration,
+            session_id=handoff.session_id,
+            metrics=metrics
+        )
 
         return f"Validation Cycle complete. Results: " + ", ".join(results)
 

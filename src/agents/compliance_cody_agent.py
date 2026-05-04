@@ -5,6 +5,8 @@ import time
 from tools.web_search import web_search
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
+from tools.capability_reviewer import map_requirement_to_capability
+from tools.metrics_manager import SuccessMetricsManager
 
 
 class ComplianceCodyAgent:
@@ -33,6 +35,37 @@ class ComplianceCodyAgent:
             }
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates compliance and governance metrics based on recent logs."""
+        logs = self.metrics_manager.load_logs(days=30)
+        agent_logs = [l for l in logs if l.get("agent_id") == self.name]
+        
+        if not agent_logs:
+            return {
+                "compliance_gap_coverage": "0%",
+                "last_compliance_run": "Never"
+            }
+
+        last_run = agent_logs[-1].get("timestamp")
+        
+        # Heuristic for coverage: check last successful summary for task counts
+        coverage = 0.0
+        summary = agent_logs[-1].get("task_summary", "")
+        import re
+        match = re.search(r"Added (\d+) new tasks", summary)
+        if match:
+            tasks = int(match.group(1))
+            match_exc = re.search(r"Logged (\d+) exceptions", summary)
+            exceptions = int(match_exc.group(1)) if match_exc else 0
+            total = tasks + exceptions
+            coverage = (tasks / total) * 100 if total > 0 else 100.0
+
+        return {
+            "compliance_gap_coverage": f"{coverage:.1f}%",
+            "last_compliance_run": last_run
+        }
 
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
@@ -90,14 +123,18 @@ class ComplianceCodyAgent:
             bm = BacklogManager(repo_path)
             new_tasks_added = 0
             exceptions_logged = 0
+            
+            exception_log_path = os.path.join(exegol_dir, "compliance_exceptions.log")
 
-            with open(exception_log, 'a', encoding='utf-8') as elog:
+            with open(exception_log_path, 'a', encoding='utf-8') as elog:
                 timestamp = datetime.datetime.now().isoformat()
                 elog.write(f"\n--- Compliance Sweep: {timestamp} ---\n")
 
                 for req in found_requirements:
-                    # Check if system supports this
-                    if req.get("required_capability_id") in system_feature_ids:
+                    # Use the new capability_reviewer tool for mapping
+                    analysis = map_requirement_to_capability(req, capabilities.get("capabilities", []), llm_client=self.llm_client)
+                    
+                    if analysis["matched"] and analysis["capability"].get("implemented"):
                         # Support exists, add as a tracking task if not already there
                         task = {
                             "id": f"comp_{req['id'].lower()}",
@@ -112,13 +149,15 @@ class ComplianceCodyAgent:
                         if bm.add_task(task):
                             new_tasks_added += 1
                     else:
-                        # System does NOT support this requirement — LOG EXCEPTION
-                        elog.write(f"[EXCEPTION] System lacks capability '{req.get('required_capability_id')}' for requirement {req['id']}: {req['summary']}\n")
+                        # System does NOT support this requirement or match failed — LOG EXCEPTION
+                        reason = analysis.get("reasoning", "No matching capability found")
+                        elog.write(f"[EXCEPTION] System lacks capability for requirement {req['id']}: {req['summary']} (Reason: {reason})\n")
                         exceptions_logged += 1
 
             duration = time.time() - start_time
             summary = f"Compliance sweep complete. Added {new_tasks_added} new tasks to backlog. Logged {exceptions_logged} exceptions."
             
+            metrics = self._calculate_success_metrics(repo_path)
             log_interaction(
                 agent_id=self.name,
                 outcome="success",
@@ -126,7 +165,8 @@ class ComplianceCodyAgent:
                 repo_path=repo_path,
                 steps_used=self._steps_used,
                 duration_seconds=duration,
-                session_id=handoff.session_id
+                session_id=handoff.session_id,
+                metrics=metrics
             )
             
             return summary

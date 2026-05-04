@@ -1,9 +1,11 @@
 import subprocess
 import os
+from tools.fatal_error_router import check_and_route_terminal_output
 
 def run_git_command(repo_path, args):
     """Executes a git command and returns the output."""
     try:
+        command = f"git {' '.join(args)}"
         result = subprocess.run(
             ["git"] + args,
             cwd=repo_path,
@@ -11,11 +13,19 @@ def run_git_command(repo_path, args):
             text=True,
             check=False
         )
+        
+        # Always route terminal errors with 'FATAL' to the Exegol Fleet
+        check_and_route_terminal_output(repo_path, result.stdout, result.stderr, command)
+        
         if result.returncode != 0:
             return f"Error: {result.stderr.strip()}"
         return result.stdout.strip()
     except Exception as e:
-        return f"Error: {str(e)}"
+        error_msg = str(e)
+        if "FATAL" in error_msg:
+             from tools.fatal_error_router import route_fatal_error
+             route_fatal_error(repo_path, error_msg)
+        return f"Error: {error_msg}"
 
 def has_commits_since(repo_path, timeframe="1 week ago"):
     """Checks if there are any commits since the given timeframe."""

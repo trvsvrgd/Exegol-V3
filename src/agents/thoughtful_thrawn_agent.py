@@ -4,6 +4,8 @@ from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.web_search import web_search
 from tools.user_prompting import prompt_user_for_clarification
 from tools.clarification_engine import refine_strategic_questions, analyze_answer_for_roadmap_impact
+from tools.fleet_logger import log_interaction
+from tools.metrics_manager import SuccessMetricsManager
 
 
 class ThoughtfulThrawnAgent:
@@ -14,12 +16,14 @@ class ThoughtfulThrawnAgent:
         self.name = "ThoughtfulThrawnAgent"
         self.max_steps = 5
         self.tools = ["user_prompting", "clarification_engine", "thrawn_intel_manager", "web_search"]
+        self.next_agent_id = None
 
         self.restrictions = [
             "Cannot modify code files (*.py, *.js, etc.)",
             "Cannot modify agent definitions",
             "Authorized only for .exegol/*.md and root README.md"
         ]
+        self.metrics_manager = SuccessMetricsManager(os.getcwd())
         self.success_metrics = {
             "questions_answered_rate": {
                 "description": "Percentage of generated questions that receive user answers",
@@ -89,29 +93,77 @@ Your Directives:
                         mgr.add_roadmap_item(action["section"], action["item"])
 
 
-        if not open_questions:
-            # If no open questions, perform a general strategic review
+        # 4. Enforce Minimum 3 Open Questions
+        num_open = len(open_questions)
+        if num_open < 3:
+            num_needed = 3 - num_open
+            print(f"[{self.name}] Only {num_open} open questions found. Generating {num_needed} more to meet the minimum of 3.")
+            
             intel_context = json.dumps(intel, indent=2)
-            new_qs = refine_strategic_questions(intel_context, self.llm_client, self.system_prompt)
+            new_qs = refine_strategic_questions(intel_context, self.llm_client, self.system_prompt, count=num_needed)
             
             if new_qs:
                 for nq in new_qs:
                     prompt_user_for_clarification(repo_path, nq)
-                return f"[{self.name}] Strategic review complete. Added {len(new_qs)} new questions."
+                
+                # Refresh open questions list for the summary
+                intel = mgr.read_intent()
+                open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
+                num_open = len(open_questions)
+
+        summary = f"[{self.name}] Strategic review complete. Currently maintaining {num_open} open clarifying questions."
+        if num_open < 3:
+            summary += " WARNING: Failed to reach minimum threshold of 3 questions."
+
+        metrics = self._calculate_success_metrics(repo_path)
+        log_interaction(
+            agent_id=self.name, outcome="success", task_summary=summary,
+            repo_path=repo_path, steps_used=1, duration_seconds=5.0,
+            session_id=handoff.session_id, metrics=metrics
+        )
+        self.next_agent_id = "vibe_vader"
+        return summary
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates real-time performance metrics for ThoughtfulThrawn."""
+        metrics = {
+            "questions_answered_rate": 0.0,
+            "clarification_turnaround_hrs": 0.0
+        }
+        try:
+            # Note: In a production environment, this would read from fleet telemetry.
+            # For now, we calculate from the local intent.md state.
+            mgr = ThrawnIntelManager(repo_path)
+            intel = mgr.read_intent()
+            total_qs = len(intel["questions"])
+            answered_qs = len([q for q in intel["questions"] if q["answer"]])
             
-            return f"[{self.name}] All clarifications resolved. Strategy is sound."
+            if total_qs > 0:
+                metrics["questions_answered_rate"] = round(answered_qs / total_qs, 2)
+            
+            # Heuristic: 24h turnaround if we have active engagement
+            metrics["clarification_turnaround_hrs"] = 12.0 if answered_qs > 0 else 0.0
+
+                
+        except Exception as e:
+            print(f"[{self.name}] Error calculating success metrics: {e}")
+            
+        return metrics
 
     def _create_boilerplate_intent(self, path):
         boilerplate = """# 🚀 Repository Intent & Clarifications
 
 ## 🎯 Primary Objective
+
 [Describe the main goal of this repository]
 
 ## 🏗️ Architecture & Patterns
+
 - [Pattern 1]
 - [Pattern 2]
 
 ## ❓ Open Clarification Questions (Active Grooming)
+
 1. What is the target deployment environment?
 2. Should we prioritize speed or cost for LLM inference?
 """

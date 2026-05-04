@@ -14,6 +14,7 @@ from tools.web_search import web_search
 from tools.slack_tool import post_to_slack
 from tools.agentic_coding import execute_coding_task
 from tools.metrics_manager import SuccessMetricsManager
+from tools.heartbeat_monitor import HeartbeatMonitor
 
 
 
@@ -74,17 +75,27 @@ class DeveloperDexAgent:
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
 
-        prompt_file = os.path.join(repo_path, ".exegol", "active_prompt.md")
-        if not os.path.exists(prompt_file):
-            if handoff.scheduled_prompt:
-                print(f"[{self.name}] No active prompt file. Using scheduled prompt: {handoff.scheduled_prompt}")
-                raw_prompt = handoff.scheduled_prompt
-            else:
-                print(f"[{self.name}] No active prompt found.")
-                return "No prompt found in .exegol/active_prompt.md"
-        else:
-            with open(prompt_file, 'r', encoding='utf-8') as f:
+        # --- PHASE 4: Context Propagation (arch_dex_context_upgrade) ---
+        raw_prompt = ""
+        prompt_path = os.path.join(repo_path, ".exegol", "active_prompt.md")
+        
+        if os.path.exists(prompt_path):
+            with open(prompt_path, 'r', encoding='utf-8') as f:
                 raw_prompt = f.read()
+
+        # If we have a scheduled prompt (e.g. from Slack wake-word), it takes priority
+        # or appends to the existing groomed prompt.
+        if handoff.scheduled_prompt:
+            if raw_prompt:
+                print(f"[{self.name}] Merging scheduled prompt with active_prompt.md context.")
+                raw_prompt = f"USER CONTEXT / DIRECTIVE:\n{handoff.scheduled_prompt}\n\nBACKGROUND TASK:\n{raw_prompt}"
+            else:
+                print(f"[{self.name}] Using scheduled prompt: {handoff.scheduled_prompt}")
+                raw_prompt = handoff.scheduled_prompt
+
+        if not raw_prompt:
+            print(f"[{self.name}] No active prompt or scheduled context found.")
+            return "No actionable prompt found in .exegol/active_prompt.md or handoff context."
 
         try:
             # --- SECURITY GUARD: Input Sanitization (sec_sec_arch_006) ---
@@ -92,42 +103,53 @@ class DeveloperDexAgent:
             active_prompt = sanitization_result["sanitized_text"]
             
             if sanitization_result["is_suspicious"]:
-                print(f"[{self.name}] WARNING: {sanitization_result['warning']}")
+                warning_msg = f"SECURITY ALERT: Suspicious prompt pattern detected in session {handoff.session_id}."
+                print(f"[{self.name}] {warning_msg}")
+                
+                # Log security event
                 log_security_event(
                     actor=self.name,
-                    action="input_sanitization_warning",
-                    outcome="flagged",
+                    action="input_sanitization_blocked",
+                    outcome="blocked",
                     repo_path=repo_path,
                     session_id=handoff.session_id,
                     details={
                         "warning": sanitization_result["warning"],
-                        "prompt_snippet": raw_prompt[:100]
+                        "prompt_snippet": raw_prompt[:200]
                     }
                 )
-            
-            print(f"[{self.name}] Analyzing prompt: {active_prompt[:100]}...")
+                
+                # Notify Slack with a block message (arch_dex_slack_integration)
+                slack_msg = f"🚨 *SECURITY BLOCK* 🚨\n{warning_msg}\n*Prompt:* `{raw_prompt[:100]}...`\nManual review required."
+                post_to_slack(slack_msg)
+                
+                return f"Execution blocked due to security concerns: {sanitization_result['warning']}. Awaiting manual review."
 
             if "prototype" in active_prompt.lower() or "sandbox" in active_prompt.lower():
                 res = self._handle_sandbox_request(repo_path, active_prompt)
             else:
+                # Pulse heartbeat for long coding loops (arch_agent_heartbeat)
+                HeartbeatMonitor.pulse_session(repo_path, handoff.session_id)
                 # Real coding loop
                 res = self._run_coding_loop(repo_path, active_prompt, handoff)
             
             # --- PHASE 3: Update Success Metrics ---
-            metrics = self.metrics_manager.calculate_metrics()
-            scorecard = metrics.get("agent_breakdown", {}).get(self.name, {})
-            print(f"[{self.name}] Current Success Rate: {scorecard.get('success_rate', 0)*100:.1f}%")
-
+            current_metrics = self._calculate_success_metrics(repo_path)
+            
             # Notify Slack (arch_dex_slack_integration)
             self._notify_completion(handoff.session_id, res)
             
             # Ensure handoff to Quigon
             self.next_agent_id = "quality_quigon"
             
-            duration = time.time() - start_time
+            # Determine outcome based on results
+            outcome = "success"
+            if "Error" in res or "Failed to parse" in res or "0 actions performed" in res:
+                outcome = "failure"
+
             log_interaction(
                 agent_id=self.name,
-                outcome="success",
+                outcome=outcome,
                 task_summary=res[:200],
                 repo_path=repo_path,
                 steps_used=self._steps_used,
@@ -136,7 +158,8 @@ class DeveloperDexAgent:
                 state_changes={
                     "snapshot_hash": self.snapshot_hash,
                     "next_agent_id": getattr(self, "next_agent_id", None)
-                }
+                },
+                metrics=current_metrics
             )
             return res
             
@@ -232,6 +255,47 @@ class DeveloperDexAgent:
 
         self.next_agent_id = "quality_quigon"
         return res
+
+    def _calculate_success_metrics(self, repo_path: str) -> dict:
+        """Calculates real-time performance metrics for DeveloperDex."""
+        metrics = {
+            "sandbox_acceptance_rate": 0.0,
+            "bugs_found_in_qa": 0,
+            "avg_prompts_to_acceptance": 0.0
+        }
+        
+        try:
+            from tools.fleet_logger import read_interaction_logs
+            logs = read_interaction_logs([repo_path], days=7)
+            
+            # 1. Sandbox Acceptance Rate
+            sandbox_sessions = [l for l in logs if "sandbox" in l.get("task_summary", "").lower()]
+            if sandbox_sessions:
+                approved = [l for l in logs if l.get("agent_id") == "QualityQuigonAgent" and "approved" in l.get("task_summary", "").lower()]
+                # Simplistic mapping: if Quigon approved something in the last 7 days, we assume it's high
+                metrics["sandbox_acceptance_rate"] = round(len(approved) / len(sandbox_sessions), 2) if len(sandbox_sessions) > 0 else 1.0
+            
+            # 2. Bugs found in QA
+            quigon_logs = [l for l in logs if l.get("agent_id") == "QualityQuigonAgent"]
+            bugs = 0
+            for ql in quigon_logs:
+                # If Quigon reported errors or failures, and we were the previous agent (session link)
+                if ql.get("outcome") == "failure" or len(ql.get("errors", [])) > 0:
+                    bugs += 1
+            metrics["bugs_found_in_qa"] = bugs
+            
+            # 3. Avg prompts to acceptance
+            # This would require tracking iteration counts in the session context
+            # For now, we'll use a heuristic based on steps_used
+            dex_logs = [l for l in logs if l.get("agent_id") == self.name]
+            if dex_logs:
+                total_steps = sum(l.get("steps_used", 0) for l in dex_logs)
+                metrics["avg_prompts_to_acceptance"] = round(total_steps / len(dex_logs), 1)
+                
+        except Exception as e:
+            print(f"[{self.name}] Error calculating success metrics: {e}")
+            
+        return metrics
 
     def _log_implementation_plan(self, repo_path: str, actions: list, results: list, prompt: str):
         """Logs a human-readable implementation plan for the user to review."""

@@ -39,16 +39,16 @@ class ThrawnIntelManager:
         }
 
         # Simple regex-based parsing
-        objective_match = re.search(r"## 🎯 Primary Objective\n(.*?)(?=\n##|$)", content, re.DOTALL)
+        objective_match = re.search(r"## 🎯 Primary Objective\s*\n(.*?)(?=\n##|$)", content, re.DOTALL)
         if objective_match:
             intel["objective"] = objective_match.group(1).strip()
 
-        architecture_match = re.search(r"## 🏗️ Architecture & Patterns\n(.*?)(?=\n##|$)", content, re.DOTALL)
+        architecture_match = re.search(r"## 🏗️ Architecture & Patterns\s*\n(.*?)(?=\n##|$)", content, re.DOTALL)
         if architecture_match:
             arch_text = architecture_match.group(1).strip()
             intel["architecture"] = [line.strip("- ").strip() for line in arch_text.splitlines() if line.strip().startswith("-")]
 
-        questions_match = re.search(r"## ❓ Open Clarification Questions.*?\n(.*?)(?=\n##|$)", content, re.DOTALL)
+        questions_match = re.search(r"## ❓ Open Clarification Questions.*?\s*\n(.*?)(?=\n##|$)", content, re.DOTALL)
         if questions_match:
             q_text = questions_match.group(1).strip()
             lines = q_text.splitlines()
@@ -107,9 +107,11 @@ class ThrawnIntelManager:
             "# 🚀 Repository Intent & Clarifications",
             "",
             "## 🎯 Primary Objective",
+            "",
             intel["objective"],
             "",
-            "## 🏗️ Architecture & Patterns"
+            "## 🏗️ Architecture & Patterns",
+            ""
         ]
         
         for pattern in intel["architecture"]:
@@ -117,6 +119,7 @@ class ThrawnIntelManager:
         
         lines.append("")
         lines.append("## ❓ Open Clarification Questions (Active Grooming)")
+        lines.append("")
         
         for i, q in enumerate(intel["questions"], 1):
             lines.append(f"{i}. {q['question']}")
