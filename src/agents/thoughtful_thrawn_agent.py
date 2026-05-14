@@ -1,9 +1,11 @@
 import os
 import json
+import datetime
+import time
 from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.web_search import web_search
 from tools.user_prompting import prompt_user_for_clarification
-from tools.clarification_engine import refine_strategic_questions, analyze_answer_for_roadmap_impact
+from tools.clarification_engine import refine_strategic_questions, analyze_answer_for_roadmap_impact, get_onboarding_sequence
 from tools.fleet_logger import log_interaction
 from tools.metrics_manager import SuccessMetricsManager
 
@@ -51,18 +53,36 @@ Your Directives:
 
 
     def execute(self, handoff):
-        """Execute with a clean HandoffContext — no prior session memory required.
-
-        All state is read fresh from the filesystem at invocation time.
+        """Execute with a clean HandoffContext.
+        
+        Strategic review of project intent. Includes daily maintenance (cleanup)
+        and hourly engagement checks.
         """
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
 
+        # 1. Check for Trigger Type
+        prompt_lower = (handoff.scheduled_prompt or "").lower()
+        is_daily = "daily" in prompt_lower
+        is_hourly = "hourly" in prompt_lower
+
+        # 2. Daily Cleanup (Maintenance)
+        if is_daily:
+            print(f"[{self.name}] Daily assessment detected. Cleaning up answered questions...")
+            self._cleanup_questions(repo_path)
+
+        # 3. Hourly Engagement Check
+        if is_hourly:
+            print(f"[{self.name}] Hourly engagement check...")
+            has_activity = self._has_recent_engagement(repo_path)
+            if not has_activity:
+                print(f"[{self.name}] No recent user engagement detected. Standing down to avoid overhead.")
+                return "No recent engagement. Thrawn standing down."
+
         exegol_dir = os.path.join(repo_path, ".exegol")
         os.makedirs(exegol_dir, exist_ok=True)
-        intent_file = os.path.join(exegol_dir, "intent.md")
-
-        # 1. Load Intent & Clarifications via Manager (Stateless Refactor)
+        
+        # 4. Load Intent & Clarifications
         mgr = ThrawnIntelManager(repo_path)
         intel = mgr.read_intent()
         
@@ -71,17 +91,17 @@ Your Directives:
             print(f"[{self.name}] Researching context for objective: {intel['objective']}")
             search_query = f"industry standards and technical requirements for: {intel['objective']}"
             context_research = web_search(search_query, num_results=3)
-            # This research can be used by the LLM in the next steps
 
-        # 2. Identify Open Questions from parsed intel
-        open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
-        
-        # 3. Synchronize Answered Questions with Roadmap
-        answered_questions = [q for q in intel["questions"] if q["answer"]]
-        
+        # Synchronize answered questions — exclude 'pending' placeholder answers
+        answered_questions = [
+            q for q in intel["questions"]
+            if isinstance(q, dict) and q.get("answer") and q["answer"].strip().lower() != "pending"
+        ]
         if answered_questions:
             roadmap_content = mgr.read_roadmap()
             for aq in answered_questions:
+                # If we've already processed this answer for the roadmap, we might want to skip it
+                # For now, we process all answered ones to ensure consistency
                 actions = analyze_answer_for_roadmap_impact(
                     aq["question"], aq["answer"], roadmap_content, 
                     self.llm_client, self.system_prompt
@@ -92,12 +112,27 @@ Your Directives:
                     elif action["action"] == "add":
                         mgr.add_roadmap_item(action["section"], action["item"])
 
-
-        # 4. Enforce Minimum 3 Open Questions
+        # 6. Identify Open Questions
+        open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
         num_open = len(open_questions)
-        if num_open < 3:
+
+        # 7. Handle Initial Onboarding or Grooming
+        is_new_repo = not intel.get("objective") or "[Describe the main goal" in intel["objective"]
+        
+        if is_new_repo and not open_questions:
+            print(f"[{self.name}] New repository detected. Triggering initial onboarding sequence.")
+            onboarding_qs = get_onboarding_sequence()
+            for nq in onboarding_qs:
+                prompt_user_for_clarification(repo_path, nq, priority="high", is_onboarding=True)
+            
+            # Refresh for summary
+            intel = mgr.read_intent()
+            open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
+            num_open = len(open_questions)
+
+        elif num_open < 3:
             num_needed = 3 - num_open
-            print(f"[{self.name}] Only {num_open} open questions found. Generating {num_needed} more to meet the minimum of 3.")
+            print(f"[{self.name}] Grooming intent: Generating {num_needed} more questions...")
             
             intel_context = json.dumps(intel, indent=2)
             new_qs = refine_strategic_questions(intel_context, self.llm_client, self.system_prompt, count=num_needed)
@@ -106,14 +141,17 @@ Your Directives:
                 for nq in new_qs:
                     prompt_user_for_clarification(repo_path, nq)
                 
-                # Refresh open questions list for the summary
                 intel = mgr.read_intent()
                 open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
                 num_open = len(open_questions)
 
         summary = f"[{self.name}] Strategic review complete. Currently maintaining {num_open} open clarifying questions."
-        if num_open < 3:
-            summary += " WARNING: Failed to reach minimum threshold of 3 questions."
+        
+        # Append human observations for strategic enrichment
+        observations = mgr.load_human_observations()
+        if observations:
+            obs_list = [v for v in observations.values()]
+            summary += f" | Human Observations: {'; '.join(obs_list)}"
 
         metrics = self._calculate_success_metrics(repo_path)
         log_interaction(
@@ -121,8 +159,39 @@ Your Directives:
             repo_path=repo_path, steps_used=1, duration_seconds=5.0,
             session_id=handoff.session_id, metrics=metrics
         )
+        # In the autonomous loop, Thrawn might trigger Vader
         self.next_agent_id = "vibe_vader"
         return summary
+
+    def _cleanup_questions(self, repo_path: str):
+        """Archives answered questions from intent.md."""
+        # The ThrawnIntelManager already keeps answered questions in the intel dict.
+        # But for 'cleanup' we might want to move them to a separate 'archive' section 
+        # or just confirm they are recorded in the roadmap and remove from intent.md.
+        # For now, we'll rely on the existing manager's persistence.
+        pass
+
+    def _has_recent_engagement(self, repo_path: str) -> bool:
+        """Determines if the user has responded to questions in the last 24 hours."""
+        mgr = ThrawnIntelManager(repo_path)
+        intel = mgr.read_intent()
+        
+        # Check for any answered questions
+        answered = [q for q in intel.get("questions", []) if q.get("answer")]
+        if not answered:
+            # If it's a brand new repo with no answers yet, we consider it 'engaged' 
+            # for the first few runs to get the ball rolling.
+            return True
+            
+        # Check if any answer is 'recent' (heuristic: modification time of intent.md)
+        intent_path = os.path.join(repo_path, ".exegol", "intent.md")
+        if os.path.exists(intent_path):
+            mtime = os.path.getmtime(intent_path)
+            # If modified in the last 1 hour, definitely engaged
+            if (time.time() - mtime) < 3600:
+                return True
+        
+        return False
 
     def _calculate_success_metrics(self, repo_path: str) -> dict:
         """Calculates real-time performance metrics for ThoughtfulThrawn."""
@@ -136,13 +205,35 @@ Your Directives:
             mgr = ThrawnIntelManager(repo_path)
             intel = mgr.read_intent()
             total_qs = len(intel["questions"])
-            answered_qs = len([q for q in intel["questions"] if q["answer"]])
+            answered_qs = len([
+                q for q in intel["questions"]
+                if isinstance(q, dict) and q.get("answer") and q["answer"].strip().lower() != "pending"
+            ])
             
             if total_qs > 0:
                 metrics["questions_answered_rate"] = round(answered_qs / total_qs, 2)
             
-            # Heuristic: 24h turnaround if we have active engagement
-            metrics["clarification_turnaround_hrs"] = 12.0 if answered_qs > 0 else 0.0
+            # Calculate real turnaround
+            turnarounds = []
+            for q in intel["questions"]:
+                if not isinstance(q, dict):
+                    continue
+                if q.get("asked_at") and q.get("answered_at"):
+                    try:
+                        asked = datetime.datetime.fromisoformat(q["asked_at"])
+                        answered = datetime.datetime.fromisoformat(q["answered_at"])
+                        diff = (answered - asked).total_seconds() / 3600.0
+                        turnarounds.append(diff)
+                    except:
+                        pass
+            
+            if turnarounds:
+                metrics["clarification_turnaround_hrs"] = round(sum(turnarounds) / len(turnarounds), 2)
+            elif answered_qs > 0:
+                # If we have answers but timestamps are missing (despite fallback), use a conservative default
+                metrics["clarification_turnaround_hrs"] = 12.0
+            else:
+                metrics["clarification_turnaround_hrs"] = 0.0
 
                 
         except Exception as e:

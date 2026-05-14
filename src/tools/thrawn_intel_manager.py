@@ -1,5 +1,6 @@
 import os
 import re
+import datetime
 from typing import List, Dict, Any, Optional
 
 class ThrawnIntelManager:
@@ -8,6 +9,7 @@ class ThrawnIntelManager:
         self.exegol_dir = os.path.join(repo_path, ".exegol")
         self.intent_file = os.path.join(self.exegol_dir, "intent.md")
         self.roadmap_file = os.path.join(self.exegol_dir, "roadmap.md")
+        self.observations_file = os.path.join(self.exegol_dir, "human_observations.json")
 
     def _validate_path(self, path: str):
         """Safeguard: Ensure we only modify human-interaction markdowns in .exegol/ or root README.md."""
@@ -29,6 +31,8 @@ class ThrawnIntelManager:
                 "questions": []
             }
 
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(self.intent_file)).isoformat()
+        
         with open(self.intent_file, 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -61,20 +65,44 @@ class ThrawnIntelManager:
                 q_match = re.match(r"^(\d+\.|\-)\s+(.*)", line)
                 if q_match:
                     if current_q:
+                        # Fallback for missing answered_at
+                        if current_q.get("answer") and not current_q.get("answered_at"):
+                            current_q["answered_at"] = mtime
                         intel["questions"].append(current_q)
                     current_q = {"question": q_match.group(2).strip(), "answer": None}
+                elif line.lower().startswith("asked:") and current_q:
+                    current_q["asked_at"] = line[6:].strip()
+                elif line.lower().startswith("answered:") and current_q:
+                    current_q["answered_at"] = line[9:].strip()
                 elif line.lower().startswith("answer:") and current_q:
                     current_q["answer"] = line[7:].strip()
                 elif current_q:
                     # Append to question or answer if multi-line (simple approach)
-                    if current_q["answer"] is not None:
+                    if current_q.get("answer") is not None:
                         current_q["answer"] += " " + line
                     else:
                         current_q["question"] += " " + line
             if current_q:
+                # Fallback for missing answered_at
+                if current_q.get("answer") and not current_q.get("answered_at"):
+                    current_q["answered_at"] = mtime
                 intel["questions"].append(current_q)
 
+        # Sanitize: ensure all question entries are dicts (guard against parse corruption)
+        intel["questions"] = [q for q in intel["questions"] if isinstance(q, dict)]
+
         return intel
+
+    def load_human_observations(self) -> Dict[str, str]:
+        """Loads qualitative context provided by humans."""
+        import json
+        if os.path.exists(self.observations_file):
+            try:
+                with open(self.observations_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
 
     def update_objective(self, objective: str):
         intel = self.read_intent()
@@ -92,12 +120,16 @@ class ThrawnIntelManager:
         for q in intel["questions"]:
             if q["question"] == question_text:
                 q["answer"] = answer
+                q["answered_at"] = datetime.datetime.now().isoformat()
                 found = True
                 break
         if not found:
-            # Maybe it's a substring match or we just add it?
-            # For now, let's just add it if not found exactly
-            intel["questions"].append({"question": question_text, "answer": answer})
+            intel["questions"].append({
+                "question": question_text, 
+                "answer": answer,
+                "asked_at": datetime.datetime.now().isoformat(),
+                "answered_at": datetime.datetime.now().isoformat()
+            })
         self.save_intent(intel)
 
     def save_intent(self, intel: Dict[str, Any]):
@@ -123,7 +155,11 @@ class ThrawnIntelManager:
         
         for i, q in enumerate(intel["questions"], 1):
             lines.append(f"{i}. {q['question']}")
-            if q["answer"]:
+            if q.get("asked_at"):
+                lines.append(f"   Asked: {q['asked_at']}")
+            if q.get("answered_at"):
+                lines.append(f"   Answered: {q['answered_at']}")
+            if q.get("answer"):
                 lines.append(f"   Answer: {q['answer']}")
         
         with open(self.intent_file, 'w', encoding='utf-8') as f:
