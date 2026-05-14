@@ -140,6 +140,7 @@ class SessionManager:
             # Capture tracking metrics
             result.prompt_count = llm_client.prompt_count
             result.token_usage = llm_client.token_usage
+            result.monologue = getattr(llm_client, "history", [])
             
             # Extract autonomous handoff request and snapshots if present
             next_id = getattr(agent_instance, "next_agent_id", "")

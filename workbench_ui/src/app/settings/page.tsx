@@ -14,19 +14,22 @@ export default function Settings() {
     const [agents, setAgents] = useState<Agent[]>([]);
     const [mappings, setMappings] = useState<Record<string, string>>({});
     const [localModels, setLocalModels] = useState<any[]>([]);
+    const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({ gemini: true, claude: true });
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         const loadData = async () => {
             try {
-                const [agentsData, mappingsData, modelsData] = await Promise.all([
+                const [agentsData, mappingsData, modelsData, keysData] = await Promise.all([
                     apiGet<Agent[]>("/agents"),
                     apiGet<Record<string, string>>("/agent-models"),
-                    apiGet<any[]>("/local-models")
+                    apiGet<any[]>("/local-models"),
+                    apiGet<Record<string, boolean>>("/api-keys/status")
                 ]);
                 setAgents(agentsData);
                 setMappings(mappingsData);
                 setLocalModels(modelsData);
+                setApiKeyStatus(keysData);
             } catch (err) {
                 console.error("Settings load error", err);
             }
@@ -74,27 +77,44 @@ export default function Settings() {
                         </tr>
                     </thead>
                     <tbody>
-                        {agents.map(agent => (
-                            <tr key={agent.id}>
-                                <td style={{ fontWeight: 600 }}>{agent.id}</td>
-                                <td><code style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{agent.wake_word}</code></td>
-                                <td>
-                                    <select 
-                                        value={mappings[agent.id] || "ollama"} 
-                                        onChange={(e) => setMappings({...mappings, [agent.id]: e.target.value})}
-                                        className="model-select"
-                                    >
-                                        <option value="ollama">Ollama (Auto)</option>
-                                        <option value="gemini">Gemini 3 Pro (Cloud)</option>
-                                        <optgroup label="Local Inference (Ollama)">
-                                            {localModels.map(m => (
-                                                <option key={m.name} value={m.name}>{m.name}</option>
-                                            ))}
-                                        </optgroup>
-                                    </select>
-                                </td>
-                            </tr>
-                        ))}
+                        {agents.map(agent => {
+                            const selectedModel = mappings[agent.id] || "ollama";
+                            const isMissingKey = (selectedModel === "gemini" && !apiKeyStatus.gemini) || 
+                                               (selectedModel === "claude" && !apiKeyStatus.claude);
+                            
+                            return (
+                                <tr key={agent.id}>
+                                    <td style={{ fontWeight: 600 }}>{agent.id}</td>
+                                    <td><code style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{agent.wake_word}</code></td>
+                                    <td>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                            <select 
+                                                value={selectedModel} 
+                                                onChange={(e) => setMappings({...mappings, [agent.id]: e.target.value})}
+                                                className={`model-select ${isMissingKey ? 'warning-border' : ''}`}
+                                            >
+                                                <option value="ollama">Ollama (Auto-Detect)</option>
+                                                <option value="gemini">Gemini 1.5 Pro {!apiKeyStatus.gemini ? " (⚠️ No API Key)" : ""}</option>
+                                                <option value="claude">Claude 3.5 Sonnet {!apiKeyStatus.claude ? " (⚠️ No API Key)" : ""}</option>
+                                                {localModels.length > 0 && (
+                                                    <optgroup label="Installed Local Models">
+                                                        {localModels.map(m => (
+                                                            <option key={m.name} value={m.name}>{m.name}</option>
+                                                        ))}
+                                                    </optgroup>
+                                                )}
+                                            </select>
+                                            {isMissingKey && (
+                                                <span style={{ color: '#ff4444', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                    <span style={{ fontSize: '1rem' }}>⚠️</span> 
+                                                    Missing API Key. Execution will fail.
+                                                </span>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
                 
@@ -151,6 +171,10 @@ export default function Settings() {
                 .model-select:focus {
                     outline: none;
                     border-color: var(--accent-color);
+                }
+                .warning-border {
+                    border-color: #ff4444 !important;
+                    box-shadow: 0 0 5px rgba(255, 68, 68, 0.3);
                 }
                 .settings-footer {
                     padding: 1.5rem;

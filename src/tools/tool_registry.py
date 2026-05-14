@@ -45,12 +45,12 @@ class ToolRegistry:
             "category": "core"
         },
         "user_prompting": {
-            "description": "Asks the user for clarification via the intent system.",
+            "description": "Interactive tool for user clarification and project onboarding via Slack/Workbench.",
             "risk": "low",
             "category": "communication"
         },
         "clarification_engine": {
-            "description": "Refines strategic questions and analyzes roadmap impact.",
+            "description": "AI-driven engine for generating onboarding questions and analyzing roadmap impact.",
             "risk": "low",
             "category": "strategic"
         },
@@ -120,7 +120,7 @@ class ToolRegistry:
             "category": "telemetry"
         },
         "model_comparison": {
-            "description": "Evaluates different LLM models for specific tasks.",
+            "description": "Evaluates LLM models and backends for performance and financial Total Cost of Ownership (TCO).",
             "risk": "low",
             "category": "strategic"
         },
@@ -170,9 +170,9 @@ class ToolRegistry:
             "category": "testing"
         },
         "capability_reviewer": {
-            "description": "Evaluates agent capabilities against requirements.",
+            "description": "Maps system features to regulatory requirements (EU AI Act, NIST AI RMF) automatically via ID, keyword, and semantic matching. Produces gap analysis reports for ComplianceCodyAgent.",
             "risk": "low",
-            "category": "strategic"
+            "category": "compliance"
         },
         "repo_scanner": {
             "description": "Scans repository for security vulnerabilities.",
@@ -188,6 +188,11 @@ class ToolRegistry:
             "description": "Generates initial project structure and boilerplate based on schema.",
             "risk": "medium",
             "category": "core"
+        },
+        "secret_manager": {
+            "description": "Manages API key lifecycle: health checks, rotation, age tracking, and HITL escalation.",
+            "risk": "high",
+            "category": "security"
         }
     }
 

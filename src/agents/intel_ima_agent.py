@@ -41,25 +41,29 @@ class IntelImaAgent:
         self.next_agent_id = None
 
     def _calculate_success_metrics(self, repo_path: str) -> dict:
-        """Calculates intelligence reporting metrics based on recent logs."""
+        """Calculates intelligence reporting metrics based on real fleet data."""
+        # Use the specialized metrics manager for real data
+        report = self.metrics_manager.calculate_metrics(days=7)
+        agent_stats = report.get("agent_breakdown", {}).get(self.name, {})
+        
+        # Calculate delivery rate
+        total_sessions = agent_stats.get("total_sessions", 0)
+        success_rate = agent_stats.get("success_rate", 0.0)
+        
+        # Target is 1 successful report per week. 
+        # If we have at least one successful session, we consider it 100% for the week.
+        delivery_rate = 100.0 if success_rate > 0 and total_sessions > 0 else 0.0
+        
+        # Count anomalies flagged in the summaries by scanning logs
         logs = self.metrics_manager.load_logs(days=7)
         agent_logs = [l for l in logs if l.get("agent_id") == self.name]
-        
-        if not agent_logs:
-            return {
-                "weekly_reports_delivered": 0.0,
-                "cost_anomalies_flagged": 0
-            }
-
-        successful_reports = [l for l in agent_logs if l.get("outcome") == "success" and "report generated" in l.get("task_summary", "").lower()]
-        delivery_rate = len(successful_reports) / 1.0 # Target is 1 per week
-        
-        # Count anomalies flagged in the summaries
         anomalies = len([l for l in agent_logs if "anomaly" in l.get("task_summary", "").lower() or "spike" in l.get("task_summary", "").lower()])
 
         return {
-            "weekly_reports_delivered": round(min(delivery_rate, 1.0) * 100, 1),
-            "cost_anomalies_flagged": anomalies
+            "weekly_reports_delivered": delivery_rate,
+            "cost_anomalies_flagged": anomalies,
+            "fleet_recall": report.get("fleet_aggregate", {}).get("avg_recall", 0.0),
+            "fleet_precision": report.get("fleet_aggregate", {}).get("avg_precision", 0.0)
         }
 
     def _is_waiting_for_input(self, repo_path: str) -> bool:
@@ -154,8 +158,26 @@ class IntelImaAgent:
             cloud_status = "Unknown"
             remaining_quota = 0.0
 
-        # 3. Generate JSON Report
-        print(f"[{self.name}] Generating intelligence report...")
+        # 3. Collect Fleet Health Metrics
+        print(f"[{self.name}] Gathering fleet health metrics...")
+        metrics = self._calculate_success_metrics(repo_path)
+        
+        # 4. Collect Pending Strategic Debt (HITL Tasks)
+        print(f"[{self.name}] Auditing pending strategic debt...")
+        sm = StateManager(repo_path)
+        hitl_tasks = sm.read_json(".exegol/user_action_required.json") or []
+        pending_debt = [t for t in hitl_tasks if t.get("status") == "pending"]
+
+        # 5. Generate Real Intelligence Analysis via LLM
+        print(f"[{self.name}] Synthesizing intelligence report via LLM...")
+        analysis = self._generate_intelligence_analysis(
+            market_intel=market_intel,
+            cost_report=cost_report,
+            metrics=metrics,
+            pending_debt=pending_debt
+        )
+
+        # 6. Save JSON Report
         exegol_dir = os.path.join(repo_path, ".exegol")
         reports_dir = os.path.join(exegol_dir, "intel_reports")
         os.makedirs(reports_dir, exist_ok=True)
@@ -168,19 +190,16 @@ class IntelImaAgent:
             "type": "weekly",
             "generated_at": timestamp_iso,
             "session_id": handoff.session_id,
-            "summary": (
-                f"Fleet nominal. Total spend: ${total_spend:.4f}. "
-                f"Status: {cloud_status}. Remaining quota: ${remaining_quota:.2f}."
-            ),
+            "summary": analysis.get("executive_summary", "Fleet analysis complete."),
             "market_intel_snippet": str(market_intel)[:500],
             "cost_breakdown": cost_breakdown,
             "provider_breakdown": provider_breakdown,
             "total_spend": total_spend,
             "cloud_status": cloud_status,
             "remaining_quota": remaining_quota,
-            "recommendations": self._generate_recommendations(
-                total_spend, cloud_status, cost_breakdown
-            )
+            "fleet_metrics": metrics,
+            "recommendations": analysis.get("recommendations", []),
+            "strategic_debt_count": len(pending_debt)
         }
 
         with open(report_file, 'w', encoding='utf-8') as f:
@@ -198,8 +217,29 @@ class IntelImaAgent:
             print(f"[{self.name}] Delivering report to {email_recipient}...")
             try:
                 subject = f"Exegol Intelligence Report - {timestamp_fs}"
-                body = f"Fleet status: {cloud_status}. Total spend: ${total_spend:.4f}.\n\nFull report: {report_file}"
-                email_status = send_gmail_message(to=email_recipient, subject=subject, body=body)
+                
+                # Generate pretty HTML body
+                body_html = self._generate_html_report(report)
+                
+                # Plain text fallback
+                body_text = (
+                    f"Exegol Intelligence Report - {timestamp_fs}\n"
+                    f"==========================================\n\n"
+                    f"Fleet Status: {cloud_status}\n"
+                    f"Total Spend: ${total_spend:.4f}\n"
+                    f"Remaining Quota: ${remaining_quota:.2f}\n\n"
+                    f"Summary: {report['summary']}\n\n"
+                    f"Recommendations:\n" + "\n".join([f"- {r}" for r in report['recommendations']]) + "\n\n"
+                    f"Full JSON report synced to Google Drive.\n"
+                    f"Local path reference: {report_file}"
+                )
+                
+                email_status = send_gmail_message(
+                    to=email_recipient, 
+                    subject=subject, 
+                    body=body_text,
+                    body_html=body_html
+                )
             except Exception as e:
                 email_status = f"Failed: {str(e)}"
         
@@ -218,31 +258,129 @@ class IntelImaAgent:
         )
         return res
 
-    def _generate_recommendations(self, total_spend: float, cloud_status: str, agent_costs: dict) -> list:
-        """Generates cost recommendations based on real spend data."""
-        recs = []
+    def _generate_intelligence_analysis(self, market_intel, cost_report, metrics, pending_debt) -> dict:
+        """Uses LLM to synthesize all live data into a strategic intelligence report."""
+        prompt = f"""
+        Analyze the following live data from the Exegol autonomous fleet and generate a strategic intelligence report.
+        
+        MARKET INTELLIGENCE (Latest Trends):
+        {json.dumps(market_intel)}
+        
+        COST REPORT (FinOps):
+        Total Spend: ${cost_report.get('total_spend', 0)}
+        Cloud Status: {cost_report.get('cloud_status', 'Unknown')}
+        Remaining Quota: ${cost_report.get('remaining_quota', 0)}
+        Provider Breakdown: {json.dumps(cost_report.get('provider_breakdown', {}))}
+        
+        FLEET HEALTH (Success Metrics):
+        {json.dumps(metrics)}
+        
+        STRATEGIC DEBT (Pending HITL Tasks):
+        Total Pending: {len(pending_debt)}
+        Tasks: {json.dumps([t['task'] for t in pending_debt[:5]])}
+        
+        Return a JSON object with:
+        1. "executive_summary": A 2-3 sentence strategic overview of the fleet's current state.
+        2. "recommendations": A list of 3-5 actionable recommendations to improve cost efficiency, performance, or resolve strategic debt.
+        """
+        
+        response = self.llm_client.generate(prompt, system_instruction=self.system_prompt, json_format=True)
+        return self.llm_client.parse_json_response(response) or {
+            "executive_summary": "Fleet nominal. Intelligence synthesis failed to provide deeper insights.",
+            "recommendations": ["Review manual HITL queue.", "Monitor cloud spend trends."]
+        }
 
-        if cloud_status == "Over Budget":
-            recs.append("🚨 CRITICAL: Budget exceeded. Review agent scheduling and reduce high-frequency runs immediately.")
-        elif cloud_status == "Near Limit":
-            recs.append("⚠️ Budget near limit (>75% consumed). Consider switching high-cost agents to local Ollama models.")
+    def _generate_html_report(self, report: dict) -> str:
+        """Generates a premium HTML version of the intelligence report."""
+        cost_rows = ""
+        for agent, cost in report.get("cost_breakdown", {}).items():
+            cost_rows += f"""
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #eee;">{agent}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">${cost:.4f}</td>
+            </tr>
+            """
+        
+        recs_list = "".join([f"<li style='margin-bottom: 8px;'>{r}</li>" for r in report.get("recommendations", [])])
+        
+        # Determine status color
+        status = report.get('cloud_status', 'Healthy')
+        status_color = "#2ecc71" if status == "Healthy" else "#f39c12" if status == "Near Limit" else "#e74c3c"
+        
+        # Fleet Health Section
+        fleet_health_html = f"""
+        <h2 style="color: #1a1a2e; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 40px;">Fleet Health</h2>
+        <div style="display: flex; gap: 15px; margin-top: 15px;">
+            <div style="flex: 1; background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #999; text-transform: uppercase;">Avg Recall</span><br>
+                <strong style="font-size: 20px; color: #2980b9;">{report.get('fleet_metrics', {}).get('fleet_recall', 0)*100:.1f}%</strong>
+            </div>
+            <div style="flex: 1; background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #999; text-transform: uppercase;">Avg Precision</span><br>
+                <strong style="font-size: 20px; color: #2980b9;">{report.get('fleet_metrics', {}).get('fleet_precision', 0)*100:.1f}%</strong>
+            </div>
+            <div style="flex: 1; background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #999; text-transform: uppercase;">Pending Debt</span><br>
+                <strong style="font-size: 20px; color: #e67e22;">{report.get('strategic_debt_count', 0)}</strong>
+            </div>
+        </div>
+        """
 
-        if total_spend == 0.0:
-            recs.append("No billable sessions detected. Agents may be running on local models — cost efficiency is optimal.")
-            return recs
+        html = f"""
+        <html>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 12px;">
+            <div style="background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 40px 20px; border-radius: 12px 12px 0 0; color: white; text-align: center;">
+                <h1 style="margin: 0; font-size: 28px; letter-spacing: 1px;">EXEGOL INTELLIGENCE</h1>
+                <p style="opacity: 0.7; margin-top: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">Weekly Fleet Audit & FinOps</p>
+            </div>
+            
+            <div style="padding: 30px 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                    <div>
+                        <span style="font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px;">Status</span><br>
+                        <strong style="color: {status_color}; font-size: 18px;">● {status}</strong>
+                    </div>
+                    <div style="text-align: right;">
+                        <span style="font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px;">Total Spend</span><br>
+                        <strong style="font-size: 18px;">${report.get('total_spend'):.4f}</strong>
+                    </div>
+                </div>
 
-        # Flag the top spending agent
-        if agent_costs:
-            top_agent = max(agent_costs, key=agent_costs.get)
-            top_cost = agent_costs[top_agent]
-            if top_cost > 0:
-                recs.append(
-                    f"Top spend agent: {top_agent} (${top_cost:.4f}). "
-                    "Consider routing repetitive tasks to a lighter local model."
-                )
+                <h2 style="color: #1a1a2e; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 40px;">Executive Summary</h2>
+                <p style="font-size: 16px; color: #444; background: #f8f9fa; padding: 20px; border-left: 4px solid #1a1a2e; border-radius: 0 4px 4px 0;">
+                    {report.get('summary')}
+                </p>
+                
+                {fleet_health_html}
 
-        recs.append(
-            "Consider transitioning high-throughput tasks to local vLLM for cost reduction "
-            "based on current pricing trends."
-        )
-        return recs
+                <h2 style="color: #1a1a2e; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 40px;">Cost Breakdown</h2>
+                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 12px; text-align: left; font-size: 13px; color: #666; text-transform: uppercase;">Agent</th>
+                            <th style="padding: 12px; text-align: right; font-size: 13px; color: #666; text-transform: uppercase;">Est. Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {cost_rows}
+                    </tbody>
+                </table>
+                
+                <h2 style="color: #1a1a2e; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 40px;">Strategic Recommendations</h2>
+                <ul style="padding-left: 20px; color: #444;">
+                    {recs_list}
+                </ul>
+                
+                <h2 style="color: #1a1a2e; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 40px;">Market Intelligence</h2>
+                <div style="font-style: italic; color: #555; font-size: 14px; background: #eef2f7; padding: 20px; border-radius: 8px; line-height: 1.5;">
+                    "{report.get('market_intel_snippet')[:400]}..."
+                </div>
+            </div>
+            
+            <div style="background: #fafafa; padding: 20px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 12px 12px; border-top: 1px solid #eee;">
+                Generated by IntelImaAgent | Exegol V3 Autonomous Fleet
+            </div>
+        </body>
+        </html>
+        """
+        return html

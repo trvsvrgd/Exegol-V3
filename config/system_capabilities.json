@@ -1,0 +1,169 @@
+{
+  "schema_version": "1.0",
+  "last_updated": "2026-05-10",
+  "description": "Declarative manifest of Exegol v3 system capabilities used by ComplianceCodyAgent to map regulatory requirements to implemented features.",
+  "capabilities": [
+    {
+      "id": "isolated_sandboxing",
+      "name": "Isolated Sandbox Execution",
+      "description": "All agent code execution occurs within a sandboxed environment preventing system-level side effects.",
+      "implemented": true,
+      "evidence": "src/tools/sandbox_orchestrator.py, src/tools/sandbox_validator.py",
+      "regulatory_relevance": ["EU AI Act Art. 9 - Risk Management", "NIST AI RMF - GOVERN 1.1"]
+    },
+    {
+      "id": "human_in_the_loop",
+      "name": "Human-In-The-Loop (HITL) Controls",
+      "description": "High-risk or irreversible agent actions require explicit human approval before execution.",
+      "implemented": true,
+      "evidence": "src/tools/hitl_manager.py, src/api.py",
+      "regulatory_relevance": ["EU AI Act Art. 14 - Human Oversight", "NIST AI RMF - GOVERN 6.1"]
+    },
+    {
+      "id": "audit_logging",
+      "name": "Comprehensive Audit Logging",
+      "description": "All agent interactions, decisions, and tool invocations are logged with timestamps and agent IDs.",
+      "implemented": true,
+      "evidence": "src/tools/fleet_logger.py, src/tools/interaction_log_reader.py",
+      "regulatory_relevance": ["EU AI Act Art. 12 - Record Keeping", "NIST AI RMF - MAP 5.1"]
+    },
+    {
+      "id": "rbac_access_control",
+      "name": "Role-Based Access Control (RBAC)",
+      "description": "Agent capabilities are governed by a trust and RBAC system, restricting tool access by role.",
+      "implemented": true,
+      "evidence": "src/tools/rbac_manager.py, config/agent_rbac.json, config/agent_trust.json",
+      "regulatory_relevance": ["EU AI Act Art. 10 - Data Governance", "NIST AI RMF - GOVERN 1.4"]
+    },
+    {
+      "id": "user_awareness_disclosure",
+      "name": "AI Interaction Disclosure",
+      "description": "System surfaces that users are interacting with an autonomous AI agent fleet.",
+      "implemented": true,
+      "evidence": "README.md, src/workbench/",
+      "regulatory_relevance": ["EU AI Act Art. 52 - Transparency Obligations", "NIST AI RMF - GOVERN 5.2"]
+    },
+    {
+      "id": "secret_rotation",
+      "name": "API Key & Secret Lifecycle Management",
+      "description": "API keys are tracked for age, health, and automatically flagged for rotation via HITL queue.",
+      "implemented": true,
+      "evidence": "src/tools/secret_manager.py, config/secret_metadata.json",
+      "regulatory_relevance": ["NIST SP 800-57 Key Management", "ISO 27001 A.9.4"]
+    },
+    {
+      "id": "egress_filtering",
+      "name": "Egress Network Control",
+      "description": "All outbound agent network requests are filtered against an allowlist.",
+      "implemented": true,
+      "evidence": "src/tools/egress_filter.py, config/egress_allowlist.json",
+      "regulatory_relevance": ["EU AI Act Art. 9 - Risk Management", "NIST AI RMF - MAP 1.6"]
+    },
+    {
+      "id": "data_minimization",
+      "name": "Data Minimization & Local Processing",
+      "description": "Agent inference defaults to local Ollama models to avoid unnecessary data exfiltration.",
+      "implemented": true,
+      "evidence": "config/agent_models.json, src/inference/llm_client.py",
+      "regulatory_relevance": ["GDPR Art. 5(1)(c) - Data Minimisation", "EU AI Act Art. 10"]
+    },
+    {
+      "id": "input_sanitization",
+      "name": "Input Validation & Sanitization",
+      "description": "All user-supplied and external inputs are sanitized before processing by agents.",
+      "implemented": true,
+      "evidence": "src/tools/input_sanitizer.py",
+      "regulatory_relevance": ["OWASP Top 10", "NIST AI RMF - MAP 2.2"]
+    },
+    {
+      "id": "risk_scoring",
+      "name": "Automated Risk Scoring",
+      "description": "Proposed changes are automatically scored for risk before execution by the agent fleet.",
+      "implemented": true,
+      "evidence": "src/tools/risk_scorer.py, src/tools/safety_gate.py",
+      "regulatory_relevance": ["EU AI Act Art. 9 - Risk Management System", "NIST AI RMF - MEASURE 2.5"]
+    },
+    {
+      "id": "security_vulnerability_scanning",
+      "name": "Security Vulnerability Scanning",
+      "description": "Repository code is periodically scanned for known security vulnerabilities.",
+      "implemented": true,
+      "evidence": "src/tools/repo_scanner.py, src/agents/security_architect_agent.py",
+      "regulatory_relevance": ["EU AI Act Art. 9", "ISO 27001 A.12.6.1"]
+    },
+    {
+      "id": "metrics_and_kpis",
+      "name": "Performance Metrics & KPI Tracking",
+      "description": "Agent success metrics and KPIs are tracked and surfaced in the Workbench UI.",
+      "implemented": true,
+      "evidence": "src/tools/metrics_manager.py, src/workbench/",
+      "regulatory_relevance": ["NIST AI RMF - MEASURE 1.1", "EU AI Act Art. 9"]
+    },
+    {
+      "id": "model_governance",
+      "name": "Model Selection Governance",
+      "description": "LLM model assignments per agent are governed by configuration, preventing arbitrary model use.",
+      "implemented": true,
+      "evidence": "config/agent_models.json, src/agents/model_router_mothma_agent.py",
+      "regulatory_relevance": ["EU AI Act Art. 13 - Transparency", "NIST AI RMF - GOVERN 1.7"]
+    },
+    {
+      "id": "incident_response_escalation",
+      "name": "Incident Response & Escalation",
+      "description": "Critical failures are automatically routed to human operators via Slack and HITL queue.",
+      "implemented": true,
+      "evidence": "src/tools/fatal_error_router.py, src/tools/slack_tool.py",
+      "regulatory_relevance": ["EU AI Act Art. 62 - Serious Incident Reporting", "NIST AI RMF - RESPOND 1.1"]
+    },
+    {
+      "id": "bias_and_fairness_evaluation",
+      "name": "Bias & Fairness Evaluation",
+      "description": "LLM-as-Judge evaluator monitors agent outputs for quality and consistency across interactions.",
+      "implemented": true,
+      "evidence": "src/tools/llm_judge.py, src/tools/evaluator.py",
+      "regulatory_relevance": ["EU AI Act Art. 10 - Data & Governance", "NIST AI RMF - MEASURE 2.11"]
+    },
+    {
+      "id": "automated_testing_pipeline",
+      "name": "Automated Testing & Regression Pipeline",
+      "description": "Agent outputs are regression-tested via snapshot testing and linting to prevent silent regressions.",
+      "implemented": true,
+      "evidence": "src/tools/snapshot_tester.py, src/tools/test_runner.py, src/tools/linter.py",
+      "regulatory_relevance": ["NIST AI RMF - MEASURE 2.7", "ISO 25010 - Software Quality"]
+    },
+    {
+      "id": "continuous_compliance_monitoring",
+      "name": "Continuous Compliance Monitoring",
+      "description": "Monthly automated sweeps check system capabilities against latest ML/AI regulations.",
+      "implemented": true,
+      "evidence": "src/agents/compliance_cody_agent.py, config/fleet_cadence.json",
+      "regulatory_relevance": ["EU AI Act Art. 72 - Post Market Monitoring", "NIST AI RMF - GOVERN 1.2"]
+    },
+    {
+      "id": "explainability_and_reasoning",
+      "name": "Agent Reasoning Explainability",
+      "description": "Agent thought processes can be introspected and logged for audit and debugging.",
+      "implemented": true,
+      "evidence": "src/tools/agent_introspection.py",
+      "regulatory_relevance": ["EU AI Act Art. 13 - Transparency", "NIST AI RMF - MAP 5.2"]
+    },
+    {
+      "id": "supply_chain_security",
+      "name": "Software Supply Chain Security",
+      "description": "Dependency and third-party integrations are monitored; no unauthorized package installation.",
+      "implemented": false,
+      "evidence": null,
+      "notes": "Planned: integrate pip-audit or similar tool into the fleet cadence.",
+      "regulatory_relevance": ["NIST SP 800-161 - Supply Chain Risk", "EU AI Act Art. 26"]
+    },
+    {
+      "id": "data_retention_policy",
+      "name": "Data Retention & Deletion Policy",
+      "description": "Interaction logs and agent outputs are subject to a defined retention and purge schedule.",
+      "implemented": false,
+      "evidence": null,
+      "notes": "Planned: add log rotation and auto-purge to fleet_logger.py.",
+      "regulatory_relevance": ["GDPR Art. 5(1)(e) - Storage Limitation", "EU AI Act Art. 12"]
+    }
+  ]
+}

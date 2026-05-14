@@ -129,6 +129,28 @@ export default function FleetDashboard() {
           padding-left: 1rem;
           border-left: 3px solid var(--accent-color);
         }
+
+        @media (max-width: 850px) {
+          .fleet-page {
+            padding: 1.5rem;
+          }
+          .fleet-header {
+            margin-bottom: 2.5rem;
+          }
+          .summary-grid {
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+          }
+          .summary-card .value {
+            font-size: 1.8rem;
+          }
+        }
+
+        @media (max-width: 500px) {
+          .summary-grid {
+            grid-template-columns: 1fr;
+          }
+        }
       `}</style>
     </div>
   );

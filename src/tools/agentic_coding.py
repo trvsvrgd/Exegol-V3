@@ -31,6 +31,7 @@ def execute_coding_task(
         A summary of the actions performed.
     """
     print(f"[AgenticCoding] Starting task for {agent_name}: {task_description[:100]}...")
+    os.environ["EXEGOL_ACTIVE_AGENT"] = agent_name
     
     # 1. Research (Optional but recommended for agentic feel)
     search_query = f"best practices and implementation for: {task_description[:200]}"
@@ -40,24 +41,30 @@ def execute_coding_task(
     files_in_repo = os.listdir(repo_path)
     # Filter out hidden/non-source files if needed, but for now just list top level
     
-    planning_prompt = f"""
-    You are the 'Agentic Coding' engine. Your goal is to implement the following task:
-    Task: {task_description}
-    
-    Implementation Research: {json.dumps(research_results)}
-    
-    Existing Files (Top Level): {files_in_repo}
-    
-    Plan the necessary file modifications. Return a JSON list of actions.
-    Each action should be:
-    {{
-        "type": "write" | "replace" | "regex",
-        "path": "relative/path/to/file",
-        "content": "new content" | "text to insert" | "replacement string",
-        "target": "text to replace" | "regex pattern" (only for type: replace/regex),
-        "reason": "Why this change is being made"
-    }}
-    """
+    planning_prompt = f"""You are the 'Agentic Coding' engine. Your ONLY output must be a valid JSON array — no explanations, no markdown, no prose.
+
+Task to implement:
+{task_description}
+
+Implementation Research: {json.dumps(research_results)}
+
+Existing Files (Top Level): {files_in_repo}
+
+Return a JSON array of file action objects. Each object MUST have these EXACT keys:
+{{
+    "type": "write" | "replace" | "regex",
+    "path": "relative/path/to/file",
+    "content": "<new content or replacement string>",
+    "target": "<text to replace or regex pattern>" (required only for replace/regex types),
+    "reason": "<one-line rationale>"
+}}
+
+Example output format:
+[
+  {{"type": "write", "path": "scratch/notes.txt", "content": "hello", "reason": "Create notes file"}}
+]
+
+Respond with ONLY the JSON array. No other text."""
     
     try:
         response = llm_client.generate(planning_prompt, system_instruction=system_prompt, json_format=True)
@@ -66,14 +73,55 @@ def execute_coding_task(
         return f"Error during planning: {str(e)}"
         
     if not actions or not isinstance(actions, list):
+        # Save raw failed response for debugging
+        try:
+            with open(os.path.join(repo_path, "scratch", "failed_plan_response.txt"), "w", encoding="utf-8") as f:
+                f.write(f"ATTEMPT 1:\n{response}\n")
+        except: pass
+
         # Handle if LLM returns a dict with "actions" key
         if isinstance(actions, dict) and "actions" in actions:
             actions = actions["actions"]
         else:
-            return "Failed to parse coding plan from LLM."
+            # Retry once with an even stricter prompt before giving up
+            print(f"[AgenticCoding] Parse failed on first attempt — retrying with strict JSON prompt.")
+            retry_prompt = (
+                f"Return ONLY a valid JSON array (no markdown, no prose) of file actions for this task:\n"
+                f"{task_description}\n\n"
+                f"Example: [{{\"type\": \"write\", \"path\": \"scratch/out.txt\", \"content\": \"hello\", \"reason\": \"demo\"}}]"
+            )
+            try:
+                response2 = llm_client.generate(retry_prompt, system_instruction=system_prompt, json_format=True)
+                actions = llm_client.parse_json_response(response2)
+                
+                # Save raw retry response
+                try:
+                    with open(os.path.join(repo_path, "scratch", "failed_plan_response.txt"), "a", encoding="utf-8") as f:
+                        f.write(f"\nATTEMPT 2 (Retry):\n{response2}\n")
+                except: pass
+
+                if isinstance(actions, dict) and "actions" in actions:
+                    actions = actions["actions"]
+                
+                if not isinstance(actions, list):
+                    # Final Hail Mary: simple regex extraction for anything that looks like a JSON array
+                    import re
+                    match = re.search(r'\[\s*\{.*\}\s*\]', response2, re.DOTALL)
+                    if match:
+                        try:
+                            actions = json.loads(match.group(0))
+                            print(f"[AgenticCoding] Hail Mary: Extracted JSON array via regex.")
+                        except: pass
+                
+                if not isinstance(actions, list):
+                    return "Failed to parse coding plan from LLM after retry. See scratch/failed_plan_response.txt"
+            except Exception as e2:
+                return f"Error during planning retry: {str(e2)}"
 
     results = []
     steps_used = 0
+    
+    print(f"[AgenticCoding] Parsed {len(actions)} actions to execute.")
     
     for action in actions:
         if steps_used >= max_steps:
@@ -81,12 +129,14 @@ def execute_coding_task(
             break
             
         action_type = action.get("type")
-        path = action.get("path")
-        content = action.get("content")
-        target = action.get("target", "")
+        # Handle variations in model output keys
+        path = action.get("path") or action.get("file") or action.get("filename")
+        content = action.get("content") or action.get("text") or action.get("code")
+        target = action.get("target") or action.get("pattern") or ""
         reason = action.get("reason", "Applying agentic coding update")
         
         if not path or content is None:
+            print(f"[AgenticCoding] Skipping invalid action: {action}")
             continue
             
         # Pulse heartbeat to signal progress (arch_agent_heartbeat)
@@ -99,20 +149,23 @@ def execute_coding_task(
             if action_type == "write":
                 res = write_file(file_path, content, reason=reason)
                 results.append(f"Write {path}: {res}")
-                outcome = "success"
+                outcome = "failure" if res.startswith("Error:") else "success"
             elif action_type == "replace":
                 res = replace_content(file_path, target, content, reason=reason)
                 results.append(f"Replace in {path}: {res}")
-                outcome = "success"
+                outcome = "failure" if res.startswith("Error:") else "success"
             elif action_type == "regex":
                 res = search_replace_regex(file_path, target, content, reason=reason)
                 results.append(f"Regex in {path}: {res}")
-                outcome = "success"
+                outcome = "failure" if res.startswith("Error:") else "success"
             else:
                 results.append(f"Unknown action type: {action_type}")
                 continue
                 
             steps_used += 1
+            
+            if outcome == "failure":
+                raise Exception(res)
             
             # Log individual interaction (arch_dex_granular_logging)
             log_interaction(
@@ -139,4 +192,8 @@ def execute_coding_task(
             )
 
     summary = f"Coding cycle complete for {agent_name}. Results:\n" + "\n".join(results)
-    return summary
+    return {
+        "summary": summary,
+        "actions": actions,
+        "results": results
+    }

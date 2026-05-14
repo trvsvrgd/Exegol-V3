@@ -93,12 +93,21 @@ def _manual_ast_lint(path: str) -> Dict[str, Any]:
                     continue
                 
                 for node in ast.walk(tree):
+                    # 1. Hardcoded Credentials
                     if isinstance(node, ast.Assign):
                         for target in node.targets:
                             if isinstance(target, ast.Name) and any(kw in target.id.lower() for kw in ['key', 'secret', 'password', 'token']):
                                 if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                                     if len(node.value.value) > 8:
                                         issues.append(f"{py_file.name}:{node.lineno} - Warning: Potential hardcoded credential in '{target.id}'")
+
+                    # 2. Hardcoded Absolute Paths (Python)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                        val = node.value
+                        # Matches Windows (C:\...) or Unix-style absolute paths (/usr/...)
+                        if re.match(r'^[a-z]:[\\/][^"\'\n]{2,}', val, re.I) or re.match(r'^/[^"\'\n/]{2,}/[^"\'\n/]{2,}', val):
+                            if not any(fp in val for fp in ["/dev/null", "/usr/bin/env", "node_modules", ".svg", ".png"]):
+                                issues.append(f"{py_file.name}:{node.lineno} - Warning: Potential hardcoded absolute path '{val}'")
         except Exception as e:
             issues.append(f"Error reading {py_file.name}: {str(e)}")
             
@@ -114,7 +123,7 @@ def _manual_web_lint(path: str) -> List[str]:
     secret_pattern = re.compile(r'([\'"]?[\w\-]*(?:' + '|'.join(secret_keywords) + r')[\w\-]*[\'"]?\s*[:=]\s*[\'"])([^\'"]{8,})([\'"])', re.IGNORECASE)
     
     # Regex for hardcoded absolute paths (Windows and Unix)
-    path_pattern = re.compile(r'([\'"])([a-z]:[\\/][^"\'\n]{4,}|/[^"\'\n]{4,}/[^"\'\n]{4,})\1', re.IGNORECASE)
+    path_pattern = re.compile(r'([\'"])([a-z]:[\\/][^"\'\n]{2,}|/[^"\'\n/]{2,}/[^"\'\n/]{2,}[^"\'\n]*)\1', re.IGNORECASE)
 
     web_extensions = ["*.tsx", "*.ts", "*.js", "*.jsx"]
     files_to_scan = []

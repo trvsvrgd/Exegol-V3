@@ -40,13 +40,21 @@
   },
   "agent_roles": {
     "developer_dex": "developer",
+    "DeveloperDexAgent": "developer",
     "architect_artoo": "architect",
+    "ArchitectArtooAgent": "architect",
     "security_architect": "security",
+    "SecurityArchitectAgent": "security",
     "product_poe": "manager",
+    "ProductPoeAgent": "manager",
     "report_revan": "manager",
+    "ReportRevanAgent": "manager",
     "thoughtful_thrawn": "restricted",
+    "ThoughtfulThrawnAgent": "restricted",
     "vibe_vader": "restricted",
-    "quality_quigon": "developer"
+    "VibeVaderAgent": "restricted",
+    "quality_quigon": "developer",
+    "QualityQuigonAgent": "developer"
   },
   "path_grants": {
     "vibe_vader": [
@@ -55,6 +63,7 @@
     ],
     "thoughtful_thrawn": [
       ".exegol/intent.md",
+      ".exegol/user_action_required.json",
       "README.md"
     ]
   },

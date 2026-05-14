@@ -1,18 +1,73 @@
 {
   "schedules": [
     {
-      "id": "daily_report",
-      "agent_id": "report_revan",
-      "summary": "Daily Fleet Performance Summary",
+      "id": "daily_vibe_audit",
+      "agent_id": "vibe_vader",
+      "summary": "Daily Vibe Audit & Task Cleanup",
       "frequency": "daily",
+      "at": "09:00",
+      "enabled": true
+    },
+    {
+      "id": "daily_intent_review",
+      "agent_id": "thoughtful_thrawn",
+      "summary": "Daily Intent Review & Question Cleanup",
+      "frequency": "daily",
+      "at": "10:00",
+      "enabled": true
+    },
+    {
+      "id": "hourly_thrawn_engagement",
+      "agent_id": "thoughtful_thrawn",
+      "summary": "Hourly Thrawn Engagement Check",
+      "frequency": "every_1_hour",
+      "enabled": true
+    },
+    {
+      "id": "weekly_ops_optimizer",
+      "agent_id": "optimizer_ahsoka",
+      "summary": "Weekly Prompt & Interaction Optimization",
+      "frequency": "sunday",
+      "at": "18:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_intel_sync",
+      "agent_id": "intel_ima",
+      "summary": "Weekly Drive & Inbox Intelligence Sync",
+      "frequency": "monday",
       "at": "08:00",
       "enabled": true
     },
     {
-      "id": "weekly_arch_audit",
-      "agent_id": "architect_artoo",
-      "summary": "Weekly Global Architecture Audit",
-      "frequency": "monday",
+      "id": "weekly_market_eval",
+      "agent_id": "evaluator_ezra",
+      "summary": "Weekly AI Market & Arxiv Evaluation",
+      "frequency": "sunday",
+      "at": "10:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_fleet_report",
+      "agent_id": "report_revan",
+      "summary": "Weekly Fleet Performance Summary",
+      "frequency": "friday",
+      "at": "16:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_staff_review",
+      "agent_id": "chief_of_staff_chewie",
+      "summary": "Weekly Agent Performance & ROI Review",
+      "frequency": "friday",
+      "at": "17:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_compliance_audit",
+      "agent_id": "compliance_cody",
+      "summary": "Weekly Policy & Capability Compliance Audit",
+      "frequency": "tuesday",
       "at": "09:00",
       "enabled": true
     },
@@ -25,11 +80,19 @@
       "enabled": true
     },
     {
-      "id": "weekly_vibe_audit",
-      "agent_id": "vibe_vader",
-      "summary": "Weekly Human-Action Boundary Audit",
-      "frequency": "friday",
-      "at": "15:00",
+      "id": "weekly_tech_docs",
+      "agent_id": "technical_tarkin",
+      "summary": "Weekly Documentation & README Awesome-ification",
+      "frequency": "thursday",
+      "at": "11:00",
+      "enabled": true
+    },
+    {
+      "id": "weekly_model_routing",
+      "agent_id": "model_router_mothma",
+      "summary": "Weekly Model Performance & Cost Routing Review",
+      "frequency": "saturday",
+      "at": "10:00",
       "enabled": true
     },
     {
@@ -37,6 +100,27 @@
       "agent_id": "watcher_wedge",
       "summary": "Hourly Operational Intelligence Scan",
       "frequency": "every_1_hour",
+      "enabled": true
+    },
+    {
+      "id": "monthly_strategy_pivot",
+      "agent_id": "strategist_sloane",
+      "summary": "Monthly Strategic Roadmap & Pivot Analysis",
+      "frequency": "monthly",
+      "enabled": true
+    },
+    {
+      "id": "monthly_growth_audit",
+      "agent_id": "growth_galen",
+      "summary": "Monthly Ecosystem Growth & Capability Audit",
+      "frequency": "monthly",
+      "enabled": true
+    },
+    {
+      "id": "monthly_finance_report",
+      "agent_id": "finance_fennec",
+      "summary": "Monthly Fleet Financial & Cost Analysis",
+      "frequency": "monthly",
       "enabled": true
     }
   ],

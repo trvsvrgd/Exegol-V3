@@ -2,7 +2,7 @@ import os
 import json
 import pytest
 from unittest.mock import MagicMock
-from src.agents.security_architect_agent import SecurityArchitectAgent
+from src.agents.security_sabine_agent import SecuritySabineAgent
 from src.handoff import HandoffContext
 
 
@@ -11,14 +11,14 @@ REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 @pytest.fixture
 def agent():
-    return SecurityArchitectAgent(MagicMock())
+    return SecuritySabineAgent(MagicMock())
 
 
 @pytest.fixture
 def handoff():
     return HandoffContext(
         repo_path=REPO_PATH,
-        agent_id="security_architect",
+        agent_id="security_sabine",
         task_id="test_scan",
         model_routing="mock",
         max_steps=20
@@ -30,7 +30,7 @@ def handoff():
 # ------------------------------------------------------------------
 
 def test_agent_instantiation(agent):
-    assert agent.name == "SecurityArchitectAgent"
+    assert agent.name == "SecuritySabineAgent"
     assert agent.max_steps == 20
     assert "backlog_writer" in agent.tools
     assert "zero_day_patterns_detected" in agent.success_metrics
@@ -61,7 +61,7 @@ def test_agent_self_excluded_from_scan(agent):
     """Ensure the scanner doesn't flag its own pattern definitions as vulnerabilities."""
     findings = agent._scan_for_zero_day_patterns(REPO_PATH)
     for f in findings:
-        assert "security_architect_agent" not in f["file"], (
+        assert "security_sabine_agent" not in f["file"], (
             f"Security agent scanned itself and produced false positive: {f['file']}:{f['line']}"
         )
 
@@ -97,7 +97,7 @@ def test_architecture_detects_missing_auth(agent):
 # ------------------------------------------------------------------
 
 def test_risk_score_critical():
-    agent = SecurityArchitectAgent(MagicMock())
+    agent = SecuritySabineAgent(MagicMock())
     score = agent._compute_risk_score(
         [{"severity": "CRITICAL"}],
         []
@@ -106,7 +106,7 @@ def test_risk_score_critical():
 
 
 def test_risk_score_low_when_empty():
-    agent = SecurityArchitectAgent(MagicMock())
+    agent = SecuritySabineAgent(MagicMock())
     score = agent._compute_risk_score([], [])
     assert score == "LOW"
 

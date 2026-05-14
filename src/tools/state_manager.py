@@ -111,6 +111,13 @@ class StateManager:
             })
             self.write_json(json_path, queue)
             
+            # 1.1 Broadcast to Slack (Unified Interaction Layer)
+            try:
+                from tools.slack_tool import post_hitl_request
+                post_hitl_request(task_id, summary, context, category)
+            except Exception as e:
+                print(f"[StateManager] Failed to notify Slack: {e}")
+            
         # 2. Update Markdown
         md_path = os.path.join(self.repo_path, ".exegol", "user_action_required.md")
         os.makedirs(os.path.dirname(md_path), exist_ok=True)

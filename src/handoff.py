@@ -11,7 +11,7 @@ the handoff.
 import uuid
 import datetime
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Dict, Any
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,8 @@ class SessionResult:
     snapshot_hash: str = ""           # SHA-256 hash of the codebase state after modifications
     token_usage: int = 0
     prompt_count: int = 0
+    monologue: List[Dict[str, Any]] = field(default_factory=list)
+    regression_context: str = ""      # Details captured for failure analysis/retry
 
     def to_dict(self) -> dict:
         """Serialize for JSON persistence in interaction_logs/."""
@@ -82,5 +84,6 @@ class SessionResult:
             "regression_context": self.regression_context,
             "token_usage": self.token_usage,
             "prompt_count": self.prompt_count,
+            "monologue": self.monologue,
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds")
         }

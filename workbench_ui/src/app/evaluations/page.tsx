@@ -1,11 +1,8 @@
 "use client";
-
 import { useState, useEffect } from "react";
+import { apiGet } from "../api-client";
 
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-local-key";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
-
 
 interface EvalRequirement {
   id: string;
@@ -34,12 +31,8 @@ export default function EvaluationsDashboard() {
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
   const [reportData, setReportData] = useState<EvalReport | null>(null);
 
-
   useEffect(() => {
-    fetch(`${API_BASE_URL}/evaluations?repo_path=${encodeURIComponent(REPO_PATH)}`, {
-      headers: { "X-API-Key": API_KEY }
-    })
-      .then(res => res.json())
+    apiGet<string[]>(`/evaluations?repo_path=${encodeURIComponent(REPO_PATH)}`)
       .then(data => {
         setReports(data);
         if (data.length > 0) {
@@ -51,10 +44,7 @@ export default function EvaluationsDashboard() {
 
   useEffect(() => {
     if (selectedReport) {
-      fetch(`${API_BASE_URL}/evaluations/${selectedReport}?repo_path=${encodeURIComponent(REPO_PATH)}`, {
-        headers: { "X-API-Key": API_KEY }
-      })
-        .then(res => res.json())
+      apiGet<EvalReport>(`/evaluations/${selectedReport}?repo_path=${encodeURIComponent(REPO_PATH)}`)
         .then(data => setReportData(data))
         .catch(err => console.error("Failed to fetch report data:", err));
     }

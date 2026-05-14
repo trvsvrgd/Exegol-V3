@@ -4,6 +4,7 @@ import uuid
 import datetime
 import uvicorn
 import requests
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,7 @@ from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.egress_filter import EgressFilter
 from tools.fleet_logger import read_interaction_logs
 from tools.tool_registry import ToolRegistry
+from tools.hitl_manager import HITLManager
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -91,7 +93,14 @@ def _execute_agent_sync(session_id: str, repo_path: str, agent_id: str, model: s
         )
         _running_tasks[session_id].update({
             "status": "done",
-            "result": result.to_dict() if result else {"error": "No result returned"},
+            "result": result.to_dict() if result else {
+                "outcome": "failure",
+                "output_summary": "Orchestrator blocked execution (Check Loop Guard/Circuit Breaker).",
+                "errors": ["No result returned from agent execution."],
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "steps_used": 0
+            },
             "finished_at": datetime.datetime.now().isoformat(),
         })
     except Exception as exc:
@@ -123,6 +132,11 @@ class ActionQueueRequest(BaseModel):
     item_id: str
     notes: Optional[str] = None
 
+class SecretRotateRequest(BaseModel):
+    repo_path: str
+    env_var: str
+    new_value: str
+
 class AgentModelMapping(BaseModel):
     agent_id: str
     model: str
@@ -152,12 +166,12 @@ class ThrawnArchitectureRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @app.get("/repos")
-async def get_repos():
+def get_repos():
     orchestrator.load_config()
     return orchestrator.priority_config.get("repositories", [])
 
 @app.get("/agents")
-async def get_agents():
+def get_agents():
     return [
         {
             "id": k, 
@@ -171,7 +185,7 @@ async def get_agents():
 # --- Task 1: Async /run-task ---
 
 @app.post("/run-task")
-async def run_task(req: RunTaskRequest):
+def run_task(req: RunTaskRequest):
     """Submit an agent task asynchronously. Returns a session_id for polling."""
     # 1. Write the active prompt
     exegol_dir = os.path.join(req.repo_path, ".exegol")
@@ -200,7 +214,7 @@ async def run_task(req: RunTaskRequest):
 
 
 @app.get("/task-status/{session_id}")
-async def get_task_status(session_id: str):
+def get_task_status(session_id: str):
     """Poll for the result of an async /run-task submission."""
     entry = _running_tasks.get(session_id)
     if not entry:
@@ -210,33 +224,23 @@ async def get_task_status(session_id: str):
 # --- Epic 1: Human Action Queue (HITL) ---
 
 @app.get("/human-queue")
-async def get_human_queue(repo_path: str):
-    sm = StateManager(repo_path)
-    queue = sm.read_json(".exegol/user_action_required.json") or []
-    return queue
+def get_human_queue(repo_path: str):
+    hm = HITLManager(repo_path)
+    return hm.get_queue()
 
 @app.post("/human-queue/action")
-async def update_human_queue(req: ActionQueueRequest):
-    sm = StateManager(req.repo_path)
-    queue = sm.read_json(".exegol/user_action_required.json") or []
-
-    updated = False
+def update_human_queue(req: ActionQueueRequest):
+    hm = HITLManager(req.repo_path)
+    
     if req.action == "dismiss":
+        queue = hm.get_queue()
         queue = [item for item in queue if item.get("id") != req.item_id]
-        updated = True
-    else:
-        for item in queue:
-            if item.get("id") == req.item_id:
-                if req.action == "done":
-                    item["status"] = "done"
-                    item["completed_at"] = datetime.datetime.now().isoformat()
-                elif req.action == "update_notes":
-                    item["notes"] = req.notes
-                updated = True
-                break
-
-    if updated:
-        sm.write_json(".exegol/user_action_required.json", queue)
+        hm.sm.write_json(hm.queue_file, queue)
+        hm._sync_to_markdown(queue)
+        return {"status": "success"}
+    
+    status = "done" if req.action == "done" else "pending"
+    if hm.resolve_task(req.item_id, status=status, notes=req.notes):
         return {"status": "success"}
 
     raise HTTPException(status_code=404, detail="Item not found")
@@ -244,19 +248,19 @@ async def update_human_queue(req: ActionQueueRequest):
 # --- Epic 2: Backlog Management ---
 
 @app.get("/backlog")
-async def get_backlog(repo_path: str):
+def get_backlog(repo_path: str):
     sm = StateManager(repo_path)
     return sm.read_json(".exegol/backlog.json") or []
 
 @app.post("/backlog/update")
-async def update_backlog(req: BacklogUpdateRequest):
+def update_backlog(req: BacklogUpdateRequest):
     sm = StateManager(req.repo_path)
     if sm.update_backlog_task(req.task_id, req.updates):
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Task not found")
 
 @app.post("/backlog/add")
-async def add_to_backlog(req: Dict[str, Any]):
+def add_to_backlog(req: Dict[str, Any]):
     repo_path = req.get("repo_path")
     task_summary = req.get("summary")
     if not repo_path or not task_summary:
@@ -277,10 +281,18 @@ async def add_to_backlog(req: Dict[str, Any]):
 
     backlog.append(new_task)
     sm.write_json(".exegol/backlog.json", backlog)
+
+    # Notify Slack (Interaction Layer Sync)
+    try:
+        from tools.slack_tool import post_backlog_update
+        post_backlog_update(task_summary, new_task["priority"], new_task["target_agent"])
+    except Exception as e:
+        print(f"[API] Failed to notify Slack of backlog update: {e}")
+
     return {"status": "success", "task": new_task}
 
 @app.post("/backlog/reorder")
-async def reorder_backlog(req: Dict[str, Any]):
+def reorder_backlog(req: Dict[str, Any]):
     repo_path = req.get("repo_path")
     new_order_ids = req.get("task_ids")
     if not repo_path or not new_order_ids:
@@ -303,13 +315,13 @@ async def reorder_backlog(req: Dict[str, Any]):
 # --- Epic 3: Agent Settings & Model Routing ---
 
 @app.get("/agent-models")
-async def get_agent_models():
+def get_agent_models():
     root_path = os.path.dirname(os.path.dirname(__file__))
     sm = StateManager(root_path)
     return sm.read_json("config/agent_models.json") or {}
 
 @app.post("/agent-models")
-async def update_agent_models(req: AgentModelsRequest):
+def update_agent_models(req: AgentModelsRequest):
     root_path = os.path.dirname(os.path.dirname(__file__))
     sm = StateManager(root_path)
 
@@ -321,19 +333,44 @@ async def update_agent_models(req: AgentModelsRequest):
     return {"status": "success"}
 
 @app.get("/local-models")
-async def get_local_models():
+def get_local_models():
+    """Fetches available models from Ollama for selection in the UI."""
     try:
-        url = "http://localhost:11434/api/tags"
-        EgressFilter.validate_request(url)
-        response = requests.get(url, timeout=5)
+        # Try to get Ollama base URL from env
+        ollama_gen_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+        parsed = urlparse(ollama_gen_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        tags_url = f"{base_url}/api/tags"
+
+        print(f"[API] Fetching local models from {tags_url}...")
+        EgressFilter.validate_request(tags_url)
+        
+        response = requests.get(tags_url, timeout=5)
         if response.status_code == 200:
-            return response.json().get("models", [])
-        return []
-    except Exception:
+            data = response.json()
+            models = data.get("models", [])
+            print(f"[API] Found {len(models)} local models.")
+            return models
+        else:
+            print(f"[API] Ollama /api/tags returned {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"[API] Error fetching local models: {e}")
         return []
 
+@app.get("/api-keys/status")
+def get_api_keys_status():
+    """Checks for the presence of cloud API keys in the environment."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    claude_key = os.getenv("ANTHROPIC_API_KEY")
+    
+    return {
+        "gemini": bool(gemini_key and "your_gemini_key_here" not in gemini_key),
+        "claude": bool(claude_key and "your_anthropic_key_here" not in claude_key),
+    }
+
 @app.get("/snapshots/{snapshot_name}")
-async def get_snapshot(snapshot_name: str, repo_path: str):
+def get_snapshot(snapshot_name: str, repo_path: str):
     snapshot_path = os.path.join(repo_path, ".exegol", "eval_reports", "snapshots", f"{snapshot_name}.json")
     if not os.path.exists(snapshot_path):
         raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -344,24 +381,24 @@ async def get_snapshot(snapshot_name: str, repo_path: str):
 # --- Epic 4: Thrawn Interaction ---
 
 @app.get("/thrawn/intel")
-async def get_thrawn_intel(repo_path: str):
+def get_thrawn_intel(repo_path: str):
     mgr = ThrawnIntelManager(repo_path)
     return mgr.read_intent()
 
 @app.post("/thrawn/objective")
-async def update_thrawn_objective(req: ThrawnObjectiveRequest):
+def update_thrawn_objective(req: ThrawnObjectiveRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     mgr.update_objective(req.objective)
     return {"status": "success"}
 
 @app.post("/thrawn/answer")
-async def answer_thrawn_question(req: ThrawnAnswerRequest):
+def answer_thrawn_question(req: ThrawnAnswerRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     mgr.answer_question(req.question, req.answer)
     return {"status": "success"}
 
 @app.post("/thrawn/ask")
-async def ask_thrawn_question(req: ThrawnAskRequest):
+def ask_thrawn_question(req: ThrawnAskRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     intel = mgr.read_intent()
     intel["questions"].append({"question": req.question, "answer": None})
@@ -369,7 +406,7 @@ async def ask_thrawn_question(req: ThrawnAskRequest):
     return {"status": "success"}
 
 @app.post("/thrawn/architecture")
-async def add_thrawn_architecture(req: ThrawnArchitectureRequest):
+def add_thrawn_architecture(req: ThrawnArchitectureRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     mgr.add_architecture(req.pattern)
     return {"status": "success"}
@@ -377,13 +414,19 @@ async def add_thrawn_architecture(req: ThrawnArchitectureRequest):
 # --- Epic 5: Fleet Health Dashboard ---
 
 @app.get("/fleet/metrics")
-async def get_fleet_metrics(repo_path: str):
+def get_fleet_metrics(repo_path: str):
     from tools.metrics_manager import SuccessMetricsManager
     mgr = SuccessMetricsManager(repo_path)
     return mgr.calculate_metrics()
 
+@app.get("/costs")
+def get_costs(repo_path: str, days: int = 30):
+    """Fetches real cost analysis via CostAnalyzer."""
+    from tools.cost_analyzer import get_cost_report
+    return get_cost_report(repo_path, days=days)
+
 @app.get("/fleet/interactions")
-async def get_fleet_interactions(
+def get_fleet_interactions(
     repo_path: str, 
     agent_id: Optional[str] = None, 
     outcome: Optional[str] = None, 
@@ -403,7 +446,7 @@ async def get_fleet_interactions(
     return logs
 
 @app.get("/fleet/health")
-async def get_fleet_health():
+def get_fleet_health():
     """Aggregates health metrics across all managed repositories."""
     orchestrator.load_config()
     repos = orchestrator.priority_config.get("repositories", [])
@@ -450,7 +493,7 @@ async def get_fleet_health():
     return health_data
 
 @app.get("/fleet/tools")
-async def get_fleet_tools(repo_path: str):
+def get_fleet_tools(repo_path: str):
     """Returns the comprehensive tool registry with usage statistics."""
     from tools.fleet_logger import read_interaction_logs
     from agents.registry import AGENT_REGISTRY
@@ -490,7 +533,7 @@ async def get_fleet_tools(repo_path: str):
 # --- Epic 6: Evaluation Reports ---
 
 @app.get("/evaluations")
-async def get_evaluations(repo_path: str):
+def get_evaluations(repo_path: str):
     """Fetch a list of all evaluation reports."""
     eval_dir = os.path.join(repo_path, ".exegol", "eval_reports")
     if not os.path.exists(eval_dir):
@@ -506,7 +549,7 @@ async def get_evaluations(repo_path: str):
     return reports
 
 @app.get("/evaluations/{filename}")
-async def get_evaluation_report(filename: str, repo_path: str):
+def get_evaluation_report(filename: str, repo_path: str):
     """Fetch a specific evaluation report."""
     report_path = os.path.join(repo_path, ".exegol", "eval_reports", filename)
     if not os.path.exists(report_path):
@@ -518,7 +561,7 @@ async def get_evaluation_report(filename: str, repo_path: str):
 # --- Epic 8: MCP & Error Handling ---
 
 @app.post("/fatal-error")
-async def handle_fatal_error(req: Dict[str, Any]):
+def handle_fatal_error(req: Dict[str, Any]):
     """
     Handles terminal errors marked as 'FATAL'. 
     Routes them to the backlog for immediate developer attention.
@@ -548,6 +591,37 @@ async def handle_fatal_error(req: Dict[str, Any]):
     sm.write_json(".exegol/backlog.json", backlog)
     
     return {"status": "success", "task_id": new_task["id"]}
+
+
+# --- Epic 9: Secrets & API Key Rotation ---
+
+@app.get("/secrets/status")
+def get_secrets_status(repo_path: str):
+    """Full audit of all managed API keys — health, age, rotation status."""
+    from tools.secret_manager import SecretManager
+    sm = SecretManager(repo_path)
+    return sm.get_status_summary()
+
+@app.post("/secrets/rotate")
+def rotate_secret(req: SecretRotateRequest):
+    """Rotate a single API key from the Workbench UI."""
+    from tools.secret_manager import SecretManager
+    sm = SecretManager(req.repo_path)
+    result = sm.rotate_key(req.env_var, req.new_value, rotated_by="workbench_ui")
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["detail"])
+    return result
+
+@app.post("/secrets/audit")
+def audit_secrets(req: Dict[str, Any]):
+    """Trigger a full key health audit and escalate unhealthy keys to HITL."""
+    repo_path = req.get("repo_path")
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Missing repo_path")
+    from tools.secret_manager import SecretManager
+    sm = SecretManager(repo_path)
+    escalated = sm.escalate_unhealthy_keys()
+    return {"status": "success", "escalated_count": len(escalated), "task_ids": escalated}
 
 
 if __name__ == "__main__":

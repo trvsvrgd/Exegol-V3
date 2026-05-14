@@ -59,6 +59,17 @@ def calculate_risk_score(proposed_changes: List[Dict[str, Any]], repo_path: str)
     elif total_score > 15: risk_level = "high"
     elif total_score > 5: risk_level = "medium"
     
+    # 3. Integrate human observations
+    obs_file = os.path.join(repo_path, ".exegol", "human_observations.json")
+    if os.path.exists(obs_file):
+        try:
+            with open(obs_file, "r", encoding="utf-8") as f:
+                observations = json.load(f)
+                for category, obs in observations.items():
+                    findings.append(f"Human observation ({category}): {obs}")
+        except Exception as e:
+            print(f"[RiskScorer] Failed to load human observations: {e}")
+
     return {
         "score": round(total_score, 2),
         "level": risk_level,

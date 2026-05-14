@@ -487,6 +487,20 @@ class ChiefOfStaffChewieAgent:
                 bm.add_task(task)
                 improvements.append(task)
 
+                # --- NEW: Perform Deep Audit (Introspection) for critical failures ---
+                if review["grade"] in ["D", "F"]:
+                    print(f"[{self.name}] Grade {review['grade']} for {agent_id}. Performing deep audit...")
+                    audit_report = introspect_agent(repo_path, agent_id)
+                    
+                    # Save the audit report as a separate file
+                    audit_dir = os.path.join(repo_path, ".exegol", "audits")
+                    os.makedirs(audit_dir, exist_ok=True)
+                    audit_file = os.path.join(audit_dir, f"audit_{agent_id}_{datetime.datetime.now().strftime('%Y%m%d')}.md")
+                    with open(audit_file, "w", encoding="utf-8") as f:
+                        f.write(audit_report)
+                    
+                    review["findings"].append(f"Deep audit conducted due to low grade. Report: {os.path.basename(audit_file)}")
+
         # Send clarifications to Thoughtful Thrawn to discuss with human
         if clarifications:
             msg = f"Monthly Review Clarification Needed (Routing to Thoughtful Thrawn):\n"
@@ -659,6 +673,20 @@ class ChiefOfStaffChewieAgent:
                            "D": "[D]", "F": "[F]"}.get(review["grade"], "[?]")
             print(f"[{self.name}] {grade_label} {class_name}: "
                   f"Grade {review['grade']}")
+
+            # --- NEW: Perform Deep Audit (Introspection) for critical failures ---
+            if review["grade"] in ["D", "F"]:
+                print(f"[{self.name}] Grade {review['grade']} for {agent_id}. Performing deep audit...")
+                audit_report = introspect_agent(repo_path, agent_id)
+                
+                # Save the audit report as a separate file
+                audit_dir = os.path.join(repo_path, ".exegol", "audits")
+                os.makedirs(audit_dir, exist_ok=True)
+                audit_file = os.path.join(audit_dir, f"audit_{agent_id}_{datetime.datetime.now().strftime('%Y%m%d')}.md")
+                with open(audit_file, "w", encoding="utf-8") as f:
+                    f.write(audit_report)
+                
+                review["findings"].append(f"Deep audit conducted due to low grade. Report: {os.path.basename(audit_file)}")
 
         # 4. Fleet summary
         grade_dist = {}

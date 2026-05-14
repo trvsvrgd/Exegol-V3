@@ -148,6 +148,12 @@ select:focus {
   padding: 2rem;
 }
 
+@media (max-width: 768px) {
+  .container {
+    padding: 1.5rem 1rem;
+  }
+}
+
 main {
   min-height: calc(100vh - 70px);
 }

@@ -21,6 +21,7 @@ from tools.fleet_logger import log_interaction
 from tools.state_manager import StateManager
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
+HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
 
 class ExegolOrchestrator:
     def __init__(self):
@@ -32,12 +33,49 @@ class ExegolOrchestrator:
         )
         self.is_running_fleet = False
         self._should_stop_scheduler = False
+        self.job_history = self._load_job_history()
         
         # Initialize Slack Listener
         slack_manager.setup_listener(self.handle_wake_word)
         
+        # Priority Execution Logic
+        self.agent_priority_order = [
+            "thoughtful_thrawn", "vibe_vader", "compliance_cody", "security_sabine", 
+            "technical_tarkin", "model_router_mothma", "strategist_sloane", "growth_galen", 
+            "finance_fennec", "evaluator_ezra", "report_revan", "chief_of_staff_chewie", 
+            "optimizer_ahsoka", "architect_artoo", "watcher_wedge", "quality_quigon", 
+            "product_poe", "developer_dex", "uat_ulic", "intel_ima", "markdown_mace"
+        ]
+        self.pending_tasks = []
+        self.queue_condition = threading.Condition()
+        self.current_running_agent = None
+        
         # Initialize Autonomous Cadence Engine
         self._setup_cadence_engine()
+
+    def get_agent_priority(self, agent_id):
+        try:
+            return self.agent_priority_order.index(agent_id)
+        except ValueError:
+            return 999
+
+    def acquire_execution_lock(self, agent_id):
+        priority = self.get_agent_priority(agent_id)
+        import uuid
+        ticket = {"id": str(uuid.uuid4()), "priority": priority, "agent_id": agent_id}
+        
+        with self.queue_condition:
+            self.pending_tasks.append(ticket)
+            self.pending_tasks.sort(key=lambda x: x["priority"])
+            while self.current_running_agent is not None or self.pending_tasks[0]["id"] != ticket["id"]:
+                self.queue_condition.wait()
+            self.current_running_agent = ticket
+            self.pending_tasks.pop(0)
+
+    def release_execution_lock(self):
+        with self.queue_condition:
+            self.current_running_agent = None
+            self.queue_condition.notify_all()
 
     def _setup_cadence_engine(self):
         """Configures periodic autonomous tasks for the fleet from config."""
@@ -81,6 +119,12 @@ class ExegolOrchestrator:
                     s = s.saturday
                 elif freq == "sunday":
                     s = s.sunday
+                elif freq == "monthly":
+                    # schedule doesn't have .monthly(), but we can do every(30).days as a proxy
+                    # or better, just use every(4).weeks
+                    s = s.weeks
+                    val = 4
+                    s = schedule.every(val).weeks
                 elif freq.startswith("every_"):
                     # e.g. every_10_minutes
                     parts = freq.split("_")
@@ -89,12 +133,16 @@ class ExegolOrchestrator:
                     if "minute" in unit: s = schedule.every(val).minutes
                     elif "hour" in unit: s = schedule.every(val).hours
                     elif "day" in unit: s = schedule.every(val).days
+                    elif "week" in unit: s = schedule.every(val).weeks
                 
                 if at_time:
                     s = s.at(at_time)
                 
-                s.do(self._scheduled_trigger, agent_id=agent_id, summary=summary)
+                s.do(self._scheduled_trigger, agent_id=agent_id, summary=summary, job_id=job.get("id"))
                 print(f"[Scheduler] Registered: {summary} ({agent_id}) @ {freq} {at_time or ''}")
+
+            # Check for missed jobs
+            self._check_for_missed_jobs(config)
 
             # Start Scheduler Thread
             self._check_interval = config.get("global_settings", {}).get("check_interval_seconds", 60)
@@ -110,7 +158,76 @@ class ExegolOrchestrator:
             schedule.run_pending()
             time.sleep(self._check_interval)
 
-    def _scheduled_trigger(self, agent_id: str, summary: str):
+    def _load_job_history(self) -> Dict[str, str]:
+        if os.path.exists(HISTORY_FILE_PATH):
+            try:
+                with open(HISTORY_FILE_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def _save_job_history(self):
+        try:
+            with open(HISTORY_FILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.job_history, f, indent=4)
+        except Exception as e:
+            print(f"[Scheduler] Failed to save job history: {e}")
+
+    def _check_for_missed_jobs(self, config):
+        """Checks if any jobs should have run while the fleet was down."""
+        from datetime import timedelta
+        now = datetime.now()
+        
+        for job in config.get("schedules", []):
+            if not job.get("enabled", True): continue
+            job_id = job.get("id")
+            if not job_id: continue
+            
+            last_run_str = self.job_history.get(job_id)
+            if not last_run_str:
+                # First time seeing this job, don't consider it missed
+                # but record now as the start point.
+                self.job_history[job_id] = now.isoformat()
+                continue
+            
+            last_run = datetime.fromisoformat(last_run_str)
+            freq = job.get("frequency")
+            at_time = job.get("at")
+            
+            # Simplified missed detection
+            missed = False
+            reason = ""
+            
+            if freq == "daily" and at_time:
+                hh, mm = map(int, at_time.split(":"))
+                scheduled_today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                if now > scheduled_today and last_run < scheduled_today:
+                    missed = True
+                    reason = f"Missed today's {at_time} run"
+            elif freq.startswith("every_"):
+                parts = freq.split("_")
+                val = int(parts[1])
+                unit = parts[2]
+                delta = None
+                if "minute" in unit: delta = timedelta(minutes=val)
+                elif "hour" in unit: delta = timedelta(hours=val)
+                elif "day" in unit: delta = timedelta(days=val)
+                
+                if delta and (now - last_run) > delta:
+                    missed = True
+                    reason = f"Missed interval run (last run: {last_run_str})"
+            
+            # ... Add weekly/monthly logic if needed ...
+
+            if missed:
+                print(f"[Scheduler] Detected missed job: {job.get('summary')} ({job_id}). {reason}.")
+                # Trigger it now (it will queue in the priority execution lock)
+                self._scheduled_trigger(job.get("agent_id"), f"[MISSED] {job.get('summary')}", job_id)
+
+        self._save_job_history()
+
+    def _scheduled_trigger(self, agent_id: str, summary: str, job_id: str = None):
         """Bridge between schedule library and the orchestration loop."""
         print(f"\n[Scheduler] Triggering scheduled task: {summary} ({agent_id})")
         target = self.active_target or self.get_highest_priority_task()
@@ -128,10 +245,15 @@ class ExegolOrchestrator:
         self.wake_and_execute_agent(
             repo_info=target,
             routing=routing,
-            max_steps=entry.get("max_steps", 20),
+            max_steps=20,
             agent_id=agent_id,
             scheduled_prompt=summary
         )
+
+        # Update history AFTER successful (or at least attempted) execution
+        if job_id:
+            self.job_history[job_id] = datetime.now().isoformat()
+            self._save_job_history()
 
     def load_config(self):
         """Loads priority and agent configuration from priority.json"""
@@ -208,7 +330,6 @@ class ExegolOrchestrator:
         
         # Periodic Audits
         self.check_compliance_monitoring()
-        self.check_vibe_monitoring()
 
         repos = self.priority_config.get("repositories", [])
         active_repos = [r for r in repos if r.get('agent_status', 'idle') == 'active']
@@ -222,39 +343,7 @@ class ExegolOrchestrator:
         print("Fleet Cycle complete.")
         self.is_running_fleet = False
 
-    def check_vibe_monitoring(self):
-        """Checks if a weekly vibe audit is due and triggers Vader."""
-        global_settings = self.priority_config.get("global_settings", {})
-        monitoring = global_settings.get("vibe_audit", {})
-        if not monitoring:
-            # Initialize if missing
-            monitoring = {"last_run": "1970-01-01", "frequency_days": 7}
-            global_settings["vibe_audit"] = monitoring
 
-        last_run_str = monitoring.get("last_run", "1970-01-01")
-        frequency_days = monitoring.get("frequency_days", 7)
-
-        try:
-            from datetime import datetime, timedelta
-            last_run = datetime.fromisoformat(last_run_str)
-            if datetime.now() > last_run + timedelta(days=frequency_days):
-                print(f"[Vibe] Weekly audit is due (last run: {last_run_str}). Waking VibeVader...")
-                target = self.get_highest_priority_task()
-                if target:
-                    result = self.wake_and_execute_agent(
-                        repo_info=target,
-                        routing=target.get("model_routing_preference", "ollama"),
-                        max_steps=20,
-                        agent_id="vibe_vader",
-                        scheduled_prompt="Proactive Weekly Vibe Audit"
-                    )
-                    if result and result.outcome == "success":
-                        monitoring["last_run"] = datetime.now().date().isoformat()
-                        self.save_config()
-            else:
-                print(f"[Vibe] Weekly audit not due. Next run after: {(last_run + timedelta(days=frequency_days)).date()}")
-        except Exception as e:
-            print(f"[Vibe] Error checking monitoring: {e}")
 
     def process_repo(self, repo_info: Dict[str, Any]):
         """Decides which agent to wake for a given repo based on its current state."""
@@ -346,6 +435,48 @@ class ExegolOrchestrator:
         self.wake_and_execute_agent(target_repo, routing, max_steps)
 
     def wake_and_execute_agent(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
+                                agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
+                                loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
+        if agent_id is None:
+            agent_id = "product_poe"
+            
+        self.acquire_execution_lock(agent_id)
+        result = None
+        try:
+            result = self._wake_and_execute_agent_inner(
+                repo_info, routing, max_steps, agent_id, snapshot_hash, regression_context,
+                loop_depth, chain_history, scheduled_prompt
+            )
+        finally:
+            self.release_execution_lock()
+            
+        if result and getattr(result, "next_agent_id", None) and result.outcome == "success":
+            print(f"[Orchestrator] Autonomous handoff requested: {agent_id} -> {result.next_agent_id}")
+            registry_entry = AGENT_REGISTRY.get(result.next_agent_id)
+            if registry_entry:
+                # Small delay to ensure logs are flushed and system is ready
+                time.sleep(1)
+                
+                # Update history here since we moved it out of the inner loop's recursion
+                current_depth = loop_depth + 1
+                current_history = (chain_history or []) + [agent_id]
+                
+                return self.wake_and_execute_agent(
+                    repo_info=repo_info,
+                    routing=routing,
+                    max_steps=registry_entry.get("max_steps", 15),
+                    agent_id=result.next_agent_id,
+                    snapshot_hash=getattr(result, "snapshot_hash", ""),
+                    regression_context=getattr(result, "regression_context", ""),
+                    loop_depth=current_depth,
+                    chain_history=current_history
+                )
+            else:
+                print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
+
+        return result
+
+    def _wake_and_execute_agent_inner(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
                                 agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
                                 loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
         """Dispatch an agent through SessionManager for a fully isolated session."""
@@ -455,26 +586,6 @@ class ExegolOrchestrator:
                 self.update_repo_status(path, "blocked")
             elif getattr(result, "status_update", ""):
                 self.update_repo_status(path, result.status_update)
-
-            # Recursive autonomous handoff (Pipeline chaining)
-            if result.next_agent_id and result.outcome == "success":
-                print(f"[Orchestrator] Autonomous handoff requested: {agent_id} -> {result.next_agent_id}")
-                registry_entry = AGENT_REGISTRY.get(result.next_agent_id)
-                if registry_entry:
-                    # Small delay to ensure logs are flushed and system is ready
-                    time.sleep(1)
-                    return self.wake_and_execute_agent(
-                        repo_info=repo_info,
-                        routing=routing,
-                        max_steps=registry_entry.get("max_steps", 15),
-                        agent_id=result.next_agent_id,
-                        snapshot_hash=result.snapshot_hash,
-                        regression_context=result.regression_context,
-                        loop_depth=current_depth,
-                        chain_history=current_history
-                    )
-                else:
-                    print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
 
         return result
 

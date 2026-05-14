@@ -9,12 +9,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 's
 
 from api import get_fleet_health
 
-@pytest.mark.anyio
-async def test_direct_health_call():
+def test_direct_health_call():
     """Call the health endpoint function directly and verify output."""
     print("Executing direct health telemetry audit...")
     try:
-        data = await get_fleet_health()
+        data = get_fleet_health()
         
         assert isinstance(data, list)
         print(f"Retrieved health metrics for {len(data)} repos.")
@@ -33,4 +32,4 @@ async def test_direct_health_call():
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(test_direct_health_call())
+    test_direct_health_call()

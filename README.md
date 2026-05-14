@@ -9,8 +9,6 @@ Each agent in the fleet is **stateless by design**. Instead of relying on fragil
 
 The result: a **self-sustaining development loop** that can be triggered with a single word — `go`.
 
-![Exegol Fleet Dashboard](control-tower-demo.webp)
-
 ---
 
 ## 🔄 Agent Handoff Loop
@@ -21,54 +19,54 @@ The Exegol ecosystem operates on a non-cyclical, state-driven loop. Each agent w
 flowchart TD
     subgraph Initialization
     A["🔵 Onboarding Thrawn"] -- "Captures Intent" --> FS[("📁 .exegol Context")]
-    V["🔴 Vibe Vader"] -- "Detects Debt" --> FS
+    V["🔴 Vibe Vader"] -- "Identifies Human Actions" --> FS
     end
 
-    subgraph Venture Strategy
-    FS -- "Concept" --> S["🧠 Strategist Sloane"]
-    S -- "Strategy Brief" --> FS
-    FS -- "Strategy" --> G["📈 Growth Galen"]
-    G -- "GTM Plan" --> FS
-    FS -- "Business Model" --> FF["💰 Finance Fennec"]
-    FF -- "Unit Economics" --> FS
+    subgraph Strategy_and_Planning ["Strategy & Planning"]
+    direction TB
+    FS -- "Strategy" --> S["🧠 Strategist Sloane"]
+    S -- "Briefs" --> G["📈 Growth Galen"]
+    G -- "GTM" --> FF["💰 Finance Fennec"]
+    FF -- "Economics" --> FS
     end
 
-    subgraph Product & Design
-    FS -- "Briefs & Economics" --> B["⚪ Product Poe"]
-    B -- "Prioritized Task / Active Prompt" --> FS
-    FS -- "Architecture Needed" --> C["🤖 Architect Artoo"]
-    C -- "Design Docs" --> FS
+    subgraph Product_Design ["Product & Design"]
+    direction TB
+    FS -- "Concept" --> B["⚪ Product Poe"]
+    B -- "Tasks" --> C["🤖 Architect Artoo"]
+    C -- "Designs" --> FS
     end
 
-    subgraph Implementation & Quality
-    FS -- "Active Prompt & Design" --> D["👨🔧 Developer Dex"]
-    D -- "Code Implementation" --> FS
-    FS -- "Test Required" --> E["⚔️ Quality Qui-Gon"]
-    E -- "Pass: Mark Complete" --> FS
-    E -- "Fail: Log Bug" --> B
+    subgraph Build_and_Verify ["Implementation & Quality"]
+    direction TB
+    FS -- "Instructions" --> D["👨🔧 Developer Dex"]
+    D -- "Implementation" --> FS
+    FS -- "Validation" --> E["⚔️ Quality Qui-Gon"]
+    E -- "Pass" --> FS
+    E -- "Fail" --> B
     end
 
-    subgraph Polish & Evidence
-    FS -- "Docs Needed" --> H["🟪 Markdown Mace"]
-    H -- "Markdown Polished" --> FS
-    FS -- "Ready for Demo" --> I["🎥 Cameraman Cassian"]
-    I -- "Visual Assets" --> FS
+    subgraph Polish_Assets ["Polish & Evidence"]
+    direction TB
+    FS -- "Documentation" --> H["🟪 Markdown Mace"]
+    H -- "Markdown" --> FS
     end
 
-    subgraph Oversight
-    FS -- "Logs" --> J["💪 Optimizer Ahsoka"]
-    J -- "Optimization Tasks" --> B
-    FS -- "Logs" --> K["🦍 Chief of Staff Chewie"]
-    K -- "Performance Review" --> Report
+    subgraph Oversight_Systems ["Oversight & Intelligence"]
+    direction TB
+    FS -- "Telemetry" --> J["💪 Optimizer Ahsoka"]
+    J -- "Optimization" --> B
+    FS -- "Reviews" --> K["🦍 Chief of Staff Chewie"]
+    K -- "Scorecards" --> Report
     FS -- "Metrics" --> L["🎭 Report Revan"]
-    L -- "Venture Summary" --> Report
+    L -- "Summaries" --> Report
     FS -- "Costs" --> M["🧠 Intel Ima"]
-    M -- "Cloud/API Costs" --> FF
+    M -- "FinOps" --> FF
     Report[("📧 Intelligence Reports")]
     end
 
     classDef agent fill:#f9f9f9,stroke:#333,stroke-width:2px;
-    class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,V,TT,MRM,S,G,FF agent;
+    class A,B,C,D,E,F,G,H,J,K,L,M,N,O,P,V,TT,MRM,S,G,FF agent;
 ```
 
 ## 🤖 The Agent Fleet
@@ -85,22 +83,19 @@ flowchart TD
 | `developer_dex` | Developer Dex | Implementation & Coding | Source Code & PRs |
 | `quality_quigon` | Quality Qui-Gon | Testing, QA & Bug Logging | `.exegol/test_reports.json` |
 | `markdown_mace` | Markdown Mace | Documentation & Formatting | Polished `.md` files |
-| `cameraman_cassian` | Cameraman Cassian | Visual Evidence & Recordings | Video loops for READMEs |
 | `evaluator_ezra` | Evaluator Ezra | Evaluation Research & Standards | Implementation requirements |
-| `vibe_vader` | Vibe Vader | Software Debt & Mock Code Analysis | `.exegol/backlog.json` |
+| `vibe_vader` | Vibe Vader | Identifies Imperial Human Actions | `.exegol/backlog.json` |
 | `optimizer_ahsoka` | Optimizer Ahsoka | System Performance Optimization | Refined agent instructions |
 | `report_revan` | Report Revan | Fleet Performance Reporting | Weekly Email/Slack summaries |
 | `chief_of_staff_chewie` | Chief of Staff Chewie | Agent Performance Reviews | Performance Scorecards |
 | `intel_ima` | Intel Ima | Intel & Cost Management | Cost/Cloud status reports |
 | `assessment_anakin` | Assessment Anakin | Risk & Impact Assessment | `.exegol/assessment_report.json` |
 | `compliance_cody` | Compliance Cody | Regulatory & Compliance Review | `.exegol/backlog.json` |
-| `security_architect` | Security Architect | Security Hardening & Audits | Security Patches & PRs |
+| `security_sabine` | Security Sabine | Security Hardening & Audits | Security Patches & PRs |
 | `technical_tarkin` | Technical Tarkin | Technical Documentation & ADRs | Architecture decision records |
 | `model_router_mothma` | Model Router Mothma | LLM Model Selection & Routing | Routing configuration |
 | `watcher_wedge` | Watcher Wedge | System Health & Failure Monitoring | Backlog escalated items |
-
-> [!IMPORTANT]
-> **Fleet Governance Rule**: Any new agent added to the `src/agents/` folder and registered in `registry.py` **MUST** be added to the Mermaid diagram and the Agent Fleet table above to maintain architectural transparency.
+| `uat_ulic` | Uat Ulic | UAT Video Recording | WebM Video Previews |
 
 ## 🏗️ Technical Architecture
 
@@ -186,3 +181,30 @@ The snapshot below captures a live moment in the Exegol development loop. This i
 * **Radical Persona Divergence**: Note the specific style of the implementation. Each agent brings a radically different "vibe" and technical approach, moving away from generic AI responses toward specialized expertise.
 * **Backlog Integrity**: This shows that only formal agent calls or the global `go` command can modify the `.exegol/backlog.json`. This strict governance ensures a perfect audit trail of every decision.
 * **Abstraction to No-Code**: This entire mechanical process is the engine for a future **No-Code UI**. By abstracting these agent loops, we enable complex development through high-level intent rather than manual syntax.
+
+---
+
+## 📡 Fleet Telemetry & The Slack Awareness Engine
+
+The Exegol fleet doesn't just build code; it continuously monitors its own health and code quality. The system is deeply integrated with **Slack**, which serves as the fleet's decentralized command center. This integration ensures that while the fleet operates autonomously, it remains transparent, accountable, and connected to human oversight through three primary pillars:
+
+### 1. Real-Time Awareness & Logging
+Slack acts as a living, searchable log of fleet operations. From scheduled scans by **Watcher Wedge** to individual agent handoffs, every significant event is broadcast to dedicated channels. This provides a high-fidelity "pulse" of the repository's health and the fleet's progress, allowing humans to stay informed without needing to dive into raw log files.
+
+### 2. Proactive Error Routing & Auto-Healing
+When an agent encounters a fatal error—such as **Chief of Staff Chewie** crashing due to missing API credentials (e.g., `Gmail token not found`)—the system doesn't fail silently. The orchestrator catches the crash, alerts the team via Slack with the exact session ID and error snippet, and instantly injects a critical bug report into the backlog. This turns a system failure into a planned task automatically.
+
+### 3. Frictionless Human-In-The-Loop (HITL)
+Slack is the bridge for tasks that require human judgment. When **Vibe Vader** identifies a strategic gap or an agent hits a logic block, the fleet triggers an HITL request. These requests are delivered via Slack with deep-link context, allowing humans to provide high-level direction that is immediately captured back into the `.exegol/` state.
+
+### 4. Interaction Layer Sync (Unified HITL)
+The Exegol fleet maintains a synchronized "Human Action Required" queue across three primary interaction surfaces:
+*   **Vibe-Coding Chat**: Direct interaction with agents during active development sessions.
+*   **Exegol Workbench UI**: A dedicated Next.js dashboard for visual queue management and fleet metrics.
+*   **Slack Interactive Messages**: Real-time broadcasts of HITL tasks with actionable buttons for instant approval/rejection.
+
+All three surfaces are powered by a shared `HITLManager` and a central JSON data contract, ensuring that an action taken on one surface is instantly reflected across all others.
+
+> [!TIP]
+> This self-monitoring loop ensures the fleet is always aware of both the code's health and its own operational state, automatically turning insights and errors into planned work without requiring manual human triage.
+

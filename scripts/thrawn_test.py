@@ -4,21 +4,17 @@ import json
 from unittest.mock import MagicMock
 
 # --- PATH SETUP ---
-# Add src to path to resolve the following reported problems:
-# - Cannot find module `agents.thoughtful_thrawn_agent`
-# - Cannot find module `handoff`
-# - Cannot find module `tools.thrawn_intel_manager`
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+# Add project root to path so we can import from 'src'
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
-try:
-    from agents.thoughtful_thrawn_agent import ThoughtfulThrawnAgent
-    from handoff import HandoffContext
-    from tools.thrawn_intel_manager import ThrawnIntelManager
-    print("[OK] Modules successfully imported.")
-except ImportError as e:
-    print(f"[ERROR] IMPORT ERROR: {e}")
-    print("Check if 'src' directory is in the correct relative location.")
-    sys.exit(1)
+# Standard imports using the 'src' package prefix
+from src.agents.thoughtful_thrawn_agent import ThoughtfulThrawnAgent
+from src.handoff import HandoffContext
+from src.tools.thrawn_intel_manager import ThrawnIntelManager
+
+print("[OK] Modules successfully imported.")
 
 def test_thrawn_execution():
     """Simple test to verify Thrawn can wake up and read intent."""

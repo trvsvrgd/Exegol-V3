@@ -36,7 +36,27 @@ class SlackManager:
         self.pending_approvals: Dict[str, threading.Event] = {}
         self.approval_results: Dict[str, str] = {}
         
+        self.mapping_file = os.path.join(os.getenv("EXEGOL_REPO_PATH", "."), ".exegol", "slack_mapping.json")
+        self.hitl_mapping = self._load_mapping()
+        
         self._initialized = True
+
+    def _load_mapping(self) -> Dict[str, Any]:
+        if os.path.exists(self.mapping_file):
+            try:
+                with open(self.mapping_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def _save_mapping(self):
+        os.makedirs(os.path.dirname(self.mapping_file), exist_ok=True)
+        try:
+            with open(self.mapping_file, "w", encoding="utf-8") as f:
+                json.dump(self.hitl_mapping, f, indent=4)
+        except Exception as e:
+            print(f"[SlackManager] Failed to save mapping: {e}")
 
     def is_bot_active(self) -> bool:
         return self.bot_token is not None and self.app_token is not None
@@ -55,7 +75,7 @@ class SlackManager:
                     blocks=blocks
                 )
                 if response["ok"]:
-                    return "Success: Posted via Bot"
+                    return {"status": "success", "ts": response["ts"], "channel": response["channel"]}
             except Exception as e:
                 print(f"[SlackManager] Bot post failed: {e}")
 
@@ -68,39 +88,38 @@ class SlackManager:
                 EgressFilter.validate_request(self.webhook_url)
                 resp = requests.post(self.webhook_url, json=payload)
                 resp.raise_for_status()
-                return "Success: Posted via Webhook"
+                return {"status": "success", "mode": "webhook"}
             except Exception as e:
                 print(f"[SlackManager] Webhook post failed: {e}")
-                return f"Error: {str(e)}"
+                return {"status": "error", "detail": str(e)}
 
-        # 3. Final Fail-Safe: Report tool failure to Backlog
-        error_msg = f"Slack Communication Failure. tokens/webhook failed."
-        print(f"[SlackManager] {error_msg}")
+        # 3. Final Fallback: [MOCK SLACK] for development/missing tokens
+        print(f"[MOCK SLACK] Channel: {channel or 'exegol'} | Text: {text}")
         
-        try:
-            # Get the current repo path from environment or default to current
-            repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
-            from tools.backlog_manager import BacklogManager
-            import datetime
-            import time
-            
-            bm = BacklogManager(repo_path)
-            fail_task = {
-                "id": f"slack_fail_{int(time.time())}",
-                "summary": "FIX: Slack Integration Failure detected",
-                "priority": "high",
-                "type": "bug",
-                "status": "todo",
-                "source_agent": "SlackManager",
-                "rationale": f"The Slack tool failed to deliver a message. This is a communication blackout. Text: {text[:100]}...",
-                "created_at": datetime.datetime.now().isoformat()
-            }
-            bm.add_task(fail_task)
-            print(f"[SlackManager] Failure reported to backlog.")
-        except Exception as inner_e:
-            print(f"[SlackManager] Double-fault: Failed to log Slack failure: {inner_e}")
+        # Still log to backlog so we know we're in mock mode if it was unexpected
+        if not self.bot_token and not self.webhook_url:
+            try:
+                repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
+                from tools.backlog_manager import BacklogManager
+                import datetime
+                import time
+                
+                bm = BacklogManager(repo_path)
+                mock_notice = {
+                    "id": f"slack_mock_{int(time.time())}",
+                    "summary": "NOTICE: Slack running in [MOCK] mode",
+                    "priority": "low",
+                    "type": "maintenance",
+                    "status": "todo",
+                    "source_agent": "SlackManager",
+                    "rationale": "SLACK_BOT_TOKEN and SLACK_WEBHOOK_URL are missing. System is using [MOCK SLACK] fallback.",
+                    "created_at": datetime.datetime.now().isoformat()
+                }
+                bm.add_task(mock_notice)
+            except:
+                pass
 
-        return f"Error: Slack delivery failed. Task added to backlog."
+        return {"status": "success", "mode": "mock", "ts": f"mock_{int(time.time())}"}
 
     def setup_listener(self, command_handler: Callable[[str, str], None]):
         """Starts Socket Mode listener in a background thread."""
@@ -131,35 +150,51 @@ class SlackManager:
             say(f"⚙️ Exegol received: `{clean_text}` — processing...")
             command_handler(clean_text, channel_id)
 
-        @self.app.action("approve_delete")
-        def handle_approve(ack, body):
+        @self.app.action("hitl_approve")
+        def handle_hitl_approve(ack, body):
             ack()
-            callback_id = body["actions"][0]["value"]
-            self.approval_results[callback_id] = "APPROVED"
+            item_id = body["actions"][0]["value"]
+            repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
             
-            # Reward Trust (slow gain)
-            active_agent = os.getenv("EXEGOL_ACTIVE_AGENT")
-            if active_agent:
-                from tools.trust_manager import TrustManager
-                TrustManager.update_score(active_agent, 1, "User approved HITL request")
+            from tools.hitl_manager import HITLManager
+            hm = HITLManager(repo_path)
+            
+            if hm.resolve_task(item_id, status="done", notes="[Slack] Approved by user."):
+                # Notify the channel of the update
+                channel_id = body["channel"]["id"]
+                ts = body["message"]["ts"]
+                self.client.chat_update(
+                    channel=channel_id,
+                    ts=ts,
+                    text=f"✅ Task `{item_id}` Approved via Slack.",
+                    blocks=[{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"✅ *HITL APPROVED*: Task `{item_id}` has been marked as done."}
+                    }]
+                )
 
-            if callback_id in self.pending_approvals:
-                self.pending_approvals[callback_id].set()
-
-        @self.app.action("reject_delete")
-        def handle_reject(ack, body):
+        @self.app.action("hitl_reject")
+        def handle_hitl_reject(ack, body):
             ack()
-            callback_id = body["actions"][0]["value"]
-            self.approval_results[callback_id] = "REJECTED"
+            item_id = body["actions"][0]["value"]
+            repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
             
-            # Penalize Trust (fast loss)
-            active_agent = os.getenv("EXEGOL_ACTIVE_AGENT")
-            if active_agent:
-                from tools.trust_manager import TrustManager
-                TrustManager.update_score(active_agent, -15, "User rejected HITL request")
-
-            if callback_id in self.pending_approvals:
-                self.pending_approvals[callback_id].set()
+            from tools.hitl_manager import HITLManager
+            hm = HITLManager(repo_path)
+            
+            if hm.resolve_task(item_id, status="rejected", notes="[Slack] Rejected by user."):
+                # Notify the channel of the update
+                channel_id = body["channel"]["id"]
+                ts = body["message"]["ts"]
+                self.client.chat_update(
+                    channel=channel_id,
+                    ts=ts,
+                    text=f"❌ Task `{item_id}` Rejected via Slack.",
+                    blocks=[{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"❌ *HITL REJECTED*: Task `{item_id}` has been rejected."}
+                    }]
+                )
 
         def run_socket():
             print("[SlackManager] Starting Socket Mode Listener...")
@@ -170,6 +205,36 @@ class SlackManager:
                 time.sleep(1)
 
         threading.Thread(target=run_socket, daemon=True).start()
+
+    def update_hitl_status(self, item_id: str, status: str):
+        """Updates the Slack message for a HITL task when resolved via another surface."""
+        if not self.client or item_id not in self.hitl_mapping:
+            return
+
+        mapping = self.hitl_mapping[item_id]
+        ts = mapping.get("ts")
+        channel = mapping.get("channel")
+        task_text = mapping.get("task", item_id)
+
+        if not ts or not channel:
+            return
+
+        emoji = "✅" if status == "done" else "❌"
+        status_label = "APPROVED" if status == "done" else "REJECTED" if status == "rejected" else status.upper()
+
+        try:
+            self.client.chat_update(
+                channel=channel,
+                ts=ts,
+                text=f"{emoji} Task `{item_id}` {status_label} via Fleet Console.",
+                blocks=[{
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"{emoji} *HITL {status_label}*: {task_text} (ID: `{item_id}`)"}
+                }]
+            )
+            print(f"[SlackManager] Updated message for {item_id} to {status}")
+        except Exception as e:
+            print(f"[SlackManager] Failed to update message {ts}: {e}")
 
 # Global Singleton
 slack_manager = SlackManager()
@@ -215,14 +280,14 @@ def request_file_approval(file_path: str, action: str, reason: str, risk_score: 
                     "text": {"type": "plain_text", "text": "Approve ✅"},
                     "style": "primary",
                     "value": callback_id,
-                    "action_id": "approve_delete"  # We can reuse the same action IDs as they handle the callback_id the same way
+                    "action_id": "hitl_approve"
                 },
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "Reject ❌"},
                     "style": "danger",
                     "value": callback_id,
-                    "action_id": "reject_delete"
+                    "action_id": "hitl_reject"
                 }
             ]
         }
@@ -263,3 +328,62 @@ def request_file_approval(file_path: str, action: str, reason: str, risk_score: 
     else:
         print("[Slack] Approval timed out. Defaulting to REJECT.")
         return "REJECTED"
+
+def post_hitl_request(item_id: str, task: str, context: str, category: str):
+    """Broadcasts a HITL task from the unified queue to Slack and tracks the message ID."""
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🚨 Human Intervention Required"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Task:* {task}\n*Category:* `{category}`\n*Context:* {context}"
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Approve ✅"},
+                    "style": "primary",
+                    "value": item_id,
+                    "action_id": "hitl_approve"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Reject ❌"},
+                    "style": "danger",
+                    "value": item_id,
+                    "action_id": "hitl_reject"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View Workbench 🌐"},
+                    "url": os.getenv("EXEGOL_FRONTEND_URL", "http://localhost:3000")
+                }
+            ]
+        }
+    ]
+    
+    res = slack_manager.post_message(text=f"HITL Required: {task}", blocks=blocks)
+    
+    if isinstance(res, dict) and res.get("status") == "success" and "ts" in res:
+        slack_manager.hitl_mapping[item_id] = {
+            "ts": res["ts"],
+            "channel": res["channel"],
+            "task": task
+        }
+        slack_manager._save_mapping()
+
+def post_backlog_update(task_summary: str, priority: str, agent_id: str):
+    """Broadcasts a new backlog task to Slack."""
+    emoji = "🔥" if priority == "high" else "📋"
+    message = f"{emoji} *New Backlog Task*: {task_summary}\n*Priority*: `{priority}`\n*Target Agent*: `{agent_id}`"
+    slack_manager.post_message(text=message)

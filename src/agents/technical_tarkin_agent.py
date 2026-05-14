@@ -19,7 +19,7 @@ class TechnicalTarkinAgent:
         self.name = "TechnicalTarkinAgent"
         self.max_steps = 15
         self._steps_used = 0
-        self.tools = ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search"]
+        self.tools = ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search", "interaction_log_reader"]
         self.success_metrics = {
             "documentation_coverage": {
                 "description": "Percentage of core modules with dedicated technical guides",
@@ -46,6 +46,19 @@ class TechnicalTarkinAgent:
         self._steps_used = 0
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — The Documentation Fleet is under my command.")
+
+        # 1. Check for work in the previous week
+        from tools.git_tool import has_commits_since
+        from tools.log_reader import read_interaction_logs
+        
+        has_new_commits = has_commits_since(repo_path, timeframe="1 week ago")
+        recent_logs = read_interaction_logs(repo_path, limit=50) # Assuming limit covers the week for a simple check
+        
+        if not has_new_commits and not recent_logs:
+            print(f"[{self.name}] No new commits or interaction logs found for the previous week. Standing down.")
+            return "No work detected in the previous week. Documentation is up to date."
+        
+        print(f"[{self.name}] Activity detected. Analyzing work history to update documentation...")
 
         # 1. Read the active prompt or task description
         prompt_file = os.path.join(repo_path, ".exegol", "active_prompt.md")
@@ -205,18 +218,15 @@ class TechnicalTarkinAgent:
         metrics["readme_visual_score"] = visual_score
 
         # 3. Compliance Transparency
-        security_files = ["security_audit_logger.py", "rbac_manager.py", "egress_filter.py", "safety_gate.py"]
-        documented_security = 0
-        for sec_f in security_files:
-            if sec_f.replace(".py", "").lower() in all_md_content.lower():
-                documented_security += 1
+        compliance_data = self._analyze_compliance_capabilities(repo_path)
+        implemented_count = sum(1 for status in compliance_data.values() if "Implemented" in str(status))
         
-        metrics["compliance_transparency"] = round(documented_security / len(security_files), 2)
+        metrics["compliance_transparency"] = round(implemented_count / len(compliance_data) if compliance_data else 0, 2)
 
         return metrics
 
     def _analyze_compliance_capabilities(self, repo_path):
-        """Scans the codebase for compliance and auditing features."""
+        """Scans the codebase for compliance and auditing features and appends human observations."""
         print(f"[{self.name}] Scanning for compliance and auditing capabilities...")
         
         tools_dir = os.path.join(repo_path, "src", "tools")
@@ -240,6 +250,18 @@ class TechnicalTarkinAgent:
                 capabilities[cap] = f"Implemented via {', '.join(found)}"
             else:
                 capabilities[cap] = "Not detected / Missing implementation"
+
+        # Append human observations if they exist
+        obs_path = os.path.join(repo_path, ".exegol", "human_observations.json")
+        if os.path.exists(obs_path):
+            try:
+                with open(obs_path, 'r', encoding='utf-8') as f:
+                    human_obs = json.load(f)
+                if "compliance" in human_obs:
+                    capabilities["human_observations"] = human_obs["compliance"]
+                    print(f"[{self.name}] Appended human observations to compliance data.")
+            except Exception as e:
+                print(f"[{self.name}] Error reading human observations: {e}")
 
         return capabilities
 

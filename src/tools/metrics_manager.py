@@ -17,7 +17,18 @@ class SuccessMetricsManager:
         os.makedirs(self.metrics_dir, exist_ok=True)
         self.metrics_file = os.path.join(self.metrics_dir, "metrics.json")
         self.judge_dir = os.path.join(repo_path, ".exegol", "optimizer_reports", "judge_evals")
+        self.observations_file = os.path.join(repo_path, ".exegol", "human_observations.json")
         os.makedirs(self.judge_dir, exist_ok=True)
+
+    def _load_human_observations(self) -> Dict[str, str]:
+        """Loads human observations from the .exegol directory."""
+        if os.path.exists(self.observations_file):
+            try:
+                with open(self.observations_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[SuccessMetricsManager] Failed to load human observations: {e}")
+        return {}
 
     def calculate_metrics(self, days: int = 30) -> Dict[str, Any]:
         """Analyzes interaction logs to calculate advanced per-agent metrics."""
@@ -28,10 +39,11 @@ class SuccessMetricsManager:
         
         baseline_stats = self._process_logs(baseline_logs)
         recent_stats = self._process_logs(recent_logs)
+        observations = self._load_human_observations()
         
         agent_breakdown = {}
-        # Ensure all registered agents are included, even with zero logs
-        all_agent_ids = set(AGENT_REGISTRY.keys()) | set(baseline_stats.keys()) | set(recent_stats.keys())
+        # Ensure only registered Star Wars agents are included
+        all_agent_ids = set(AGENT_REGISTRY.keys())
         
         for agent_id in all_agent_ids:
             b_stats = baseline_stats.get(agent_id, {})
@@ -46,7 +58,8 @@ class SuccessMetricsManager:
             
             # Precision = Qualitative quality score from LLM Judge
             # We fetch cached judge scores or sample recent sessions for auditing.
-            precision = self._calculate_real_precision(agent_id, b_stats.get("logs", []))
+            agent_obs = {k: v for k, v in observations.items() if agent_id.startswith(k) or k in agent_id}
+            precision = self._calculate_real_precision(agent_id, b_stats.get("logs", []), agent_obs)
             
             # Drift = Recent Success Rate - Baseline Success Rate
             recent_success_rate = r_stats.get("success_rate", 0)
@@ -65,7 +78,8 @@ class SuccessMetricsManager:
                 "total_sessions": total_sessions,
                 "status": "improving" if drift > 0.05 else "declining" if drift < -0.05 else "stable",
                 "tools_accessible": AGENT_REGISTRY.get(agent_id, {}).get("tools", []),
-                "custom_metrics": b_stats.get("latest_metrics", {})
+                "custom_metrics": b_stats.get("latest_metrics", {}),
+                "human_observations": list(agent_obs.values())
             }
 
         report = {
@@ -77,7 +91,8 @@ class SuccessMetricsManager:
                 "avg_precision": round(sum(a["precision"] for a in agent_breakdown.values()) / len(agent_breakdown), 2) if agent_breakdown else 0,
                 "overall_drift": round(sum(a["drift"] for a in agent_breakdown.values()) / len(agent_breakdown), 2) if agent_breakdown else 0
             },
-            "agent_breakdown": agent_breakdown
+            "agent_breakdown": agent_breakdown,
+            "human_observations": observations
         }
         
         self._save_report(report)
@@ -141,7 +156,7 @@ class SuccessMetricsManager:
             
         return stats
 
-    def _calculate_real_precision(self, agent_id: str, logs: List[dict]) -> float:
+    def _calculate_real_precision(self, agent_id: str, logs: List[dict], observations: Dict[str, str] = None) -> float:
         """Calculates a qualitative precision score by sampling sessions with LLMJudge."""
         if not logs:
             return 0.0
@@ -209,10 +224,23 @@ class SuccessMetricsManager:
         if scored_sessions > 0:
             return round(total_score / scored_sessions, 2)
             
-        # 4. Ultimate Fallback: Heuristic based on errors in the provided logs
+        # 4. Fallback: Use heuristic based on errors and boost/penalize based on human observations
         successes = len(successful_logs)
         errors = sum(len(l.get("errors", [])) for l in successful_logs)
-        return max(0.0, (successes - errors) / successes) if successes > 0 else 0.0
+        base_precision = max(0.0, (successes - errors) / successes) if successes > 0 else 0.0
+        
+        if observations:
+            # Analyze observations for sentiment/keywords to adjust precision
+            obs_text = " ".join(observations.values()).lower()
+            if any(kw in obs_text for kw in ["excellent", "perfect", "solid", "reliable", "validated"]):
+                base_precision = min(1.0, base_precision + 0.15)
+            elif any(kw in obs_text for kw in ["buggy", "unreliable", "failing", "poor", "error-prone"]):
+                base_precision = max(0.0, base_precision - 0.2)
+            else:
+                # Neutral boost for having oversight
+                base_precision = min(1.0, base_precision + 0.05)
+            
+        return round(base_precision, 2)
 
     def _save_report(self, report: Dict[str, Any]):
         try:

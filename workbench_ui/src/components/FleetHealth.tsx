@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 
 import { apiGet } from "../app/api-client";
+import TelemetrySpreadsheet from "./TelemetrySpreadsheet";
 
 interface HealthMetric {
   name: string;
@@ -28,6 +29,9 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
   const [metrics, setMetrics] = useState<HealthMetric[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [drillDownType, setDrillDownType] = useState<"backlog" | "hitl" | "interactions" | "success" | "total_tasks" | null>(null);
+  const [drillDownRepo, setDrillDownRepo] = useState<string>("");
+
   const fetchHealth = async () => {
     try {
       const data = await apiGet<HealthMetric[]>("/fleet/health");
@@ -44,6 +48,12 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
     const interval = setInterval(fetchHealth, 30000); // Refresh every 30s
     return () => clearInterval(interval);
   }, []);
+
+  const handleDrillDown = (e: React.MouseEvent, type: "backlog" | "hitl" | "interactions" | "success" | "total_tasks", path: string) => {
+    e.stopPropagation(); // prevent triggering the card's onSelect
+    setDrillDownType(type);
+    setDrillDownRepo(path);
+  };
 
   if (loading) return <div className="loading">Initializing Fleet Telemetry...</div>;
 
@@ -65,19 +75,31 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
             </div>
 
             <div className="stats-row">
-              <div className="stat">
+              <div 
+                className="stat clickable-stat"
+                title="Pending tasks that the autonomous agents have identified but not yet completed."
+                onClick={(e) => handleDrillDown(e, "backlog", metric.path)}
+              >
                 <span className="stat-label">Backlog</span>
                 <span className={`stat-value ${metric.backlog_count > 5 ? 'warning' : ''}`}>
                   {metric.backlog_count}
                 </span>
               </div>
-              <div className="stat">
+              <div 
+                className="stat clickable-stat"
+                title="Human-In-The-Loop actions that require manual review or approval before the fleet can proceed."
+                onClick={(e) => handleDrillDown(e, "hitl", metric.path)}
+              >
                 <span className="stat-label">HITL</span>
                 <span className={`stat-value ${metric.hitl_count > 0 ? 'critical' : ''}`}>
                   {metric.hitl_count}
                 </span>
               </div>
-              <div className="stat">
+              <div 
+                className="stat clickable-stat"
+                title="Percentage of tasks completed successfully by the fleet without terminal errors."
+                onClick={(e) => handleDrillDown(e, "success", metric.path)}
+              >
                 <span className="stat-label">Success</span>
                 <span className={`stat-value ${metric.success_rate < 70 ? 'warning' : 'success-text'}`}>
                   {metric.success_rate}%
@@ -86,15 +108,25 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
             </div>
 
             <div className="stats-row secondary-stats">
-              <div className="stat">
+              <div 
+                className="stat"
+                title="Average number of intermediate steps an agent takes to resolve a task. Lower indicates higher efficiency."
+              >
                 <span className="stat-label">Avg Steps</span>
                 <span className="stat-value small">{metric.avg_steps}</span>
               </div>
-              <div className="stat">
+              <div 
+                className="stat clickable-stat"
+                title="The total number of tasks processed by the fleet for this repository in the last 30 days."
+                onClick={(e) => handleDrillDown(e, "total_tasks", metric.path)}
+              >
                 <span className="stat-label">Total Tasks</span>
                 <span className="stat-value small">{metric.total_tasks}</span>
               </div>
-              <div className="stat">
+              <div 
+                className="stat"
+                title="The operational priority tier of this repository within the broader Exegol infrastructure."
+              >
                 <span className="stat-label">Priority</span>
                 <span className="stat-value small">{metric.priority}</span>
               </div>
@@ -119,6 +151,13 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
         ))}
       </div>
 
+      <TelemetrySpreadsheet 
+        isOpen={!!drillDownType}
+        onClose={() => setDrillDownType(null)}
+        repoPath={drillDownRepo}
+        dataType={drillDownType}
+      />
+
       <style jsx>{`
         .fleet-health-sector {
           margin-bottom: 2rem;
@@ -135,6 +174,10 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
           overflow: hidden;
           background: rgba(20, 20, 20, 0.4);
           backdrop-filter: blur(10px);
+          cursor: pointer;
+        }
+        .health-card:hover {
+          background: rgba(30, 30, 30, 0.5);
         }
         .health-card::before {
           content: '';
@@ -190,6 +233,18 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
         .stat {
           display: flex;
           flex-direction: column;
+          position: relative;
+        }
+        .clickable-stat {
+          cursor: pointer;
+          transition: transform 0.2s, background-color 0.2s;
+          padding: 0.5rem;
+          border-radius: 8px;
+          margin: -0.5rem;
+        }
+        .clickable-stat:hover {
+          background-color: rgba(255, 255, 255, 0.05);
+          transform: translateY(-2px);
         }
         .stat-label {
           font-size: 0.65rem;
@@ -271,3 +326,4 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
     </div>
   );
 }
+

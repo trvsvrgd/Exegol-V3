@@ -1,9 +1,10 @@
 import os
+import json
 import shutil
 import uuid
 import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 def create_sandbox(repo_path: str, app_id: str) -> str:
     """
@@ -52,36 +53,73 @@ def cleanup_sandbox(sandbox_path: str):
     if path.exists() and ".exegol/sandboxes" in str(path):
         shutil.rmtree(path)
 
-def run_sandbox_command(sandbox_path: str, command: str) -> Dict[str, str]:
+def run_sandbox_command(sandbox_path: str, command: str, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Executes a command within the specified sandbox directory.
-    Returns a dictionary with 'stdout', 'stderr', and 'exit_code'.
+    - Handles environment variables.
+    - Automatically uses the current python executable for 'python' or 'pip' commands.
+    - Routes fatal errors to the fleet router.
     """
     import subprocess
+    import sys
     
     path = Path(sandbox_path)
     if not path.exists():
-        return {"error": f"Sandbox path {sandbox_path} does not exist."}
+        return {"error": f"Sandbox path {sandbox_path} does not exist.", "exit_code": -1}
+
+    # Prepare environment
+    full_env = os.environ.copy()
+    
+    # Load env from app.exegol.json if exists
+    app_json_path = path / "app.exegol.json"
+    if app_json_path.exists():
+        try:
+            with open(app_json_path, "r", encoding="utf-8") as f:
+                app_data = json.load(f)
+                config_env = app_data.get("env", {})
+                if isinstance(config_env, dict):
+                    full_env.update(config_env)
+        except Exception as e:
+            print(f"[SandboxOrchestrator] Warning: Failed to load app.exegol.json env: {e}")
+
+    if env:
+        full_env.update(env)
+    
+    # Add sandbox path to PYTHONPATH to ensure local modules are importable
+    if "PYTHONPATH" in full_env:
+        full_env["PYTHONPATH"] = f"{sandbox_path}{os.pathsep}{full_env['PYTHONPATH']}"
+    else:
+        full_env["PYTHONPATH"] = sandbox_path
+
+    # Sanitize command: if it starts with 'python ' or 'pip ', use sys.executable
+    if command.startswith("python "):
+        command = f'"{sys.executable}" {command[7:]}'
+    elif command.startswith("pip "):
+        command = f'"{sys.executable}" -m pip {command[4:]}'
+
+    print(f"[SandboxOrchestrator] Executing: {command} in {sandbox_path}")
 
     try:
-        # Run the command with a timeout to prevent runaway processes
+        # Run the command with a timeout
         result = subprocess.run(
             command,
             cwd=str(path),
             shell=True,
             capture_output=True,
             text=True,
-            timeout=30  # 30 second timeout for sandbox commands
+            env=full_env,
+            timeout=60  # Increased timeout for complex sandbox tasks
         )
         
         # Always route terminal errors with 'FATAL' to the Exegol Fleet
         from tools.fatal_error_router import check_and_route_terminal_output
-        check_and_route_terminal_output(sandbox_path, result.stdout, result.stderr, command)
+        is_fatal = check_and_route_terminal_output(sandbox_path, result.stdout, result.stderr, command)
         
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
-            "exit_code": result.returncode
+            "exit_code": result.returncode,
+            "is_fatal": is_fatal
         }
     except subprocess.TimeoutExpired as e:
         return {

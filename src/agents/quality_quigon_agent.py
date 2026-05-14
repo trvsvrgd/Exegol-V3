@@ -20,7 +20,7 @@ class QualityQuigonAgent:
         self.llm_client = llm_client
         self.name = "QualityQuigonAgent"
         self.max_steps = 15
-        self.tools = ["test_runner", "linter", "uat_sandbox", "sandbox_validator", "web_search", "repo_audit"]
+        self.tools = ["test_runner", "linter", "uat_sandbox", "sandbox_validator", "web_search"]
         self.success_metrics = {
             "repo_wide_health": {
                 "description": "Percentage of repository files passing the expanded multi-language linter",
@@ -181,7 +181,7 @@ class QualityQuigonAgent:
                 archived_count = bm.archive_completed_tasks()
                 results.append(f"Task {task_id} closed and archived.")
 
-            self.next_agent_id = "architect_artoo"
+            self.next_agent_id = "uat_ulic"
 
         # --- TASK: Validation Report Logging ---
         self._log_validation_report(repo_path, results, eval_res)
@@ -216,9 +216,16 @@ class QualityQuigonAgent:
             query = f"latest security vulnerabilities and testing best practices for {tech_stack} 2024 2025"
             search_results = web_search(query, num_results=3)
             
+            if search_results:
+                findings = [res.get('title', 'Unknown') for res in search_results if isinstance(res, dict)]
+                findings_str = ", ".join(findings[:2]) if findings else "No clear findings."
+                msg = f"Researched {tech_stack} standards. Discovered: {findings_str}"
+            else:
+                msg = f"Researched {tech_stack} standards. No immediate critical CVEs flagged."
+            
             return {
                 "status": "pass",
-                "message": f"Researched {tech_stack} standards. No immediate critical CVEs flagged for this stack snippet."
+                "message": msg
             }
         except Exception as e:
             return {"status": "fail", "message": str(e)}

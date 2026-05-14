@@ -4,10 +4,11 @@ import time
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
 from tools.web_search import web_search
-from tools.backlog_groomer import select_next_task
+from tools.backlog_groomer import groom_backlog
 from tools.prompt_generator import generate_active_prompt
 from tools.metrics_manager import SuccessMetricsManager
 from tools.heartbeat_monitor import HeartbeatMonitor
+from tools.state_manager import StateManager
 
 
 class ProductPoeAgent:
@@ -75,6 +76,71 @@ class ProductPoeAgent:
             "prompt_rejection_rate": round(rejection_rate * 100, 1)
         }
 
+    def _salvage_hitl_tasks(self, repo_path: str, bm: BacklogManager):
+        """Reviews Vader's queue and salvages items that Dex can solve."""
+        sm = StateManager(repo_path)
+        hitl_tasks = sm.read_json(".exegol/user_action_required.json") or []
+        
+        pending_tasks = [t for t in hitl_tasks if t.get("status") == "pending"]
+        if not pending_tasks:
+            print(f"[{self.name}] Checked user_action_required queue: confirmed there's nothing to reroute to Dex.")
+            return
+
+        print(f"[{self.name}] Reviewing {len(pending_tasks)} HITL tasks for developer salvage...")
+        
+        prompt = f"""
+        Review the following Human-In-The-Loop (HITL) tasks. Identify which ones can be successfully resolved by an autonomous AI Developer Agent (which has access to codebase search, file editing, and terminal commands).
+        
+        EXCLUDE tasks that explicitly require:
+        - New physical API keys from third-party dashboards
+        - Manual system deployment or infrastructure provisioning outside the codebase
+        - Complex architectural decisions requiring human business context
+        
+        INCLUDE tasks that are:
+        - Resolving MOCK or stub code
+        - Fixing code smells, TODOs, or hardcoded values
+        - Implementing missing tools or standard codebase integrations
+        
+        Tasks:
+        {json.dumps(pending_tasks, indent=2)}
+        
+        Return a JSON object with a single key "salvageable_ids" mapping to a list of task IDs that the Developer Agent can solve.
+        """
+        
+        response = self.llm_client.generate(prompt, system_instruction=self.system_prompt, json_format=True)
+        data = self.llm_client.parse_json_response(response)
+        
+        salvageable_ids = data.get("salvageable_ids", []) if data else []
+        
+        if not salvageable_ids:
+            print(f"[{self.name}] Confirmed there are no pending HITL tasks that can be rerouted to Dex.")
+            return
+            
+        print(f"[{self.name}] Salvaging {len(salvageable_ids)} tasks for developer execution.")
+        
+        salvaged_count = 0
+        for task in hitl_tasks:
+            if task.get("id") in salvageable_ids and task.get("status") == "pending":
+                # Create backlog item
+                backlog_item = {
+                    "id": f"salvaged_{task.get('id')}",
+                    "summary": f"Salvaged: {task.get('task')}",
+                    "priority": "high",
+                    "status": "todo",
+                    "source": "product_poe",
+                    "type": "bug_fix",
+                    "rationale": task.get("context", "Salvaged from Vibe Vader's queue.")
+                }
+                bm.add_task(backlog_item)
+                
+                # Mark as delegated
+                task["status"] = "delegated"
+                task["notes"] = "Delegated to DeveloperDexAgent by ProductPoeAgent."
+                salvaged_count += 1
+                
+        if salvaged_count > 0:
+            sm.write_json(".exegol/user_action_required.json", hitl_tasks)
+            # Note: Markdown will be cleaned up by Vader on his next daily run
 
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
@@ -96,7 +162,7 @@ class ProductPoeAgent:
             bm = BacklogManager(repo_path)
             backlog = bm.load_backlog()
 
-            # 1. Check for external instruction (from Slack/Scheduler)
+            # 1. Backlog Grooming (Externalized Tool)
             if handoff.scheduled_prompt:
                 print(f"[{self.name}] Received scheduled prompt: {handoff.scheduled_prompt}")
                 task = {
@@ -110,11 +176,16 @@ class ProductPoeAgent:
                 # Save to backlog for tracking
                 bm.add_task(task)
             else:
-                task, source = select_next_task(backlog)
+                # 1.5 Salvage HITL tasks from Vader
+                self._salvage_hitl_tasks(repo_path, bm)
+                
+                grooming_result = groom_backlog(repo_path)
+                task = grooming_result["task"]
+                source = grooming_result["source"]
+                print(f"[{self.name}] {grooming_result['summary']}")
 
             if not task:
-                print(f"[{self.name}] No actionable tasks found in backlog or vibe_todo.")
-                # Fallback: Create a maintenance task
+                print(f"[{self.name}] No actionable tasks found. Falling back to maintenance.")
                 task = {
                     "id": "maint_001",
                     "summary": "General codebase health check and documentation update",
@@ -123,16 +194,12 @@ class ProductPoeAgent:
                 }
                 source = "fallback"
 
-            print(f"[{self.name}] Selected task {task.get('id')} from {source}: {task.get('summary')}")
-
-            # Update backlog status if it was from backlog
-            if source == "backlog":
-                bm.update_task_status(task.get("id"), "in_progress")
-
+            # 2. Prompt Generation (Externalized Tool)
             # Pulse heartbeat (arch_agent_heartbeat)
             HeartbeatMonitor.pulse_session(repo_path, handoff.session_id)
 
-            active_prompt = generate_active_prompt(task, repo_path, self.llm_client, self.system_prompt)
+            prompt_result = generate_active_prompt(task, repo_path, self.llm_client, self.system_prompt)
+            active_prompt = prompt_result["prompt"]
             
             with open(prompt_file, 'w', encoding='utf-8') as f:
                 f.write(active_prompt)

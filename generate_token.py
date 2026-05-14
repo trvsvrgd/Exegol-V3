@@ -2,7 +2,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 import os
 
 # Scopes required for sending email
-SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/drive.file'
+]
 
 def main():
     if not os.path.exists('credentials.json'):

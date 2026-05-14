@@ -1,11 +1,4 @@
 AGENT_REGISTRY = {
-#    "cameraman_cassian": {
-#        "class": "CameramanCassianAgent",
-#        "module": "agents.cameraman_cassian_agent",
-#        "wake_word": "cassian",
-#        "tools": ["playwright_recorder", "video_clipper"],
-#        "max_steps": 10
-#    },
     "intel_ima": {
         "class": "IntelImaAgent",
         "module": "agents.intel_ima_agent",
@@ -66,7 +59,7 @@ AGENT_REGISTRY = {
         "class": "EvaluatorEzraAgent",
         "module": "agents.evaluator_ezra_agent",
         "wake_word": "ezra",
-        "tools": ["web_search", "arxiv_reader", "backlog_writer"],
+        "tools": ["web_search", "arxiv_reader", "backlog_writer", "llm_judge"],
         "max_steps": 15
     },
     "report_revan": {
@@ -104,11 +97,11 @@ AGENT_REGISTRY = {
         "tools": ["web_search", "backlog_writer", "capability_reviewer"],
         "max_steps": 15
     },
-    "security_architect": {
-        "class": "SecurityArchitectAgent",
-        "module": "agents.security_architect_agent",
-        "wake_word": "secure",
-        "tools": ["repo_scanner", "web_search", "backlog_writer", "architecture_reviewer"],
+    "security_sabine": {
+        "class": "SecuritySabineAgent",
+        "module": "agents.security_sabine_agent",
+        "wake_word": "sabine",
+        "tools": ["repo_scanner", "web_search", "backlog_writer", "architecture_reviewer", "secret_manager"],
         "max_steps": 20
     },
     "assessment_anakin": {
@@ -122,7 +115,7 @@ AGENT_REGISTRY = {
         "class": "TechnicalTarkinAgent",
         "module": "agents.technical_tarkin_agent",
         "wake_word": "tarkin",
-        "tools": ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search"],
+        "tools": ["file_editor", "readme_parser", "diagram_generator", "slack_notifier", "web_search", "interaction_log_reader"],
         "max_steps": 15
     },
     "model_router_mothma": {
@@ -159,5 +152,12 @@ AGENT_REGISTRY = {
         "wake_word": "fennec",
         "tools": ["cost_analyzer", "web_search"],
         "max_steps": 10
+    },
+    "uat_ulic": {
+        "class": "UatUlicAgent",
+        "module": "agents.uat_ulic_agent",
+        "wake_word": "ulic",
+        "tools": ["playwright_recorder", "video_clipper", "uat_sandbox", "slack_notifier", "web_search", "backlog_writer"],
+        "max_steps": 15
     }
 }

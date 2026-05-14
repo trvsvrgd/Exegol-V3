@@ -16,10 +16,6 @@ from tools.agentic_coding import execute_coding_task
 from tools.metrics_manager import SuccessMetricsManager
 from tools.heartbeat_monitor import HeartbeatMonitor
 
-
-
-
-
 class DeveloperDexAgent:
     """Writes code, performs edits, and orchestrates 'Experience Sandboxes' for rapid prototyping.
     
@@ -146,6 +142,8 @@ class DeveloperDexAgent:
             outcome = "success"
             if "Error" in res or "Failed to parse" in res or "0 actions performed" in res:
                 outcome = "failure"
+                
+            duration = time.time() - start_time
 
             log_interaction(
                 agent_id=self.name,
@@ -180,7 +178,12 @@ class DeveloperDexAgent:
 
     def _handle_sandbox_request(self, repo_path, active_prompt):
         print(f"[{self.name}] Prototyping request detected. Scaffolding sandbox...")
-        app_id = "demo_app"  # In a real run, this would be parsed from the prompt or schema
+        
+        # Dynamically parse app_id from prompt or fallback to a timestamped demo
+        import re
+        match = re.search(r'app(?:_id|name)[\s=:]*([a-zA-Z0-9_-]+)', active_prompt, re.IGNORECASE)
+        app_id = match.group(1) if match else f"app_{int(time.time())}"
+
         sandbox_path = create_sandbox(repo_path, app_id)
         
         # Deploy boilerplate with schema-compliant app.exegol.json
@@ -225,7 +228,7 @@ class DeveloperDexAgent:
         preventing raw-dict runtime errors (arch_dex_integration_sync).
         """
         # Use the high-level agentic_coding tool
-        res = execute_coding_task(
+        res_data = execute_coding_task(
             task_description=active_prompt,
             repo_path=repo_path,
             llm_client=self.llm_client,
@@ -235,9 +238,13 @@ class DeveloperDexAgent:
             session_id=handoff.session_id
         )
         
+        # res_data is now a dict: {"summary": ..., "actions": ..., "results": ...}
+        res = res_data.get("summary", "No summary returned.")
+        actions = res_data.get("actions", [])
+        results = res_data.get("results", [])
+        
         # --- TASK: Implementation Plan Logging (doc_implementation_plan_logging) ---
-        # Note: In a full refactor, we might want execute_coding_task to return the actions for logging.
-        # For now, we'll let it perform the actions and return the summary results.
+        self._log_implementation_plan(repo_path, actions, results, active_prompt)
         
         # Capture snapshot for regression testing (poe_009)
         snapshot_data = {
@@ -269,10 +276,10 @@ class DeveloperDexAgent:
             logs = read_interaction_logs([repo_path], days=7)
             
             # 1. Sandbox Acceptance Rate
-            sandbox_sessions = [l for l in logs if "sandbox" in l.get("task_summary", "").lower()]
+            sandbox_sessions = [l for l in logs if "sandbox" in l.get("task_summary", "").lower() and l.get("agent_id") == self.name]
             if sandbox_sessions:
-                approved = [l for l in logs if l.get("agent_id") == "QualityQuigonAgent" and "approved" in l.get("task_summary", "").lower()]
-                # Simplistic mapping: if Quigon approved something in the last 7 days, we assume it's high
+                sandbox_session_ids = {l.get("session_id") for l in sandbox_sessions if l.get("session_id")}
+                approved = [l for l in logs if l.get("agent_id") == "QualityQuigonAgent" and l.get("outcome") == "success" and l.get("session_id") in sandbox_session_ids]
                 metrics["sandbox_acceptance_rate"] = round(len(approved) / len(sandbox_sessions), 2) if len(sandbox_sessions) > 0 else 1.0
             
             # 2. Bugs found in QA
@@ -285,12 +292,15 @@ class DeveloperDexAgent:
             metrics["bugs_found_in_qa"] = bugs
             
             # 3. Avg prompts to acceptance
-            # This would require tracking iteration counts in the session context
-            # For now, we'll use a heuristic based on steps_used
             dex_logs = [l for l in logs if l.get("agent_id") == self.name]
             if dex_logs:
-                total_steps = sum(l.get("steps_used", 0) for l in dex_logs)
-                metrics["avg_prompts_to_acceptance"] = round(total_steps / len(dex_logs), 1)
+                sessions = {}
+                for l in dex_logs:
+                    sid = l.get("session_id", "unknown")
+                    sessions[sid] = sessions.get(sid, 0) + 1
+                
+                total_prompts = sum(sessions.values())
+                metrics["avg_prompts_to_acceptance"] = round(total_prompts / len(sessions), 1) if sessions else 0.0
                 
         except Exception as e:
             print(f"[{self.name}] Error calculating success metrics: {e}")

@@ -256,4 +256,11 @@ class ArchitectArtooAgent:
             }
         )
 
+        # 7. Determination: Should we trigger Anakin for risk assessment?
+        if len(arch_tasks) > 5 or schema_rate < 90.0:
+            print(f"[{self.name}] DETERMINATION: High architectural debt or schema drift. Triggering AssessmentAnakin...")
+            self.next_agent_id = "assessment_anakin"
+        else:
+            self.next_agent_id = None
+
         return summary

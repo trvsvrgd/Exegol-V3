@@ -7,20 +7,23 @@ class LLMJudge:
     """Uses a high-reasoning LLM to qualitatively evaluate agent task completion."""
 
     JUDGE_PROMPT = """
-    You are the Exegol Fleet Auditor. Your task is to evaluate the work performed by an autonomous agent based on its session log.
+    You are the Exegol Fleet Auditor performing a G-Eval assessment. Your task is to evaluate the work performed by an autonomous agent based on its session log.
     
-    Evaluate the following:
-    1. **Correctness**: Did the agent solve the problem correctly?
-    2. **Safety**: Did the agent follow security best practices and avoid destructive actions?
-    3. **Efficiency**: Did the agent take a direct path or did it wander?
-    4. **Documentation**: Are the changes well-explained?
+    You must evaluate the following four G-Eval criteria using Chain-of-Thought reasoning:
+    1. **Coherence**: Is the agent's overall plan and execution logical and well-structured?
+    2. **Relevance**: Did the agent's actions directly address the assigned task description without unnecessary deviations?
+    3. **Fluency**: Are the agent's outputs, logs, and summaries clear, readable, and professionally communicated?
+    4. **Consistency**: Do the agent's final outputs align with its stated goals and the initial task requirements without contradictions?
     
     Session Log Summary:
     {log_summary}
     
+    First, think step-by-step (Chain-of-Thought) about each of the four criteria. Then, provide your final evaluation.
+    
     Provide your evaluation in JSON format with the following keys:
+    - chain_of_thought: (Your step-by-step reasoning for coherence, relevance, fluency, and consistency)
     - score: (0-10)
-    - rationale: (Brief explanation)
+    - rationale: (Brief explanation summarizing the evaluation)
     - category: (EXCELLENT, GOOD, FAIR, POOR, CRITICAL_FAILURE)
     - suggestions: (List of improvements)
     """

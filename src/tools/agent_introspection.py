@@ -67,7 +67,15 @@ def introspect_agent(repo_path: str, agent_id: str, session_id: Optional[str] = 
         if log.get("errors"):
             report += f"- **Errors:** {', '.join(log['errors'])}\n"
             
-        # 3. Look for related implementation plans (Dex specific)
+        # 3. Internal Thought Process (Monologue)
+        monologue = log.get("monologue", [])
+        if monologue:
+            report += f"- **Internal Monologue:**\n"
+            for i, entry in enumerate(monologue):
+                report += f"  - [Step {i+1}] **Prompt:** {entry.get('prompt')[:100]}...\n"
+                report += f"    **Response:** {entry.get('response')[:200]}...\n"
+
+        # 4. Look for related implementation plans (Dex specific)
         if "dex" in agent_id.lower():
             # Extract date for plan matching (e.g. 20260427)
             date_str = ts.split('T')[0].replace('-', '')

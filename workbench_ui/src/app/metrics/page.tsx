@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import LogDrillDown from "@/components/LogDrillDown";
+import { apiGet } from "../api-client";
+import LogDrillDown from "../../components/LogDrillDown";
 
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-local-key";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
 const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
 
 
@@ -41,10 +41,7 @@ export default function MetricsDashboard() {
 
 
   const fetchMetrics = () => {
-    fetch(`${API_BASE_URL}/fleet/metrics?repo_path=${encodeURIComponent(REPO_PATH)}`, {
-      headers: { "X-API-Key": API_KEY }
-    })
-      .then(res => res.json())
+    apiGet<FleetMetricsReport>(`/fleet/metrics?repo_path=${encodeURIComponent(REPO_PATH)}`)
       .then(data => {
         setMetrics(data);
         setLoading(false);
@@ -240,8 +237,6 @@ export default function MetricsDashboard() {
         isOpen={drillDownOpen}
         onClose={() => setDrillDownOpen(false)}
         repoPath={REPO_PATH}
-        apiKey={API_KEY}
-        apiBaseUrl={API_BASE_URL}
         initialAgentId={selectedAgent}
         initialOutcome={selectedOutcome}
       />

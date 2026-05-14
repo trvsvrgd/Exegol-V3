@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { apiGet, apiPost } from "../api-client";
 
 interface Repo {
   repo_path: string;
@@ -25,70 +26,93 @@ export default function ABTestPage() {
   const [localModels, setLocalModels] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/repos")
-      .then(res => res.json())
+    apiGet<Repo[]>("/repos")
       .then(data => {
         setRepos(data);
         if (data.length > 0) setSelectedRepo(data[0].repo_path);
-      });
+      })
+      .catch(err => console.error("Failed to fetch repos:", err));
 
-    fetch("http://localhost:8000/agents")
-      .then(res => res.json())
+    apiGet<Agent[]>("/agents")
       .then(data => {
         setAgents(data);
         if (data.length > 0) setSelectedAgent(data[0].id);
-      });
+      })
+      .catch(err => console.error("Failed to fetch agents:", err));
 
-    fetch("http://localhost:8000/local-models")
-      .then(res => res.json())
+    apiGet<any[]>("/local-models")
       .then(data => setLocalModels(data))
       .catch(err => console.error("Local models fetch error", err));
   }, []);
+
+  const pollTask = async (sessionId: string) => {
+    let attempts = 0;
+    const maxAttempts = 100; // ~5 minutes with 3s interval
+    
+    while (attempts < maxAttempts) {
+      try {
+        const statusData = await apiGet<any>(`/task-status/${sessionId}`);
+        if (statusData.status === "done") {
+          return statusData.result;
+        }
+        if (statusData.status === "error") {
+          return {
+            outcome: "failure",
+            output_summary: "Execution failed on backend.",
+            errors: statusData.result?.errors || ["Unknown backend error"],
+            session_id: sessionId
+          };
+        }
+      } catch (err) {
+        console.error(`Polling error for ${sessionId}:`, err);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      attempts++;
+    }
+    return { 
+      outcome: "timeout", 
+      output_summary: "Task timed out after 5 minutes.", 
+      session_id: sessionId 
+    };
+  };
 
   const runTest = async () => {
     setLoading(true);
     setResults({});
     
     try {
-      // Run Model A
-      const resA = await fetch("http://localhost:8000/run-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repo_path: selectedRepo,
-          agent_id: selectedAgent,
-          model: modelA,
-          task_prompt: taskPrompt
-        })
+      // 1. Submit both tasks to get session IDs
+      const submitA = await apiPost<any>("/run-task", {
+        repo_path: selectedRepo,
+        agent_id: selectedAgent,
+        model: modelA,
+        task_prompt: taskPrompt
       });
-      const dataA = await resA.json();
 
-      // Run Model B
-      const resB = await fetch("http://localhost:8000/run-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repo_path: selectedRepo,
-          agent_id: selectedAgent,
-          model: modelB,
-          task_prompt: taskPrompt
-        })
+      const submitB = await apiPost<any>("/run-task", {
+        repo_path: selectedRepo,
+        agent_id: selectedAgent,
+        model: modelB,
+        task_prompt: taskPrompt
       });
-      const dataB = await resB.json();
+
+      // 2. Poll for both results in parallel
+      const [dataA, dataB] = await Promise.all([
+        pollTask(submitA.session_id),
+        pollTask(submitB.session_id)
+      ]);
 
       setResults({ a: dataA, b: dataB });
 
-      // Fetch Snapshots if hash is present
-      if (dataA.snapshot_hash && dataB.snapshot_hash) {
-        const snapA = await fetch(`http://localhost:8000/snapshots/${selectedAgent}_fleet_cycle?repo_path=${encodeURIComponent(selectedRepo)}`).then(r => r.json());
-        const snapB = await fetch(`http://localhost:8000/snapshots/${selectedAgent}_fleet_cycle?repo_path=${encodeURIComponent(selectedRepo)}`).then(r => r.json());
-        // Wait, the snapshot name depends on task_id. In Orchestrator it is "fleet_cycle" or "manual_go".
-        // In DeveloperDexAgent: f"dex_{snapshot_data['task_id']}"
-        // This is a bit inconsistent. Let's fix the API or the Agent to make snapshot retrieval easier.
+      // 3. Fetch Snapshots if hashes are present
+      if (dataA?.snapshot_hash && dataB?.snapshot_hash) {
+        await apiGet(`/snapshots/${selectedAgent}_fleet_cycle?repo_path=${encodeURIComponent(selectedRepo)}`);
+        await apiGet(`/snapshots/${selectedAgent}_fleet_cycle?repo_path=${encodeURIComponent(selectedRepo)}`);
       }
     } catch (error) {
       console.error("Test failed:", error);
-      alert("Execution failed. Check if Backend API is running at :8000");
+      alert("Execution failed. Check if Backend API is running and your API Key is correct.");
     } finally {
       setLoading(false);
     }
@@ -107,7 +131,9 @@ export default function ABTestPage() {
             <label>Target Repository</label>
             <select value={selectedRepo} onChange={e => setSelectedRepo(e.target.value)}>
               {repos.map(r => (
-                <option key={r.repo_path} value={r.repo_path}>{r.repo_path.split('\\').pop()}</option>
+                <option key={r.repo_path} value={r.repo_path}>
+                  {r.repo_path.split(/[/\\]/).filter(Boolean).pop()}
+                </option>
               ))}
             </select>
           </div>
@@ -130,29 +156,45 @@ export default function ABTestPage() {
           />
         </div>
 
-        <div className="model-selectors" style={{ display: 'flex', gap: '2rem', marginTop: '2rem' }}>
+        <div className="model-selectors">
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="title-glow">Brain A</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label className="title-glow">Brain A</label>
+              <button 
+                onClick={() => apiGet<any[]>("/local-models").then(setLocalModels)}
+                style={{ background: 'none', border: 'none', color: '#555', fontSize: '0.6rem', cursor: 'pointer', textTransform: 'uppercase' }}
+              >
+                ↻ Refresh Models
+              </button>
+            </div>
             <select value={modelA} onChange={e => setModelA(e.target.value)}>
-              <option value="ollama">Ollama (Auto)</option>
-              <option value="gemini">Gemini (Cloud)</option>
-              <optgroup label="Local Inference (Ollama)">
-                {localModels.map(m => (
-                  <option key={m.name} value={m.name}>{m.name}</option>
-                ))}
-              </optgroup>
+              <option value="ollama">Ollama (Auto-Detect)</option>
+              <option value="gemini">Gemini 1.5 Pro</option>
+              <option value="claude">Claude 3.5 Sonnet</option>
+              {localModels.length > 0 && (
+                <optgroup label="Installed Local Models">
+                  {localModels.map(m => (
+                    <option key={m.name} value={m.name}>{m.name}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="title-glow">Brain B</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label className="title-glow">Brain B</label>
+            </div>
             <select value={modelB} onChange={e => setModelB(e.target.value)}>
-              <option value="gemini">Gemini (Cloud)</option>
-              <option value="ollama">Ollama (Auto)</option>
-              <optgroup label="Local Inference (Ollama)">
-                {localModels.map(m => (
-                  <option key={m.name} value={m.name}>{m.name}</option>
-                ))}
-              </optgroup>
+              <option value="gemini">Gemini 1.5 Pro</option>
+              <option value="ollama">Ollama (Auto-Detect)</option>
+              <option value="claude">Claude 3.5 Sonnet</option>
+              {localModels.length > 0 && (
+                <optgroup label="Installed Local Models">
+                  {localModels.map(m => (
+                    <option key={m.name} value={m.name}>{m.name}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
         </div>
@@ -180,6 +222,11 @@ export default function ABTestPage() {
           grid-template-columns: 1fr 1fr;
           gap: 2rem;
         }
+        .model-selectors {
+          display: flex;
+          gap: 2rem;
+          margin-top: 2rem;
+        }
         .form-group label {
           display: block;
           margin-bottom: 0.5rem;
@@ -206,6 +253,16 @@ export default function ABTestPage() {
           gap: 2rem;
           margin-top: 3rem;
         }
+
+        @media (max-width: 850px) {
+          .grid-form, .results-grid {
+            grid-template-columns: 1fr;
+          }
+          .model-selectors {
+            flex-direction: column;
+            gap: 1.5rem;
+          }
+        }
       `}</style>
     </div>
   );
@@ -213,19 +270,21 @@ export default function ABTestPage() {
 
 function DiffCard({ title, data }: { title: string, data: any }) {
   // Try to parse the summary if it's a string, or just use artifacts_written
-  const actions = data.output_summary.split('\n').filter((l: string) => l.includes(':'));
+  const outputSummary = data?.output_summary || "";
+  const actions = outputSummary.split('\n').filter((l: string) => l.includes(':'));
 
   return (
     <div className="glass diff-card">
       <div className="card-header">
         <h3>{title}</h3>
-        <span className="badge">{data.outcome}</span>
+        <span className="badge">{data?.outcome || "PENDING"}</span>
       </div>
       
       <div className="section-title">Planned Intelligence</div>
       <div className="action-list">
         {actions.length > 0 ? actions.map((action: string, i: number) => {
-          const [type, status] = action.split(':');
+          const parts = action.split(':');
+          const type = parts[0] || "";
           const isWrite = type.toLowerCase().includes('write');
           return (
             <div key={i} className="action-item">
@@ -241,11 +300,11 @@ function DiffCard({ title, data }: { title: string, data: any }) {
       </div>
 
       <div className="section-title" style={{ marginTop: '1.5rem' }}>Final Log</div>
-      <pre className="summary-pre">{data.output_summary}</pre>
+      <pre className="summary-pre">{outputSummary || "No output summary available."}</pre>
       
       <div className="card-footer">
-        <span>Steps Used: {data.steps_used}</span>
-        <span>ID: {data.session_id}</span>
+        <span>Steps Used: {data?.steps_used || 0}</span>
+        <span>ID: {data?.session_id || "N/A"}</span>
       </div>
 
       <style jsx>{`

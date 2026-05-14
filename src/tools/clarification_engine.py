@@ -3,53 +3,72 @@ from typing import List, Dict, Any
 
 def refine_strategic_questions(context: str, llm_client, system_prompt: str, count: int = 3) -> List[str]:
     """
-    Uses an LLM to analyze the repository context and formulate precise, strategic clarifying questions.
+    Uses the Thrawn persona to analyze repo context and identify high-impact unknowns.
     """
     prompt = f"""
-    Analyze the following repository context and identify strategic flaws, architectural oversights, or missing intent details.
-    Formulate exactly {count} surgical, high-impact clarifying questions for the user to drive the next evolution of the application.
+    Analyze the current repository context. Identify strategic flaws, architectural oversights, 
+    or missing 'Intent' details required for a Senior Product Manager to succeed.
     
     Context:
     {context}
     
-    Return the questions as a JSON list of strings.
+    Formulate exactly {count} surgical, high-impact clarifying questions. 
+    Focus on:
+    1. Primary Objective (if missing or vague)
+    2. Target Audience/Users
+    3. Technical Stack Constraints
+    4. Key Success Metrics
+    
+    Return the questions as a JSON list of strings: ["Question 1", "Question 2"]
     """
     try:
-        response = llm_client.generate(prompt, system_instruction=system_prompt)
+        # Request JSON from the LLM client
+        response = llm_client.generate(prompt, system_instruction=system_prompt, json_format=True)
         questions = llm_client.parse_json_response(response)
+        
         if isinstance(questions, list):
             return [str(q) for q in questions]
         return []
     except Exception as e:
-        print(f"[clarification_engine] Error: {e}")
+        print(f"[clarification_engine] Refinement Error: {e}")
         return []
 
 def analyze_answer_for_roadmap_impact(question: str, answer: str, current_roadmap: str, llm_client, system_prompt: str) -> List[Dict[str, Any]]:
     """
-    Analyzes a user's answer and determines its impact on the project roadmap.
+    Analyzes a user's answer to determine if the Roadmap needs to be refactored.
     """
     prompt = f"""
-    The user has provided an answer to a strategic question.
+    A strategic question has been answered. Determine the impact on the Roadmap.
     Question: {question}
     Answer: {answer}
     
     Current Roadmap:
     {current_roadmap}
     
-    Determine if this answer requires changes to the roadmap (adding, redacting, or updating items).
-    Return a list of actions in JSON format:
+    Return a list of roadmap actions in JSON format:
     [
-        {{"action": "redact", "pattern": "string to match"}},
-        {{"action": "add", "section": "Phase X", "item": "new item"}}
+        {{"action": "redact", "pattern": "item to remove"}},
+        {{"action": "add", "section": "Phase 1", "item": "new task based on answer"}}
     ]
-    If no changes are needed, return [].
     """
     try:
-        response = llm_client.generate(prompt, system_instruction=system_prompt)
-        actions = llm_client.parse_json_response(response)
-        if isinstance(actions, list):
-            return actions
+        response = llm_client.generate(prompt, system_instruction=system_prompt, json_format=True)
+        result = llm_client.parse_json_response(response)
+        if isinstance(result, list):
+            return result
         return []
     except Exception as e:
-        print(f"[clarification_engine] Error analyzing answer: {e}")
+        print(f"[clarification_engine] Impact Analysis Error: {e}")
         return []
+
+def get_onboarding_sequence() -> List[str]:
+    """
+    Returns the baseline 'Must-Ask' questions for a brand new repository.
+    This ensures consistency during the first run of Thrawn.
+    """
+    return [
+        "What is the Primary Objective of this repository? (Elevator pitch)",
+        "Who is the target user for this project?",
+        "Are there any hard technical constraints (e.g., must use Python, must run on-prem)?",
+        "How will we measure success for this project?"
+    ]

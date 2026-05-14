@@ -5,7 +5,7 @@ import time
 from tools.web_search import web_search
 from tools.fleet_logger import log_interaction
 from tools.backlog_manager import BacklogManager
-from tools.capability_reviewer import map_requirement_to_capability
+from tools.capability_reviewer import get_compliance_gaps, scan_codebase_for_capabilities
 from tools.metrics_manager import SuccessMetricsManager
 
 
@@ -126,33 +126,39 @@ class ComplianceCodyAgent:
             
             exception_log_path = os.path.join(exegol_dir, "compliance_exceptions.log")
 
+            # Run full gap analysis using capability_reviewer
+            cap_list = capabilities.get("capabilities", [])
+            gap_report = get_compliance_gaps(found_requirements, cap_list, llm_client=self.llm_client)
+            self._steps_used += 1
+
             with open(exception_log_path, 'a', encoding='utf-8') as elog:
                 timestamp = datetime.datetime.now().isoformat()
-                elog.write(f"\n--- Compliance Sweep: {timestamp} ---\n")
+                elog.write(f"\n--- Compliance Sweep: {timestamp} (Coverage: {gap_report['coverage_pct']}%) ---\n")
 
-                for req in found_requirements:
-                    # Use the new capability_reviewer tool for mapping
-                    analysis = map_requirement_to_capability(req, capabilities.get("capabilities", []), llm_client=self.llm_client)
-                    
-                    if analysis["matched"] and analysis["capability"].get("implemented"):
-                        # Support exists, add as a tracking task if not already there
-                        task = {
-                            "id": f"comp_{req['id'].lower()}",
-                            "summary": f"Compliance Audit: {req['summary']}",
-                            "description": req["description"],
-                            "priority": req["priority"],
-                            "type": "compliance_certification",
-                            "status": "pending_prioritization",
-                            "source_requirement_id": req["id"],
-                            "created_at": datetime.datetime.now().isoformat()
-                        }
-                        if bm.add_task(task):
-                            new_tasks_added += 1
-                    else:
-                        # System does NOT support this requirement or match failed — LOG EXCEPTION
-                        reason = analysis.get("reasoning", "No matching capability found")
-                        elog.write(f"[EXCEPTION] System lacks capability for requirement {req['id']}: {req['summary']} (Reason: {reason})\n")
-                        exceptions_logged += 1
+                # Covered requirements → add compliance_certification tasks
+                for item in gap_report["covered"]:
+                    req = item["requirement"]
+                    task = {
+                        "id": f"comp_{req['id'].lower()}",
+                        "summary": f"Compliance Audit: {req['summary']}",
+                        "description": req["description"],
+                        "priority": req.get("priority", "medium"),
+                        "type": "compliance_certification",
+                        "status": "pending_prioritization",
+                        "source_requirement_id": req["id"],
+                        "mapped_capability_id": item["capability"].get("id"),
+                        "match_confidence": item["confidence"],
+                        "created_at": datetime.datetime.now().isoformat()
+                    }
+                    if bm.add_task(task):
+                        new_tasks_added += 1
+
+                # Gap items → log exceptions
+                for item in gap_report["gaps"]:
+                    req = item["requirement"]
+                    reason = item.get("reasoning", "No matching capability found")
+                    elog.write(f"[EXCEPTION] System lacks capability for {req['id']}: {req['summary']} — {reason}\n")
+                    exceptions_logged += 1
 
             duration = time.time() - start_time
             summary = f"Compliance sweep complete. Added {new_tasks_added} new tasks to backlog. Logged {exceptions_logged} exceptions."

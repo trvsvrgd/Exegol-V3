@@ -10,7 +10,7 @@ from tools.repo_scanner import scan_for_security_vulnerabilities
 
 
 
-class SecurityArchitectAgent:
+class SecuritySabineAgent:
     """Evaluates repository architecture for security weaknesses, zero-day vulnerabilities,
     and architectural gaps. Submissions to the backlog are the primary success metric,
     measured alongside zero-day pattern detection in the codebase.
@@ -22,7 +22,7 @@ class SecurityArchitectAgent:
 
     def __init__(self, llm_client):
         self.llm_client = llm_client
-        self.name = "SecurityArchitectAgent"
+        self.name = "SecuritySabineAgent"
         self.max_steps = 20
         self._steps_used = 0
         self.tools = ["repo_scanner", "web_search", "backlog_writer", "architecture_reviewer"]
@@ -155,7 +155,7 @@ class SecurityArchitectAgent:
                     continue
 
                 # Skip self to avoid false positives from scanning our own pattern definitions
-                if "security_architect_agent" in filename:
+                if "security_sabine_agent" in filename:
                     continue
 
                 file_path = os.path.join(root, filename)
@@ -541,6 +541,23 @@ class SecurityArchitectAgent:
             report_file = self._write_security_report(repo_path, findings, gaps, backlog_count)
             self._steps_used += 1
 
+            # Step 5: API Key Health Audit & HITL Escalation
+            print(f"[{self.name}] [5/5] Auditing API key health...")
+            try:
+                from tools.secret_manager import SecretManager
+                secret_mgr = SecretManager(repo_path)
+                escalated_keys = secret_mgr.escalate_unhealthy_keys()
+                key_summary = secret_mgr.get_status_summary()
+                unhealthy_count = key_summary.get("unhealthy", 0)
+                if unhealthy_count > 0:
+                    print(f"[{self.name}] WARNING: {unhealthy_count} API key(s) require rotation. HITL tasks created: {len(escalated_keys)}")
+                else:
+                    print(f"[{self.name}] All {key_summary.get('total_managed_keys', 0)} managed API keys are healthy.")
+            except Exception as e:
+                print(f"[{self.name}] Key audit failed (non-blocking): {e}")
+                unhealthy_count = 0
+            self._steps_used += 1
+
 
             duration = time.time() - start_time
             zero_day_count = len(findings)
@@ -552,6 +569,7 @@ class SecurityArchitectAgent:
                 f"Architectural gaps: {len(gaps)}. "
                 f"Backlog submissions: {backlog_count}. "
                 f"Critical findings: {critical_count}. "
+                f"Unhealthy API keys: {unhealthy_count}. "
                 f"Report: {report_file}"
             )
 

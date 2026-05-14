@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { apiGet } from "../app/api-client";
+
 
 interface InteractionLog {
   timestamp: string;
@@ -19,8 +21,6 @@ interface LogDrillDownProps {
   isOpen: boolean;
   onClose: () => void;
   repoPath: string;
-  apiKey: string;
-  apiBaseUrl: string;
   initialAgentId?: string;
   initialOutcome?: string;
 }
@@ -29,8 +29,6 @@ export default function LogDrillDown({
   isOpen,
   onClose,
   repoPath,
-  apiKey,
-  apiBaseUrl,
   initialAgentId,
   initialOutcome
 }: LogDrillDownProps) {
@@ -41,6 +39,14 @@ export default function LogDrillDown({
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [agentProfile, setAgentProfile] = useState<any>(null);
 
+  // Sync filter state whenever the modal opens for a (potentially different) agent
+  useEffect(() => {
+    if (isOpen) {
+      setFilterAgent(initialAgentId || "");
+      setFilterOutcome(initialOutcome || "");
+    }
+  }, [isOpen, initialAgentId, initialOutcome]);
+
   useEffect(() => {
     if (isOpen) {
       fetchLogs();
@@ -50,14 +56,11 @@ export default function LogDrillDown({
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      let url = `${apiBaseUrl}/fleet/interactions?repo_path=${encodeURIComponent(repoPath)}`;
-      if (filterAgent) url += `&agent_id=${encodeURIComponent(filterAgent)}`;
-      if (filterOutcome) url += `&outcome=${encodeURIComponent(filterOutcome)}`;
+      let path = `/fleet/interactions?repo_path=${encodeURIComponent(repoPath)}`;
+      if (filterAgent) path += `&agent_id=${encodeURIComponent(filterAgent)}`;
+      if (filterOutcome) path += `&outcome=${encodeURIComponent(filterOutcome)}`;
 
-      const res = await fetch(url, {
-        headers: { "X-API-Key": apiKey }
-      });
-      const data = await res.json();
+      const data = await apiGet<InteractionLog[]>(path);
       
       if (Array.isArray(data)) {
         setLogs(data);
@@ -78,10 +81,7 @@ export default function LogDrillDown({
       return;
     }
     try {
-      const res = await fetch(`${apiBaseUrl}/agents`, {
-        headers: { "X-API-Key": apiKey }
-      });
-      const data = await res.json();
+      const data = await apiGet<any[]>("/agents");
       const profile = data.find((a: any) => a.id === filterAgent);
       setAgentProfile(profile);
     } catch (err) {
@@ -102,13 +102,37 @@ export default function LogDrillDown({
       <div className="modal-content glass" onClick={e => e.stopPropagation()}>
         <header className="modal-header">
           <div className="header-titles">
-            <h2>Interaction Drill-Down</h2>
-            <p className="subtitle">Analyzing telemetry for {filterAgent || "All Agents"}</p>
+            <h2>Interaction Logs{filterAgent ? `: ${filterAgent}` : ""}</h2>
+            <p className="subtitle">
+              {filterAgent
+                ? `Showing all recorded sessions for this agent`
+                : "Showing interaction logs across the entire fleet"}
+            </p>
           </div>
           <button className="close-btn" onClick={onClose}>&times;</button>
         </header>
 
         <div className="filters-bar">
+          {/* When opened from an agent card, show a locked badge — no free-text search needed */}
+          {initialAgentId ? (
+            <div className="filter-group">
+              <label>Agent</label>
+              <div className="agent-locked-badge">
+                <span className="lock-icon">⚡</span>
+                {initialAgentId}
+              </div>
+            </div>
+          ) : (
+            <div className="filter-group">
+              <label>Agent</label>
+              <input
+                type="text"
+                placeholder="Filter by agent id..."
+                value={filterAgent}
+                onChange={e => setFilterAgent(e.target.value)}
+              />
+            </div>
+          )}
           <div className="filter-group">
             <label>Outcome</label>
             <select value={filterOutcome} onChange={e => setFilterOutcome(e.target.value)}>
@@ -118,17 +142,8 @@ export default function LogDrillDown({
               <option value="partial">Partial</option>
             </select>
           </div>
-          <div className="filter-group">
-            <label>Agent</label>
-            <input 
-              type="text" 
-              placeholder="Filter by agent id..." 
-              value={filterAgent} 
-              onChange={e => setFilterAgent(e.target.value)}
-            />
-          </div>
           <button className="refresh-btn" onClick={fetchLogs} disabled={loading}>
-            {loading ? "..." : "Refresh"}
+            {loading ? "Syncing..." : "↺ Refresh"}
           </button>
         </div>
 
@@ -272,6 +287,25 @@ export default function LogDrillDown({
           background: rgba(255, 255, 255, 0.02);
           border-bottom: 1px solid rgba(255, 255, 255, 0.05);
           align-items: flex-end;
+          flex-wrap: wrap;
+        }
+        .agent-locked-badge {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          background: rgba(77, 171, 247, 0.12);
+          border: 1px solid rgba(77, 171, 247, 0.35);
+          color: #4dabf7;
+          padding: 0.5rem 1rem;
+          border-radius: 6px;
+          font-size: 0.9rem;
+          font-weight: 700;
+          letter-spacing: 0.5px;
+          min-width: 180px;
+        }
+        .lock-icon {
+          font-size: 0.8rem;
+          opacity: 0.7;
         }
         .filter-group {
           display: flex;
@@ -313,6 +347,7 @@ export default function LogDrillDown({
           gap: 0.75rem;
         }
         .log-item {
+          flex-shrink: 0;
           border: 1px solid rgba(255, 255, 255, 0.05);
           border-radius: 10px;
           overflow: hidden;

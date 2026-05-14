@@ -6,5 +6,6 @@
   "file_namer": "Generates clean, snake_case alphanumeric file names based on document context",
   "slack_notifier": "Sends notifications and approval requests to Slack",
   "file_editor": "Reads, writes, and replaces content in repository files",
-  "llm_inference": "Provides reasoning and structured output capabilities via Ollama and Gemini"
+  "llm_inference": "Provides reasoning and structured output capabilities via Ollama and Gemini",
+  "agent_introspection": "Audits agent internal thought processes and performance logs"
 }

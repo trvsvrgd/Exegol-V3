@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   description: "Autonomous Agent Fleet Command & A/B Testing",
 };
 
+import Navbar from "@/components/Navbar";
+
 export default function RootLayout({
   children,
 }: {
@@ -14,21 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <nav className="nav-container">
-          <div className="nav-content container">
-            <div className="logo">
-              <span className="title-glow">EXEGOL</span> V3
-            </div>
-            <div className="nav-links">
-              <a href="/">Dashboard</a>
-              <a href="/evaluations">Evaluations</a>
-              <a href="/ab-test" className="active">A/B Testing</a>
-              <a href="/fleet">Fleet Status</a>
-              <a href="/metrics">Metrics</a>
-              <a href="/tools">Tool Registry</a>
-            </div>
-          </div>
-        </nav>
+        <Navbar />
         <main>{children}</main>
       </body>
     </html>

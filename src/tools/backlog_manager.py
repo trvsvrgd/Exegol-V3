@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import sqlite3
+from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 
 class BacklogManager:
@@ -22,9 +23,18 @@ class BacklogManager:
         self._init_db()
         self._migrate_if_needed()
 
+    @contextmanager
+    def _get_conn(self):
+        """Context manager that ensures the SQLite connection is always closed."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def _init_db(self):
         """Initializes the SQLite database and creates the tasks table."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
@@ -43,7 +53,7 @@ class BacklogManager:
 
     def _migrate_if_needed(self):
         """Migrates tasks from legacy JSON files if the database is empty."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM tasks")
             if cursor.fetchone()[0] > 0:
@@ -103,7 +113,7 @@ class BacklogManager:
 
     def load_backlog(self) -> List[Dict[str, Any]]:
         """Loads the active backlog (not archived)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT data FROM tasks WHERE archived_at IS NULL")
@@ -111,7 +121,7 @@ class BacklogManager:
 
     def load_archive(self) -> List[Dict[str, Any]]:
         """Loads the archived tasks."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT data FROM tasks WHERE archived_at IS NOT NULL")
@@ -123,7 +133,7 @@ class BacklogManager:
         if not task_id:
             return False
             
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
             if cursor.fetchone():
@@ -131,11 +141,13 @@ class BacklogManager:
             
             self._insert_task(conn, task)
             conn.commit()
-            return True
+            
+        self._sync_to_json()
+        return True
 
     def update_task_status(self, task_id: str, new_status: str) -> bool:
         """Updates the status of a specific task and refreshes its 'data' blob."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
@@ -149,12 +161,14 @@ class BacklogManager:
             conn.execute("UPDATE tasks SET status = ?, data = ? WHERE id = ?", 
                          (new_status, json.dumps(task), task_id))
             conn.commit()
-            return True
+            
+        self._sync_to_json()
+        return True
 
     def archive_completed_tasks(self) -> int:
         """Moves all completed tasks to archive by setting archived_at."""
         now_str = datetime.datetime.now().isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             cursor = conn.cursor()
             
             # Find tasks to archive
@@ -170,5 +184,22 @@ class BacklogManager:
                              (now_str, json.dumps(task), task_id))
             
             conn.commit()
-            return len(rows)
+            
+        self._sync_to_json()
+        return len(rows)
 
+    def _sync_to_json(self):
+        """Synchronizes the database state to the legacy JSON files."""
+        active = self.load_backlog()
+        try:
+            with open(self.backlog_json, "w", encoding="utf-8") as f:
+                json.dump(active, f, indent=4)
+        except Exception as e:
+            print(f"[BacklogManager] Failed to sync backlog.json: {e}")
+            
+        archived = self.load_archive()
+        try:
+            with open(self.archive_json, "w", encoding="utf-8") as f:
+                json.dump(archived, f, indent=4)
+        except Exception as e:
+            print(f"[BacklogManager] Failed to sync backlog_archive.json: {e}")

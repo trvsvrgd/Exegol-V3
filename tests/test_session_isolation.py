@@ -124,14 +124,14 @@ class TestSessionIsolation:
 
         handoff_1 = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="cameraman_cassian",
+            agent_id="markdown_mace",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
         )
         handoff_2 = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="cameraman_cassian",
+            agent_id="markdown_mace",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
@@ -143,15 +143,15 @@ class TestSessionIsolation:
         from unittest.mock import patch
         with patch.object(sm, "_get_agent_cooldown", return_value=0.0):
             result_1 = sm.spawn_agent_session(
-                agent_id="cameraman_cassian",
-                module_path="agents.cameraman_cassian_agent",
-                class_name="CameramanCassianAgent",
+                agent_id="markdown_mace",
+                module_path="agents.markdown_mace_agent",
+                class_name="MarkdownMaceAgent",
                 handoff=handoff_1,
             )
             result_2 = sm.spawn_agent_session(
-                agent_id="cameraman_cassian",
-                module_path="agents.cameraman_cassian_agent",
-                class_name="CameramanCassianAgent",
+                agent_id="markdown_mace",
+                module_path="agents.markdown_mace_agent",
+                class_name="MarkdownMaceAgent",
                 handoff=handoff_2,
             )
 
@@ -167,7 +167,7 @@ class TestSessionIsolation:
 
         handoff = HandoffContext(
             repo_path=tmp_repo,
-            agent_id="cameraman_cassian",
+            agent_id="markdown_mace",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
@@ -178,9 +178,9 @@ class TestSessionIsolation:
         from unittest.mock import patch
         with patch.object(sm, "_get_agent_cooldown", return_value=0.0):
             result = sm.spawn_agent_session(
-                agent_id="cameraman_cassian",
-                module_path="agents.cameraman_cassian_agent",
-                class_name="CameramanCassianAgent",
+                agent_id="markdown_mace",
+                module_path="agents.markdown_mace_agent",
+                class_name="MarkdownMaceAgent",
                 handoff=handoff,
             )
 
@@ -191,7 +191,7 @@ class TestSessionIsolation:
 
         with open(log_file, "r") as f:
             log_data = json.load(f)
-        assert log_data["agent_id"] == "cameraman_cassian"
+        assert log_data["agent_id"] == "markdown_mace"
         assert log_data["outcome"] == "success"
 
     def test_unique_session_ids(self, tmp_repo):

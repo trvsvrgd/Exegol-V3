@@ -66,3 +66,5 @@ credentials.json
 # Local scratch and temp files
 scratch/
 verify_test.txt
+
+config/secret_metadata.json
