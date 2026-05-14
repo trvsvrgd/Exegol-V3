@@ -1,5 +1,6 @@
 import os
 import json
+import datetime
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -15,6 +16,7 @@ from tools.slack_tool import post_to_slack
 from tools.agentic_coding import execute_coding_task
 from tools.metrics_manager import SuccessMetricsManager
 from tools.heartbeat_monitor import HeartbeatMonitor
+from tools.backlog_manager import BacklogManager
 
 class DeveloperDexAgent:
     """Writes code, performs edits, and orchestrates 'Experience Sandboxes' for rapid prototyping.
@@ -212,12 +214,28 @@ class DeveloperDexAgent:
         deploy_to_sandbox(sandbox_path, files)
         self._steps_used += 1
         
-        # Validate schema
+        # --- ARCH_APP_SCHEMA_VALIDATOR: Enforce schema before completing sandbox lifecycle ---
         schema_path = os.path.join(repo_path, ".exegol", "schemas", "app_schema.json")
         validation = validate_app_schema(sandbox_path, schema_path)
         
         status_msg = f"Validation: {validation['status'].upper()} - {validation['message']}"
         print(f"[{self.name}] {status_msg}")
+        
+        if validation["status"] == "fail":
+            # Schema violation: block the sandbox and inject a backlog task for Artoo/Dex
+            print(f"[{self.name}] SCHEMA VIOLATION in sandbox '{app_id}'. Halting deployment, injecting backlog task.")
+            bm = BacklogManager(repo_path)
+            bm.add_task({
+                "id": f"schema_fix_{app_id[:16]}",
+                "summary": f"Fix app.exegol.json schema violation in sandbox '{app_id}': {validation['message']}",
+                "priority": "high",
+                "type": "architecture_governance",
+                "status": "todo",
+                "source_agent": self.name,
+                "rationale": f"Sandbox '{app_id}' failed app.exegol.json schema validation: {validation.get('message', 'unknown error')}. Path: {validation.get('path', 'unknown')}. Deployment blocked.",
+                "created_at": datetime.datetime.now().isoformat()
+            })
+            return f"SCHEMA VIOLATION: Sandbox '{app_id}' deployment blocked. {status_msg}"
         
         return f"Experience Sandbox created at: {sandbox_path}. Prototype deployed. {status_msg}"
 
@@ -260,6 +278,10 @@ class DeveloperDexAgent:
         except Exception as e:
             print(f"[{self.name}] Failed to capture snapshot: {e}")
 
+        # --- ARCH_APP_SCHEMA_VALIDATOR: Post-coding sandbox sweep ---
+        # After any coding task, check if any sandbox apps have drifted from the schema
+        self._validate_sandbox_schemas(repo_path)
+        
         self.next_agent_id = "quality_quigon"
         return res
 
@@ -306,6 +328,64 @@ class DeveloperDexAgent:
             print(f"[{self.name}] Error calculating success metrics: {e}")
             
         return metrics
+
+    def _validate_sandbox_schemas(self, repo_path: str):
+        """Scans all known sandboxes and validates their app.exegol.json against the master schema.
+        
+        Implements the arch_app_schema_validator KPI. Any failing sandbox gets a
+        backlog task injected automatically so it is tracked and resolved.
+        """
+        sandboxes_dir = os.path.join(repo_path, ".exegol", "sandboxes")
+        schema_path = os.path.join(repo_path, ".exegol", "schemas", "app_schema.json")
+        
+        if not os.path.exists(sandboxes_dir) or not os.path.exists(schema_path):
+            return
+        
+        bm = BacklogManager(repo_path)
+        violations = 0
+        
+        for sandbox_name in os.listdir(sandboxes_dir):
+            sandbox_path = os.path.join(sandboxes_dir, sandbox_name)
+            if not os.path.isdir(sandbox_path):
+                continue
+            
+            app_json = os.path.join(sandbox_path, "app.exegol.json")
+            if not os.path.exists(app_json):
+                # Missing app.exegol.json is also a violation
+                task_id = f"schema_missing_{sandbox_name[:16]}"
+                bm.add_task({
+                    "id": task_id,
+                    "summary": f"Add missing app.exegol.json to sandbox '{sandbox_name}'",
+                    "priority": "high",
+                    "type": "architecture_governance",
+                    "status": "todo",
+                    "source_agent": self.name,
+                    "rationale": f"Sandbox '{sandbox_name}' is missing the mandatory app.exegol.json schema file. This breaks the arch_app_schema_validator KPI (target: 100%).",
+                    "created_at": datetime.datetime.now().isoformat()
+                })
+                violations += 1
+                continue
+            
+            validation = validate_app_schema(sandbox_path, schema_path)
+            if validation.get("status") == "fail":
+                task_id = f"schema_fix_{sandbox_name[:16]}"
+                added = bm.add_task({
+                    "id": task_id,
+                    "summary": f"Fix app.exegol.json schema violation in sandbox '{sandbox_name}'",
+                    "priority": "high",
+                    "type": "architecture_governance",
+                    "status": "todo",
+                    "source_agent": self.name,
+                    "rationale": f"Schema validation failed: {validation.get('message', 'unknown')}. Path: {validation.get('path', 'N/A')}.",
+                    "created_at": datetime.datetime.now().isoformat()
+                })
+                if added:
+                    violations += 1
+        
+        if violations > 0:
+            print(f"[{self.name}] Schema sweep complete: {violations} violation(s) detected and backlogged.")
+        else:
+            print(f"[{self.name}] Schema sweep complete: All sandboxes pass schema validation.")
 
     def _log_implementation_plan(self, repo_path: str, actions: list, results: list, prompt: str):
         """Logs a human-readable implementation plan for the user to review."""
