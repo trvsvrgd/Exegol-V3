@@ -183,8 +183,10 @@ def execute_coding_task(
     Returns:
         A dict with keys: "summary" (str), "actions" (list), "results" (list).
     """
-    print(f"[AgenticCoding] Starting task for {agent_name}: {task_description[:100]}...")
+    # CRITICAL: Set env var FIRST — before any tool call that uses RBAC (write_file, read_file).
+    # This must happen before web_search in case any downstream tool checks permissions.
     os.environ["EXEGOL_ACTIVE_AGENT"] = agent_name
+    print(f"[AgenticCoding] Starting task for {agent_name}: {task_description[:100]}...")
 
     # 1. Research (Optional but recommended for agentic feel)
     search_query = f"best practices and implementation for: {task_description[:200]}"
@@ -283,6 +285,23 @@ Respond with ONLY the JSON array. No markdown fences. No prose. No explanation."
         HeartbeatMonitor.pulse_session(repo_path, session_id)
 
         file_path = os.path.join(repo_path, path)
+
+        # --- REPO BOUNDARY GUARD ---
+        # Ensure the LLM-generated path stays within the repo and doesn't escape.
+        real_repo = os.path.realpath(repo_path)
+        real_file = os.path.realpath(file_path)
+        if not (real_file.startswith(real_repo + os.sep) or real_file == real_repo):
+            result_msg = f"Skipped {path}: path escapes repo boundary (security guard)."
+            results.append(result_msg)
+            print(f"[AgenticCoding] {result_msg}")
+            continue
+
+        # For replace/regex actions on non-existent files, skip gracefully.
+        if action_type in ("replace", "regex") and not os.path.exists(file_path):
+            result_msg = f"Skipped {action_type} on {path}: file does not exist. Use 'write' to create it first."
+            results.append(result_msg)
+            print(f"[AgenticCoding] {result_msg}")
+            continue
 
         try:
             if action_type == "write":

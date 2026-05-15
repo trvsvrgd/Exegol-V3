@@ -2,6 +2,47 @@ import os
 import re
 from typing import List, Dict
 
+# Regex: keyword must appear as a whole word (not embedded in prose like "demeanor" → skip)
+_KEYWORD_WORD_RE = {
+    key: re.compile(r'\b' + re.escape(key) + r'\b', re.IGNORECASE)
+    for key in ("mock", "todo", "placeholder", "api_key", "credentials", "hardcoded")
+}
+
+# Prose phrases that contain keywords but are clearly documentation / system-prompt text
+_FALSE_POSITIVE_PHRASES = (
+    "identify mock",
+    "identify the mock",
+    "mock code",        # common in system prompt prose
+    "mock integration",
+    "no mock",
+    "stub code",
+    "hardcoded values",  # prose descriptions in docstrings
+    "intolerant of weakness",
+    "resolve mock",     # instructions about mocks, not a mock itself
+    "mock findings",    # vibe_vader routing description
+    "mock issues",
+    "unhandled fetch calls and hardcoded",  # watcher wedge docstring
+)
+
+# Files whose own source code discusses detection patterns — always produce self-referential hits.
+# These are excluded from scanning since they are the scanners, not the scanned.
+_SELF_REFERENTIAL_FILES = {
+    "repo_analyzer.py",
+    "security_sabine_agent.py",
+    "watcher_wedge_agent.py",
+    "input_sanitizer.py",
+}
+
+
+def _is_inside_triple_quote_block(lines: list, current_idx: int) -> bool:
+    """Returns True if the line at current_idx is inside a triple-quoted string."""
+    triple_count = 0
+    for idx in range(current_idx):
+        triple_count += lines[idx].count('"""') + lines[idx].count("'''")
+    # If odd number of triple-quotes before this line, we are inside a string
+    return (triple_count % 2) == 1
+
+
 def analyze_repository(repo_path: str, scan_path: str = "src") -> List[Dict]:
     """
     Scans the codebase for technical debt, mocks, placeholders, and missing credentials.
@@ -41,41 +82,57 @@ def analyze_repository(repo_path: str, scan_path: str = "src") -> List[Dict]:
             file_path = os.path.join(root, file)
             rel_path = os.path.relpath(file_path, repo_path)
             
-            # Skip registry files and the analyzer itself
-            if "registry.py" in rel_path or "repo_analyzer.py" in rel_path:
+            # Skip registry files, the analyzer itself, and self-referential scanner files
+            if "registry.py" in rel_path or file in _SELF_REFERENTIAL_FILES:
                 continue
                 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    for i, line in enumerate(f, 1):
-                        lower_line = line.lower()
-                        
-                        # Optimization: skip lines that definitely don't have our keywords
-                        if not any(key in lower_line for key in patterns):
-                            continue
+                    lines = f.readlines()
 
-                        # Skip lines that look like data (e.g. key-value pairs without comments)
-                        # unless it's an explicit 'mock' keyword
-                        is_comment = "#" in line or "//" in line
-                        
-                        for key, (label, category) in patterns.items():
-                            if key in lower_line:
-                                # Stricter requirement: word must appear in a comment or be 'mock'
-                                is_mock = "mock" in lower_line and not is_comment
-                                
-                                # Ignore status assignments or string literals that aren't comments
-                                # e.g. "status": "mock"
-                                is_status_val = any(q + key + q in lower_line for q in ['"', "'"])
-                                
-                                if (is_comment or is_mock) and not is_status_val:
-                                    findings.append({
-                                        "task": f"Resolve {key.upper()} in {rel_path}:L{i}",
-                                        "category": category,
-                                        "context": line.strip(),
-                                        "file_path": rel_path,
-                                        "line_number": i
-                                    })
-                                    break # Only one finding per line
+                # Track triple-quote depth for false-positive suppression
+                triple_depth = 0
+
+                for i, line in enumerate(lines, 1):
+                    lower_line = line.lower().strip()
+                    
+                    # Track triple-quote state BEFORE processing this line
+                    raw_line = lines[i - 1]
+                    triple_depth += raw_line.count('"""') + raw_line.count("'''")
+                    inside_triple_quote = (triple_depth % 2) == 1
+
+                    # Optimization: skip lines that definitely don't have our keywords
+                    if not any(key in lower_line for key in patterns):
+                        continue
+
+                    # Skip if this line is inside a multi-line string (system prompt prose, docstring, etc.)
+                    # Exception: python single-line comments (#) inside triple-quote strings are rare,
+                    # so we still allow comment lines through.
+                    is_comment = "#" in line or "//" in line
+                    if inside_triple_quote and not is_comment:
+                        continue
+
+                    # Skip lines that are false-positive prose (system prompts referencing mock code)
+                    if any(phrase in lower_line for phrase in _FALSE_POSITIVE_PHRASES):
+                        continue
+
+                    for key, (label, category) in patterns.items():
+                        if _KEYWORD_WORD_RE[key].search(lower_line):
+                            # Ignore string literal value assignments — e.g. "status": "mock"
+                            is_status_val = any(q + key + q in lower_line for q in ['"', "'"])
+                            if is_status_val:
+                                continue
+
+                            # Allow: comment lines OR bare-word appearances in code (not prose)
+                            if is_comment or (not inside_triple_quote):
+                                findings.append({
+                                    "task": f"Resolve {key.upper()} in {rel_path}:L{i}",
+                                    "category": category,
+                                    "context": line.strip(),
+                                    "file_path": rel_path,
+                                    "line_number": i
+                                })
+                                break  # Only one finding per line
             except Exception as e:
                 # Silently skip files we can't read
                 continue
