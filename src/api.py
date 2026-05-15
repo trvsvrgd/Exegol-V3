@@ -49,7 +49,7 @@ app.add_middleware(
 # Public endpoints that do NOT require authentication
 _PUBLIC_PATHS = {"/", "/docs", "/openapi.json", "/redoc"}
 
-API_KEY = os.getenv("EXEGOL_API_KEY", "dev-local-key")
+API_KEY = os.getenv("EXEGOL_API_KEY")
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -131,6 +131,10 @@ class ActionQueueRequest(BaseModel):
     action: str  # "done", "update_notes", "dismiss"
     item_id: str
     notes: Optional[str] = None
+
+class ModelCompareRequest(BaseModel):
+    repo_path: str
+    model_names: List[str]
 
 class SecretRotateRequest(BaseModel):
     repo_path: str
@@ -591,6 +595,39 @@ def handle_fatal_error(req: Dict[str, Any]):
     sm.write_json(".exegol/backlog.json", backlog)
     
     return {"status": "success", "task_id": new_task["id"]}
+
+
+# --- Epic 10: Model Benchmark Database ---
+
+@app.get("/models/benchmarks")
+def get_model_benchmarks(repo_path: str, category: Optional[str] = None):
+    """Returns the full model benchmark table, optionally filtered by category."""
+    from tools.model_benchmark_db import get_all_models
+    return get_all_models(repo_path, category=category)
+
+@app.post("/models/compare")
+def compare_model_benchmarks(req: ModelCompareRequest):
+    """Compare selected models side-by-side with factor-by-factor winners."""
+    from tools.model_benchmark_db import compare_models
+    return compare_models(req.repo_path, req.model_names)
+
+@app.get("/models/recommend")
+def recommend_model(repo_path: str, role: str = "general"):
+    """Recommend top 5 models for a given agent role (coding, research, writing, ops, creative)."""
+    from tools.model_benchmark_db import recommend_for_role
+    return recommend_for_role(repo_path, role)
+
+@app.get("/models/ollama")
+def get_ollama_benchmarks(repo_path: str):
+    """Returns only models available on Ollama, sorted by coding score."""
+    from tools.model_benchmark_db import get_ollama_models
+    return get_ollama_models(repo_path)
+
+@app.get("/models/search")
+def search_model_benchmarks(repo_path: str, q: str):
+    """Search models by name, provider, or notes."""
+    from tools.model_benchmark_db import search_models
+    return search_models(repo_path, q)
 
 
 # --- Epic 9: Secrets & API Key Rotation ---

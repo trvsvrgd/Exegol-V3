@@ -6,6 +6,7 @@ from slack_sdk import WebClient
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from tools.egress_filter import EgressFilter
+from dotenv import load_dotenv
 
 class SlackManager:
     """Manages Slack interactions including sending messages and listening for commands."""
@@ -24,6 +25,7 @@ class SlackManager:
         if self._initialized:
             return
             
+        load_dotenv()
         self.bot_token = os.getenv("SLACK_BOT_TOKEN")
         self.app_token = os.getenv("SLACK_APP_TOKEN")
         self.webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -77,7 +79,22 @@ class SlackManager:
                 if response["ok"]:
                     return {"status": "success", "ts": response["ts"], "channel": response["channel"]}
             except Exception as e:
-                print(f"[SlackManager] Bot post failed: {e}")
+                error_code = getattr(e, "response", {}).get("error", "")
+                if error_code == "not_in_channel":
+                    try:
+                        print(f"[SlackManager] Bot not in {target_channel}. Attempting to join...")
+                        self.client.conversations_join(channel=target_channel)
+                        response = self.client.chat_postMessage(
+                            channel=target_channel,
+                            text=text,
+                            blocks=blocks
+                        )
+                        if response["ok"]:
+                            return {"status": "success", "ts": response["ts"], "channel": response["channel"]}
+                    except Exception as e2:
+                        print(f"[SlackManager] Auto-join failed: {e2}")
+                else:
+                    print(f"[SlackManager] Bot post failed ({error_code}): {e}")
 
         # 2. Fallback to Webhook
         if self.webhook_url:
@@ -93,33 +110,51 @@ class SlackManager:
                 print(f"[SlackManager] Webhook post failed: {e}")
                 return {"status": "error", "detail": str(e)}
 
-        # 3. Final Fallback: [MOCK SLACK] for development/missing tokens
-        print(f"[MOCK SLACK] Channel: {channel or 'exegol'} | Text: {text}")
+        # 3. Final Fallback: [CONSOLE SLACK] for development/missing tokens
+        print(f"[CONSOLE SLACK] Channel: {channel or 'exegol'} | Text: {text}")
         
-        # Still log to backlog so we know we're in mock mode if it was unexpected
+        # --- NOISE REDUCTION: Only log one mock notice per session ---
         if not self.bot_token and not self.webhook_url:
             try:
-                repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
-                from tools.backlog_manager import BacklogManager
-                import datetime
-                import time
+                # Use a session-scoped lock to avoid backlog spam
+                session_id = os.environ.get("EXEGOL_SESSION_ID", "global")
+                error_key = f"slack_console_{session_id}"
                 
-                bm = BacklogManager(repo_path)
-                mock_notice = {
-                    "id": f"slack_mock_{int(time.time())}",
-                    "summary": "NOTICE: Slack running in [MOCK] mode",
-                    "priority": "low",
-                    "type": "maintenance",
-                    "status": "todo",
-                    "source_agent": "SlackManager",
-                    "rationale": "SLACK_BOT_TOKEN and SLACK_WEBHOOK_URL are missing. System is using [MOCK SLACK] fallback.",
-                    "created_at": datetime.datetime.now().isoformat()
-                }
-                bm.add_task(mock_notice)
+                # We'll use a shared dictionary in agentic_coding or similar if available, 
+                # but for SlackManager we can just check the backlog or use a simple singleton cache.
+                if not hasattr(self, "_console_notices_sent"):
+                    self._console_notices_sent = set()
+                
+                if error_key not in self._console_notices_sent:
+                    repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
+                    from tools.backlog_manager import BacklogManager
+                    import datetime
+                    import time
+                    
+                    bm = BacklogManager(repo_path)
+                    
+                    # Check if a recent console notice already exists to avoid persistence spam
+                    existing = bm.get_backlog()
+                    if any(t.get("id", "").startswith("slack_console") and t.get("status") == "todo" for t in existing):
+                        self._console_notices_sent.add(error_key)
+                        return {"status": "success", "mode": "console", "ts": f"console_{int(time.time())}"}
+
+                    console_notice = {
+                        "id": f"slack_console_{int(time.time())}",
+                        "summary": "NOTICE: Slack Integration Offline (CONSOLE MODE ACTIVE)",
+                        "priority": "low",
+                        "type": "maintenance",
+                        "status": "todo",
+                        "source_agent": "SlackManager",
+                        "rationale": "SLACK_BOT_TOKEN and SLACK_WEBHOOK_URL are missing. The fleet is operating in console-only fallback mode. Approvals must be handled via CLI or Workbench UI.",
+                        "created_at": datetime.datetime.now().isoformat()
+                    }
+                    bm.add_task(console_notice)
+                    self._console_notices_sent.add(error_key)
             except:
                 pass
 
-        return {"status": "success", "mode": "mock", "ts": f"mock_{int(time.time())}"}
+        return {"status": "success", "mode": "console", "ts": f"console_{int(time.time())}"}
 
     def setup_listener(self, command_handler: Callable[[str, str], None]):
         """Starts Socket Mode listener in a background thread."""

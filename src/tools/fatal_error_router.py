@@ -10,7 +10,7 @@ def route_fatal_error(repo_path: str, error_message: str, context: Optional[str]
     This can be called synchronously from any tool.
     """
     api_url = os.getenv("EXEGOL_API_URL", "http://localhost:8000")
-    api_key = os.getenv("EXEGOL_API_KEY", "dev-local-key")
+    api_key = os.getenv("EXEGOL_API_KEY")
     
     payload = {
         "repo_path": repo_path,

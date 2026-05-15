@@ -35,6 +35,15 @@ class ExegolOrchestrator:
         self._should_stop_scheduler = False
         self.job_history = self._load_job_history()
         
+        # --- SLACK INTEGRATION CHECK ---
+        if not slack_manager.bot_token and not slack_manager.webhook_url:
+            print("\n" + "!"*60)
+            print("⚠️  CRITICAL WARNING: Slack Integration is OFFLINE.")
+            print("Exegol is running in [CONSOLE-ONLY] mode. Interactive approvals and")
+            print("remote wake-words will NOT function.")
+            print("FIX: See docs/guides/slack_integration_fix.md")
+            print("!"*60 + "\n")
+        
         # Initialize Slack Listener
         slack_manager.setup_listener(self.handle_wake_word)
         
@@ -419,7 +428,7 @@ class ExegolOrchestrator:
         """Manual 'Go' trigger for the active target."""
         # --- SECURITY GUARD: CLI Auth (sec_sec_arch_001) ---
         api_key = os.getenv("EXEGOL_API_KEY")
-        if api_key and api_key != "dev-local-key":
+        if api_key:
              # In a real CLI, we might prompt for a key or check a local token
              # For now, we just log that we are running in authenticated mode
              print("[Orchestrator] Running 'Go' in authenticated CLI mode.")
@@ -591,7 +600,10 @@ class ExegolOrchestrator:
 
     def _sign_handoff(self, handoff: HandoffContext) -> HandoffContext:
         """Computes and attaches an HMAC signature to the HandoffContext."""
-        secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+        secret = os.getenv("EXEGOL_HMAC_SECRET")
+        if not secret:
+            # Fallback to a stable hash of the repo path if no secret is provided
+            secret = hashlib.sha256(handoff.repo_path.encode()).hexdigest()
         
         data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
         
