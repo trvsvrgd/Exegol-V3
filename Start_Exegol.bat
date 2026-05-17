@@ -60,7 +60,5 @@ echo Press any key to stop all processes and exit...
 pause >nul
 
 :: Cleanup
-taskkill /FI "WINDOWTITLE eq Exegol Backend*" /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq Exegol Frontend*" /F >nul 2>&1
-echo [Exegol] Shutdown complete.
+call Stop_Exegol.bat
 exit
