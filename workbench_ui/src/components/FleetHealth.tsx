@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 import { apiGet } from "../app/api-client";
 import TelemetrySpreadsheet from "./TelemetrySpreadsheet";
@@ -32,7 +32,7 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
   const [drillDownType, setDrillDownType] = useState<"backlog" | "hitl" | "interactions" | "success" | "total_tasks" | null>(null);
   const [drillDownRepo, setDrillDownRepo] = useState<string>("");
 
-  const fetchHealth = async () => {
+  const fetchHealth = useCallback(async () => {
     try {
       const data = await apiGet<HealthMetric[]>("/fleet/health");
       setMetrics(data);
@@ -41,13 +41,20 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
       console.error("Failed to fetch fleet health:", err);
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void fetchHealth();
+    }, 0);
+    const interval = window.setInterval(() => {
+      void fetchHealth();
+    }, 30000); // Refresh every 30s
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [fetchHealth]);
 
   const handleDrillDown = (e: React.MouseEvent, type: "backlog" | "hitl" | "interactions" | "success" | "total_tasks", path: string) => {
     e.stopPropagation(); // prevent triggering the card's onSelect

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { apiGet } from "../app/api-client";
 
 interface TelemetrySpreadsheetProps {
@@ -10,38 +10,37 @@ interface TelemetrySpreadsheetProps {
   dataType: "backlog" | "hitl" | "interactions" | "success" | "total_tasks" | null;
 }
 
+type TelemetryRow = Record<string, unknown> & {
+  id?: string;
+  session_id?: string;
+};
+
 export default function TelemetrySpreadsheet({
   isOpen,
   onClose,
   repoPath,
   dataType
 }: TelemetrySpreadsheetProps) {
-  const [data, setData] = useState<any[]>([]);
+  const [data, setData] = useState<TelemetryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   const [filterText, setFilterText] = useState("");
 
-  useEffect(() => {
-    if (isOpen && dataType && repoPath) {
-      fetchData();
-    }
-  }, [isOpen, dataType, repoPath]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       let endpoint = "";
-      let fetchedData: any[] = [];
+      let fetchedData: TelemetryRow[] = [];
       
       if (dataType === "backlog") {
         endpoint = `/backlog?repo_path=${encodeURIComponent(repoPath)}`;
-        fetchedData = await apiGet<any[]>(endpoint);
+        fetchedData = await apiGet<TelemetryRow[]>(endpoint);
       } else if (dataType === "hitl") {
         endpoint = `/human-queue?repo_path=${encodeURIComponent(repoPath)}`;
-        fetchedData = await apiGet<any[]>(endpoint);
+        fetchedData = await apiGet<TelemetryRow[]>(endpoint);
       } else if (dataType === "interactions" || dataType === "success" || dataType === "total_tasks") {
         endpoint = `/fleet/interactions?repo_path=${encodeURIComponent(repoPath)}`;
-        fetchedData = await apiGet<any[]>(endpoint);
+        fetchedData = await apiGet<TelemetryRow[]>(endpoint);
         
         if (dataType === "success") {
           // Pre-filter for successes vs failures, wait, if they clicked "Success" they might want to see both, or just success?
@@ -57,7 +56,16 @@ export default function TelemetrySpreadsheet({
     } finally {
       setLoading(false);
     }
-  };
+  }, [dataType, repoPath]);
+
+  useEffect(() => {
+    if (isOpen && dataType && repoPath) {
+      const timeout = window.setTimeout(() => {
+        void fetchData();
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [isOpen, dataType, repoPath, fetchData]);
 
   const handleSort = (key: string) => {
     let direction: "asc" | "desc" = "asc";
@@ -100,8 +108,11 @@ export default function TelemetrySpreadsheet({
         const aVal = a[sortConfig.key];
         const bVal = b[sortConfig.key];
         
-        if (aVal < bVal) return sortConfig.direction === "asc" ? -1 : 1;
-        if (aVal > bVal) return sortConfig.direction === "asc" ? 1 : -1;
+        const aComparable = typeof aVal === "number" ? aVal : String(aVal ?? "");
+        const bComparable = typeof bVal === "number" ? bVal : String(bVal ?? "");
+
+        if (aComparable < bComparable) return sortConfig.direction === "asc" ? -1 : 1;
+        if (aComparable > bComparable) return sortConfig.direction === "asc" ? 1 : -1;
         return 0;
       });
     }

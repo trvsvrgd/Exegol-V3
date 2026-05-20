@@ -12,13 +12,14 @@ from dotenv import load_dotenv
 # Load environment variables before any other imports
 load_dotenv()
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from agents.registry import AGENT_REGISTRY
-from handoff import HandoffContext
+from handoff import HandoffContext, SessionResult
 from session_manager import SessionManager
 from tools.slack_tool import slack_manager
 from tools.fleet_logger import log_interaction
 from tools.state_manager import StateManager
+from tools.operations import docker_health, upsert_blocker
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
@@ -34,11 +35,15 @@ class ExegolOrchestrator:
         self.is_running_fleet = False
         self._should_stop_scheduler = False
         self.job_history = self._load_job_history()
+        self.job_history_path = "config/job_history.json"
+        self.scheduler_state_file = ".exegol/scheduler_state.json"
+        self._check_interval = 60
+        self.scheduler_thread = None
         
         # --- SLACK INTEGRATION CHECK ---
         if not slack_manager.bot_token and not slack_manager.webhook_url:
             print("\n" + "!"*60)
-            print("⚠️  CRITICAL WARNING: Slack Integration is OFFLINE.")
+            print("WARNING: Slack Integration is OFFLINE.")
             print("Exegol is running in [CONSOLE-ONLY] mode. Interactive approvals and")
             print("remote wake-words will NOT function.")
             print("FIX: See docs/guides/slack_integration_fix.md")
@@ -88,9 +93,19 @@ class ExegolOrchestrator:
 
     def _setup_cadence_engine(self):
         """Configures periodic autonomous tasks for the fleet from config."""
+        if os.getenv("EXEGOL_DISABLE_SCHEDULER_FOR_TESTS") == "1":
+            print("[Scheduler] Disabled by EXEGOL_DISABLE_SCHEDULER_FOR_TESTS.")
+            self._write_scheduler_state("disabled", detail="disabled by EXEGOL_DISABLE_SCHEDULER_FOR_TESTS")
+            return
+
+        if self.scheduler_thread and self.scheduler_thread.is_alive():
+            self._write_scheduler_state("healthy", detail="scheduler already running")
+            return
+
         cadence_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "fleet_cadence.json")
         if not os.path.exists(cadence_path):
             print("[Scheduler] No fleet_cadence.json found. Skipping cadence engine.")
+            self._write_scheduler_state("disabled", detail="config/fleet_cadence.json missing")
             return
 
         try:
@@ -99,8 +114,10 @@ class ExegolOrchestrator:
             
             if not config.get("global_settings", {}).get("enable_scheduler", True):
                 print("[Scheduler] Scheduler disabled in config.")
+                self._write_scheduler_state("disabled", detail="disabled in config/fleet_cadence.json")
                 return
 
+            schedule.clear("exegol")
             for job in config.get("schedules", []):
                 if not job.get("enabled", True):
                     continue
@@ -147,7 +164,7 @@ class ExegolOrchestrator:
                 if at_time:
                     s = s.at(at_time)
                 
-                s.do(self._scheduled_trigger, agent_id=agent_id, summary=summary, job_id=job.get("id"))
+                s.do(self._scheduled_trigger, agent_id=agent_id, summary=summary, job_id=job.get("id")).tag("exegol")
                 print(f"[Scheduler] Registered: {summary} ({agent_id}) @ {freq} {at_time or ''}")
 
             # Check for missed jobs
@@ -157,15 +174,19 @@ class ExegolOrchestrator:
             self._check_interval = config.get("global_settings", {}).get("check_interval_seconds", 60)
             self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
             self.scheduler_thread.start()
+            self._write_scheduler_state("healthy", detail="scheduler started", registered_jobs=len(schedule.get_jobs("exegol")))
             print(f"[Scheduler] Cadence engine started (interval: {self._check_interval}s).")
 
         except Exception as e:
             print(f"[Scheduler] Error setting up cadence engine: {e}")
+            self._write_scheduler_state("degraded", detail=str(e))
 
     def _run_scheduler(self):
         while not self._should_stop_scheduler:
+            self._write_scheduler_state("healthy", detail="heartbeat", registered_jobs=len(schedule.get_jobs("exegol")))
             schedule.run_pending()
             time.sleep(self._check_interval)
+        self._write_scheduler_state("stopped", detail="scheduler stop requested")
 
     def _load_job_history(self) -> Dict[str, str]:
         if os.path.exists(HISTORY_FILE_PATH):
@@ -178,8 +199,8 @@ class ExegolOrchestrator:
 
     def _save_job_history(self):
         try:
-            with open(HISTORY_FILE_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.job_history, f, indent=4)
+            root_path = os.path.dirname(os.path.dirname(__file__))
+            StateManager(root_path).write_json(getattr(self, "job_history_path", "config/job_history.json"), self.job_history)
         except Exception as e:
             print(f"[Scheduler] Failed to save job history: {e}")
 
@@ -188,6 +209,8 @@ class ExegolOrchestrator:
         from datetime import timedelta
         now = datetime.now()
         
+        max_missed = int(config.get("global_settings", {}).get("max_missed_jobs_on_startup", 3))
+        triggered_missed = 0
         for job in config.get("schedules", []):
             if not job.get("enabled", True): continue
             job_id = job.get("id")
@@ -230,8 +253,13 @@ class ExegolOrchestrator:
             # ... Add weekly/monthly logic if needed ...
 
             if missed:
+                if triggered_missed >= max_missed:
+                    self._record_scheduler_event("missed_job_skipped", job_id, f"startup cap reached: {max_missed}")
+                    continue
                 print(f"[Scheduler] Detected missed job: {job.get('summary')} ({job_id}). {reason}.")
                 # Trigger it now (it will queue in the priority execution lock)
+                triggered_missed += 1
+                self._record_scheduler_event("missed_job_triggered", job_id, reason)
                 self._scheduled_trigger(job.get("agent_id"), f"[MISSED] {job.get('summary')}", job_id)
 
         self._save_job_history()
@@ -263,12 +291,39 @@ class ExegolOrchestrator:
         if job_id:
             self.job_history[job_id] = datetime.now().isoformat()
             self._save_job_history()
+            self._record_scheduler_event("job_completed", job_id, summary)
+
+    def _write_scheduler_state(self, status: str, detail: str = "", registered_jobs: Optional[int] = None):
+        target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
+        repo_path = target.get("repo_path") or os.path.dirname(os.path.dirname(__file__))
+        state = {
+            "schema_version": 1,
+            "status": status,
+            "detail": detail,
+            "heartbeat": datetime.now().isoformat(),
+            "registered_jobs": registered_jobs if registered_jobs is not None else len(schedule.get_jobs("exegol")),
+            "disabled": status == "disabled",
+            "should_stop": self._should_stop_scheduler,
+        }
+        StateManager(repo_path).write_json(self.scheduler_state_file, state)
+
+    def _record_scheduler_event(self, event_type: str, job_id: str, detail: str):
+        target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
+        repo_path = target.get("repo_path") or os.path.dirname(os.path.dirname(__file__))
+        sm = StateManager(repo_path)
+        events = sm.read_json(".exegol/scheduler_events.json") or []
+        events.append({
+            "timestamp": datetime.now().isoformat(),
+            "event_type": event_type,
+            "job_id": job_id,
+            "detail": detail,
+        })
+        sm.write_json(".exegol/scheduler_events.json", events)
 
     def load_config(self):
         """Loads priority and agent configuration from priority.json"""
         if os.path.exists(PRIORITY_FILE_PATH):
-            with open(PRIORITY_FILE_PATH, 'r') as f:
-                self.priority_config = json.load(f)
+            self.priority_config = StateManager(os.path.dirname(os.path.dirname(__file__))).read_json("config/priority.json") or {}
             print("Configuration loaded successfully.")
         else:
             print(f"Warning: Configuration file not found at {PRIORITY_FILE_PATH}")
@@ -285,8 +340,7 @@ class ExegolOrchestrator:
         
         if updated:
             try:
-                with open(PRIORITY_FILE_PATH, 'w') as f:
-                    json.dump(self.priority_config, f, indent=2)
+                StateManager(os.path.dirname(os.path.dirname(__file__))).write_json("config/priority.json", self.priority_config)
                 print(f"[Status Update] Repository {repo_path} status changed to {new_status}")
             except Exception as e:
                 print(f"[Status Update] Failed to update priority.json: {e}")
@@ -369,8 +423,7 @@ class ExegolOrchestrator:
         # Check backlog for pending tasks
         backlog_path = os.path.join(exegol_dir, "backlog.json")
         if os.path.exists(backlog_path):
-            with open(backlog_path, 'r') as f:
-                backlog = json.load(f)
+            backlog = StateManager(repo_path).read_json(".exegol/backlog.json") or []
             
             # Check backlog for pending tasks (including prioritized 'todo' tasks)
             pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged", "todo"]]
@@ -418,8 +471,7 @@ class ExegolOrchestrator:
     def save_config(self):
         """Saves current priority_config back to priority.json."""
         try:
-            with open(PRIORITY_FILE_PATH, 'w') as f:
-                json.dump(self.priority_config, f, indent=2)
+            StateManager(os.path.dirname(os.path.dirname(__file__))).write_json("config/priority.json", self.priority_config)
             print("[Config] priority.json updated successfully.")
         except Exception as e:
             print(f"[Config] Failed to save priority.json: {e}")
@@ -448,6 +500,10 @@ class ExegolOrchestrator:
                                 loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
         if agent_id is None:
             agent_id = "product_poe"
+
+        docker_status = self._docker_gate(repo_info.get("repo_path", ""), agent_id)
+        if docker_status:
+            return docker_status
             
         self.acquire_execution_lock(agent_id)
         result = None
@@ -522,7 +578,7 @@ class ExegolOrchestrator:
             
             self.update_repo_status(repo_info.get("repo_path"), "blocked")
             self.escalate_to_human(msg, repo_info.get("repo_path"))
-            return None
+            return None        
 
         # 2. Circuit Breaker: Detect simple cycles (A -> B -> A) or repeated agents
         if agent_id in chain_history:
@@ -621,16 +677,16 @@ class ExegolOrchestrator:
         """Escalates a critical autonomous failure to the human-in-the-loop queue."""
         sm = StateManager(repo_path)
         
-        # Generate a stable ID for the loop guard failure
-        task_id = f"loop_guard_{hashlib.md5(message.encode()).hexdigest()[:8]}"
-        
-        # Use the standardized escalation method
-        sm.add_hitl_task(
-            summary=f"BLOCKING ISSUE: {message}",
-            category="infrastructure",
+        queue = sm.read_json(".exegol/user_action_required.json") or []
+        upsert_blocker(
+            queue,
+            blocker_type="loop_guard",
+            task=f"BLOCKING ISSUE: {message}",
             context="Orchestrator loop guard or depth limit reached.",
-            task_id=task_id
+            subject=message,
+            source="orchestrator",
         )
+        sm.write_json(".exegol/user_action_required.json", queue)
         
         print(f"[Orchestrator] Escalated to human: {message}")
 
@@ -791,6 +847,7 @@ class ExegolOrchestrator:
         print("[Shutdown] Initiating graceful shutdown...")
         self._should_stop_scheduler = True
         self.is_running_fleet = False
+        self._write_scheduler_state("stopping", detail="orchestrator shutdown requested")
         
         # Stop heartbeat monitor watchdog threads
         if hasattr(self, "session_manager"):
@@ -801,6 +858,33 @@ class ExegolOrchestrator:
         
         print("[Shutdown] Exiting process.")
         sys.exit(0)
+
+    def _docker_gate(self, repo_path: str, agent_id: str) -> Optional[SessionResult]:
+        if os.getenv("EXEGOL_SKIP_DOCKER_GATE") == "1":
+            return None
+        docker_optional = {"thoughtful_thrawn", "product_poe", "vibe_vader", "markdown_mace", "report_revan"}
+        if agent_id in docker_optional:
+            return None
+        health = docker_health(timeout_seconds=2.0)
+        if health["status"] == "healthy":
+            return None
+        sm = StateManager(repo_path)
+        queue = sm.read_json(".exegol/user_action_required.json") or []
+        blocker_id = upsert_blocker(
+            queue,
+            blocker_type="docker_unavailable",
+            task=f"Docker unavailable blocks {agent_id}",
+            context=str(health.get("detail", "")),
+            subject=f"docker:{agent_id}",
+            source="orchestrator",
+        )
+        sm.write_json(".exegol/user_action_required.json", queue)
+        result = SessionResult(agent_id=agent_id, session_id="")
+        result.outcome = "failure"
+        result.status_update = "blocked"
+        result.output_summary = "Docker unavailable; workflow blocked before agent execution."
+        result.errors = [f"Docker unavailable. Blocker: {blocker_id}"]
+        return result
 
 if __name__ == "__main__":
     orchestrator = ExegolOrchestrator()

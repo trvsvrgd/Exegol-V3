@@ -94,7 +94,7 @@ def log_interaction(
             
             # Notify Slack
             msg = (
-                f"💥 *Agent Failure*: `{agent_id}` reported a failure in `{os.path.basename(repo_path)}`.\n"
+                f"*Agent Failure*: `{agent_id}` reported a failure in `{os.path.basename(repo_path)}`.\n"
                 f"*Summary*: {task_summary}\n"
                 f"*Errors*: `{error_str}`\n"
                 f"A bug report has been injected into the backlog."

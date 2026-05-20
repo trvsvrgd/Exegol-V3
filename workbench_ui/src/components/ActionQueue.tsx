@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiGet, apiPost } from '../app/api-client';
 
 interface ActionItem {
@@ -17,7 +17,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
     const [queue, setQueue] = useState<ActionItem[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const fetchQueue = async () => {
+    const fetchQueue = useCallback(async () => {
         try {
             const data = await apiGet<ActionItem[]>(`/human-queue?repo_path=${encodeURIComponent(repoPath)}`);
             setQueue(data);
@@ -26,11 +26,14 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
             console.error("Failed to fetch human queue:", err);
             setLoading(false);
         }
-    };
+    }, [repoPath]);
 
     useEffect(() => {
-        fetchQueue();
-    }, [repoPath]);
+        const timeout = window.setTimeout(() => {
+            void fetchQueue();
+        }, 0);
+        return () => window.clearTimeout(timeout);
+    }, [fetchQueue]);
 
     const handleAction = async (itemId: string, action: string, notes?: string) => {
         try {

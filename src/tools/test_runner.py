@@ -1,8 +1,12 @@
 import subprocess
 import json
 import os
+import sys
 from typing import Dict, Any
-from tools.fatal_error_router import check_and_route_terminal_output
+try:
+    from tools.fatal_error_router import check_and_route_terminal_output
+except ModuleNotFoundError:
+    from src.tools.fatal_error_router import check_and_route_terminal_output
 
 def run_tests(path: str) -> Dict[str, Any]:
     """
@@ -14,9 +18,10 @@ def run_tests(path: str) -> Dict[str, Any]:
     print(f"[test_runner] Running pytest on {path}...")
     try:
         # Run pytest and capture output
-        command = f"python -m pytest {path} -v --tb=short"
+        command = f"{sys.executable} -m pytest . -v --tb=short -p no:cacheprovider"
         result = subprocess.run(
-            ["python", "-m", "pytest", path, "-v", "--tb=short"],
+            [sys.executable, "-m", "pytest", ".", "-v", "--tb=short", "-p", "no:cacheprovider"],
+            cwd=path,
             capture_output=True,
             text=True,
             timeout=60
@@ -39,7 +44,10 @@ def run_tests(path: str) -> Dict[str, Any]:
     except Exception as e:
         error_msg = f"Execution error: {str(e)}"
         if "FATAL" in error_msg:
-             from tools.fatal_error_router import route_fatal_error
+             try:
+                 from tools.fatal_error_router import route_fatal_error
+             except ModuleNotFoundError:
+                 from src.tools.fatal_error_router import route_fatal_error
              route_fatal_error(path, error_msg)
         return {"status": "error", "message": error_msg}
 

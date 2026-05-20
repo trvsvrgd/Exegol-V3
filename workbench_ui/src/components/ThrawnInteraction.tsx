@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiGet, apiPost } from "../app/api-client";
 
 interface Question {
@@ -25,7 +25,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
   const [newQuestion, setNewQuestion] = useState("");
   const [status, setStatus] = useState<string | null>(null);
 
-  const fetchIntel = async () => {
+  const fetchIntel = useCallback(async () => {
     try {
       setLoading(true);
       const data = await apiGet<ThrawnIntel>(`/thrawn/intel?repo_path=${encodeURIComponent(repoPath)}`);
@@ -36,11 +36,14 @@ export default function ThrawnInteraction({ repoPath }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [repoPath]);
 
   useEffect(() => {
-    fetchIntel();
-  }, [repoPath]);
+    const timeout = window.setTimeout(() => {
+      void fetchIntel();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [fetchIntel]);
 
   const handleUpdateObjective = async () => {
     try {
@@ -48,7 +51,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       setStatus("Objective updated!");
       setTimeout(() => setStatus(null), 3000);
       fetchIntel();
-    } catch (err) {
+    } catch {
       setStatus("Failed to update objective");
     }
   };
@@ -59,7 +62,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       setStatus("Answer submitted!");
       setTimeout(() => setStatus(null), 3000);
       fetchIntel();
-    } catch (err) {
+    } catch {
       setStatus("Failed to submit answer");
     }
   };
@@ -73,7 +76,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       setStatus("Question added for Thrawn!");
       setTimeout(() => setStatus(null), 3000);
       fetchIntel();
-    } catch (err) {
+    } catch {
       setStatus("Failed to add question");
     }
   };
@@ -89,7 +92,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       });
       setStatus("Thrawn analysis initiated. Checking logs...");
       setTimeout(() => setStatus(null), 5000);
-    } catch (err) {
+    } catch {
       setStatus("Error: Thrawn communications offline.");
       setTimeout(() => setStatus(null), 5000);
     }
@@ -104,7 +107,7 @@ export default function ThrawnInteraction({ repoPath }: Props) {
           <h2>Grand Admiral Thrawn</h2>
           <span className="badge-agent">Intel & Strategy</span>
         </div>
-        <p className="thrawn-motto">"To defeat an enemy, you must know them."</p>
+        <p className="thrawn-motto">&quot;To defeat an enemy, you must know them.&quot;</p>
       </div>
 
       <div className="thrawn-section">

@@ -13,6 +13,28 @@ interface Agent {
   name: string;
 }
 
+interface LocalModel {
+  name: string;
+}
+
+interface TaskResult {
+  outcome?: string;
+  output_summary?: string;
+  errors?: string[];
+  session_id?: string;
+  snapshot_hash?: string;
+  steps_used?: number;
+}
+
+interface TaskSubmission {
+  session_id: string;
+}
+
+interface TaskStatus {
+  status: "done" | "error" | string;
+  result?: TaskResult;
+}
+
 export default function ABTestPage() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -22,8 +44,8 @@ export default function ABTestPage() {
   const [modelB, setModelB] = useState("gemini");
   const [taskPrompt, setTaskPrompt] = useState("");
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<{a?: any, b?: any}>({});
-  const [localModels, setLocalModels] = useState<any[]>([]);
+  const [results, setResults] = useState<{a?: TaskResult, b?: TaskResult}>({});
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
 
   useEffect(() => {
     apiGet<Repo[]>("/repos")
@@ -40,20 +62,24 @@ export default function ABTestPage() {
       })
       .catch(err => console.error("Failed to fetch agents:", err));
 
-    apiGet<any[]>("/local-models")
+    apiGet<LocalModel[]>("/local-models")
       .then(data => setLocalModels(data))
       .catch(err => console.error("Local models fetch error", err));
   }, []);
 
-  const pollTask = async (sessionId: string) => {
+  const pollTask = async (sessionId: string): Promise<TaskResult> => {
     let attempts = 0;
     const maxAttempts = 100; // ~5 minutes with 3s interval
     
     while (attempts < maxAttempts) {
       try {
-        const statusData = await apiGet<any>(`/task-status/${sessionId}`);
+        const statusData = await apiGet<TaskStatus>(`/task-status/${sessionId}`);
         if (statusData.status === "done") {
-          return statusData.result;
+          return statusData.result ?? {
+            outcome: "success",
+            output_summary: "Task completed without a result payload.",
+            session_id: sessionId
+          };
         }
         if (statusData.status === "error") {
           return {
@@ -83,14 +109,14 @@ export default function ABTestPage() {
     
     try {
       // 1. Submit both tasks to get session IDs
-      const submitA = await apiPost<any>("/run-task", {
+      const submitA = await apiPost<TaskSubmission>("/run-task", {
         repo_path: selectedRepo,
         agent_id: selectedAgent,
         model: modelA,
         task_prompt: taskPrompt
       });
 
-      const submitB = await apiPost<any>("/run-task", {
+      const submitB = await apiPost<TaskSubmission>("/run-task", {
         repo_path: selectedRepo,
         agent_id: selectedAgent,
         model: modelB,
@@ -161,7 +187,7 @@ export default function ABTestPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <label className="title-glow">Brain A</label>
               <button 
-                onClick={() => apiGet<any[]>("/local-models").then(setLocalModels)}
+                onClick={() => apiGet<LocalModel[]>("/local-models").then(setLocalModels)}
                 style={{ background: 'none', border: 'none', color: '#555', fontSize: '0.6rem', cursor: 'pointer', textTransform: 'uppercase' }}
               >
                 ↻ Refresh Models
@@ -268,10 +294,10 @@ export default function ABTestPage() {
   );
 }
 
-function DiffCard({ title, data }: { title: string, data: any }) {
+function DiffCard({ title, data }: { title: string, data?: TaskResult }) {
   // Try to parse the summary if it's a string, or just use artifacts_written
   const outputSummary = data?.output_summary || "";
-  const actions = outputSummary.split('\n').filter((l: string) => l.includes(':'));
+  const actions = outputSummary.split('\n').filter((line) => line.includes(':'));
 
   return (
     <div className="glass diff-card">
@@ -282,7 +308,7 @@ function DiffCard({ title, data }: { title: string, data: any }) {
       
       <div className="section-title">Planned Intelligence</div>
       <div className="action-list">
-        {actions.length > 0 ? actions.map((action: string, i: number) => {
+        {actions.length > 0 ? actions.map((action, i) => {
           const parts = action.split(':');
           const type = parts[0] || "";
           const isWrite = type.toLowerCase().includes('write');

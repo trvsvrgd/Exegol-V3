@@ -4,10 +4,13 @@ import time
 import tempfile
 import shutil
 from typing import Dict, Any, List, Optional
-from threading import Lock
+from threading import RLock
+from datetime import datetime
+
+from tools.operations import redact_secret
 
 # Process-level lock for the current instance
-_global_lock = Lock()
+_global_lock = RLock()
 
 class StateManager:
     """Manages state file interactions with simple atomic writes and relative path handling.
@@ -31,6 +34,7 @@ class StateManager:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
                 print(f"[StateManager] Error reading {relative_path}: {e}")
+                self._quarantine_corrupt_json(abs_path, relative_path, e)
                 return None
 
     def write_json(self, relative_path: str, data: Any):
@@ -44,7 +48,7 @@ class StateManager:
             with tempfile.NamedTemporaryFile('w', dir=target_dir, prefix=".state_", suffix=".json", encoding='utf-8', delete=False) as tmp:
                 temp_path = tmp.name
                 try:
-                    json.dump(data, tmp, indent=4)
+                    json.dump(redact_secret(data), tmp, indent=4)
                     tmp.flush()
                     os.fsync(tmp.fileno()) # Ensure data is written to disk
                 except Exception as e:
@@ -61,6 +65,30 @@ class StateManager:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 raise e
+
+    def _quarantine_corrupt_json(self, abs_path: str, relative_path: str, exc: Exception) -> None:
+        """Preserve corrupt JSON for audit while allowing callers to recover with defaults."""
+        if not relative_path.replace("\\", "/").endswith(".json"):
+            return
+        try:
+            recovery_dir = os.path.join(self.repo_path, ".exegol", "corrupt_json")
+            os.makedirs(recovery_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            safe_name = relative_path.replace("\\", "_").replace("/", "_")
+            backup_path = os.path.join(recovery_dir, f"{timestamp}_{safe_name}.bak")
+            if os.path.exists(abs_path):
+                shutil.copy2(abs_path, backup_path)
+            event = {
+                "timestamp": datetime.now().isoformat(),
+                "path": relative_path,
+                "backup_path": backup_path,
+                "error": str(exc),
+            }
+            events = self.read_json(".exegol/corruption_events.json") or []
+            events.append(event)
+            self.write_json(".exegol/corruption_events.json", events)
+        except Exception as recovery_exc:
+            print(f"[StateManager] Failed corruption recovery for {relative_path}: {recovery_exc}")
 
     def update_backlog_task(self, task_id: str, updates: Dict[str, Any]) -> bool:
         """Specific helper to update a task in backlog.json."""

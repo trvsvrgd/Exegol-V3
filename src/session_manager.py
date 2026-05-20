@@ -19,6 +19,7 @@ from typing import Optional, Any, Dict
 
 from handoff import HandoffContext, SessionResult
 from tools.heartbeat_monitor import HeartbeatMonitor
+from tools.operations import redact_secret
 
 
 class SessionManager:
@@ -134,7 +135,7 @@ class SessionManager:
             os.environ.pop("EXEGOL_ACTIVE_AGENT", None)
 
             result.outcome = "success"
-            result.output_summary = str(output) if output else ""
+            result.output_summary = str(redact_secret(output)) if output else ""
             result.steps_used = getattr(agent_instance, "_steps_used", 1)
             
             # Capture tracking metrics
@@ -156,9 +157,11 @@ class SessionManager:
             if result.regression_context:
                 print(f"[SessionManager] Regression context captured: {result.regression_context}")
 
+            self._validate_session_result(result)
+
         except Exception as exc:
             result.outcome = "failure"
-            error_details = f"{type(exc).__name__}: {exc}"
+            error_details = str(redact_secret(f"{type(exc).__name__}: {exc}"))
             result.errors.append(error_details)
             result.output_summary = "Agent execution failed."
             traceback.print_exc()
@@ -185,6 +188,7 @@ class SessionManager:
                     "summary": f"CRITICAL: {agent_id} hard crash",
                     "priority": "critical",
                     "type": "bug",
+                    "blocker_type": "agent_crash",
                     "status": "todo",
                     "source_agent": "SessionManager",
                     "rationale": f"Agent crashed during execution. Session: {handoff.session_id}. Error: {error_details}",
@@ -204,6 +208,11 @@ class SessionManager:
         finally:
             elapsed = time.time() - start_time
             result.duration_seconds = elapsed
+            deadline_seconds = self._get_agent_deadline(agent_id, handoff.repo_path)
+            if elapsed > deadline_seconds and result.outcome == "success":
+                result.outcome = "timeout"
+                result.errors.append(f"Agent exceeded deadline of {deadline_seconds:.0f}s.")
+                result.status_update = "blocked"
 
             # 3. Destroy the instance — no state retained
             del agent_instance
@@ -275,6 +284,31 @@ class SessionManager:
                 pass
         return self._default_cooldown
 
+    def _get_agent_deadline(self, agent_id: str, repo_path: str) -> float:
+        default_deadline = float(os.getenv("EXEGOL_AGENT_DEADLINE_SECONDS", "900"))
+        priority_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "priority.json")
+        if os.path.exists(priority_path):
+            try:
+                with open(priority_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                deadlines = config.get("global_settings", {}).get("agent_deadlines", {})
+                return float(deadlines.get(agent_id, deadlines.get("default", default_deadline)))
+            except Exception:
+                pass
+        return default_deadline
+
+    @staticmethod
+    def _validate_session_result(result: SessionResult) -> None:
+        if result.outcome not in {"success", "failure", "timeout", "unknown"}:
+            result.outcome = "failure"
+            result.errors.append("Malformed SessionResult: invalid outcome.")
+        if result.steps_used < 0:
+            result.steps_used = 0
+            result.errors.append("Malformed SessionResult: negative steps_used corrected.")
+        if not isinstance(result.errors, list):
+            result.errors = [str(result.errors)]
+            result.outcome = "failure"
+
     @staticmethod
     def _persist_session_log(repo_path: str, result: SessionResult) -> Optional[str]:
         """Write the SessionResult to .exegol/interaction_logs/{session_id}.json."""
@@ -284,7 +318,7 @@ class SessionManager:
         log_file = os.path.join(logs_dir, f"{result.session_id}.json")
         try:
             with open(log_file, "w", encoding="utf-8") as f:
-                json.dump(result.to_dict(), f, indent=4)
+                json.dump(redact_secret(result.to_dict()), f, indent=4)
             print(f"[SessionManager] Session log persisted -> {log_file}")
             return log_file
         except Exception as exc:

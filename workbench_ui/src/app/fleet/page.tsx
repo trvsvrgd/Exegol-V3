@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import FleetHealth from "../../components/FleetHealth";
 
 import { apiGet } from "../api-client";
+
+interface FleetMetric {
+  backlog_count: number;
+  success_rate: number;
+  status: string;
+}
 
 interface FleetSummary {
   totalRepos: number;
@@ -13,7 +19,6 @@ interface FleetSummary {
 }
 
 export default function FleetDashboard() {
-  const [metrics, setMetrics] = useState<any[]>([]);
   const [summary, setSummary] = useState<FleetSummary>({
     totalRepos: 0,
     totalBacklog: 0,
@@ -21,13 +26,12 @@ export default function FleetDashboard() {
     activeAgents: 0,
   });
 
-  const fetchHealth = async () => {
+  const fetchHealth = useCallback(async () => {
     try {
-      const data = await apiGet<any[]>("/fleet/health");
-      setMetrics(data);
-      const totalBacklog = data.reduce((acc: number, curr: any) => acc + curr.backlog_count, 0);
-      const avgSuccess = data.length > 0 ? data.reduce((acc: number, curr: any) => acc + curr.success_rate, 0) / data.length : 0;
-      const activeCount = data.filter((m: any) => m.status === "active").length;
+      const data = await apiGet<FleetMetric[]>("/fleet/health");
+      const totalBacklog = data.reduce((acc, curr) => acc + curr.backlog_count, 0);
+      const avgSuccess = data.length > 0 ? data.reduce((acc, curr) => acc + curr.success_rate, 0) / data.length : 0;
+      const activeCount = data.filter((metric) => metric.status === "active").length;
       
       setSummary({
         totalRepos: data.length,
@@ -38,13 +42,20 @@ export default function FleetDashboard() {
     } catch (err) {
       console.error("Failed to fetch fleet health:", err);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void fetchHealth();
+    }, 0);
+    const interval = window.setInterval(() => {
+      void fetchHealth();
+    }, 30000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [fetchHealth]);
 
   return (
     <div className="fleet-page">
@@ -64,7 +75,7 @@ export default function FleetDashboard() {
         </div>
         <div className="summary-card glass">
           <span className="label">Avg Success Rate</span>
-          <span className="value success-text">{summary.avg_successRate?.toFixed(1) || summary.avgSuccessRate.toFixed(1)}%</span>
+          <span className="value success-text">{summary.avgSuccessRate.toFixed(1)}%</span>
         </div>
         <div className="summary-card glass">
           <span className="label">Active Agents</span>

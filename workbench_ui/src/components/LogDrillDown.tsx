@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiGet } from "../app/api-client";
 
 
@@ -13,8 +13,21 @@ interface InteractionLog {
   steps_used: number;
   duration_seconds: number;
   errors: string[];
-  state_changes: Record<string, any>;
-  metrics: Record<string, any>;
+  state_changes: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+}
+
+interface AgentTool {
+  id: string;
+  risk: "critical" | "high" | string;
+  description: string;
+}
+
+interface AgentProfile {
+  id: string;
+  name: string;
+  wake_word: string;
+  tools: AgentTool[];
 }
 
 interface LogDrillDownProps {
@@ -37,23 +50,20 @@ export default function LogDrillDown({
   const [filterAgent, setFilterAgent] = useState(initialAgentId || "");
   const [filterOutcome, setFilterOutcome] = useState(initialOutcome || "");
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
-  const [agentProfile, setAgentProfile] = useState<any>(null);
+  const [agentProfile, setAgentProfile] = useState<AgentProfile | null>(null);
 
   // Sync filter state whenever the modal opens for a (potentially different) agent
   useEffect(() => {
     if (isOpen) {
-      setFilterAgent(initialAgentId || "");
-      setFilterOutcome(initialOutcome || "");
+      const timeout = window.setTimeout(() => {
+        setFilterAgent(initialAgentId || "");
+        setFilterOutcome(initialOutcome || "");
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [isOpen, initialAgentId, initialOutcome]);
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchLogs();
-    }
-  }, [isOpen, filterAgent, filterOutcome]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       let path = `/fleet/interactions?repo_path=${encodeURIComponent(repoPath)}`;
@@ -73,27 +83,39 @@ export default function LogDrillDown({
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterAgent, filterOutcome, repoPath]);
 
-  const fetchAgentProfile = async () => {
+  useEffect(() => {
+    if (isOpen) {
+      const timeout = window.setTimeout(() => {
+        void fetchLogs();
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [isOpen, fetchLogs]);
+
+  const fetchAgentProfile = useCallback(async () => {
     if (!filterAgent) {
       setAgentProfile(null);
       return;
     }
     try {
-      const data = await apiGet<any[]>("/agents");
-      const profile = data.find((a: any) => a.id === filterAgent);
+      const data = await apiGet<AgentProfile[]>("/agents");
+      const profile = data.find((agent) => agent.id === filterAgent) ?? null;
       setAgentProfile(profile);
     } catch (err) {
       console.error("Failed to fetch agent profile:", err);
     }
-  };
+  }, [filterAgent]);
 
   useEffect(() => {
     if (isOpen && filterAgent) {
-      fetchAgentProfile();
+      const timeout = window.setTimeout(() => {
+        void fetchAgentProfile();
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
-  }, [isOpen, filterAgent]);
+  }, [isOpen, filterAgent, fetchAgentProfile]);
 
   if (!isOpen) return null;
 
@@ -151,12 +173,12 @@ export default function LogDrillDown({
           <div className="agent-profile-section">
             <div className="profile-header">
               <h3>{agentProfile.name} Profile</h3>
-              <span className="wake-word">Wake Word: "{agentProfile.wake_word}"</span>
+              <span className="wake-word">Wake Word: &quot;{agentProfile.wake_word}&quot;</span>
             </div>
             <div className="profile-tools">
               <h4>Accessible Tools</h4>
               <div className="tool-tags">
-                {agentProfile.tools.map((tool: any) => (
+                {agentProfile.tools.map((tool) => (
                   <div key={tool.id} className="tool-tag-detailed glass">
                     <span className="tool-name">{tool.id}</span>
                     <span className="tool-risk" style={{ color: tool.risk === 'critical' ? '#ff4757' : tool.risk === 'high' ? '#ffa502' : '#2ed573' }}>

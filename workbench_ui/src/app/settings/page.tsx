@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 
 import { apiGet, apiPost } from "../api-client";
 
@@ -10,10 +11,14 @@ interface Agent {
     wake_word: string;
 }
 
+interface LocalModel {
+    name: string;
+}
+
 export default function Settings() {
     const [agents, setAgents] = useState<Agent[]>([]);
     const [mappings, setMappings] = useState<Record<string, string>>({});
-    const [localModels, setLocalModels] = useState<any[]>([]);
+    const [localModels, setLocalModels] = useState<LocalModel[]>([]);
     const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({ gemini: true, claude: true });
     const [saving, setSaving] = useState(false);
 
@@ -23,7 +28,7 @@ export default function Settings() {
                 const [agentsData, mappingsData, modelsData, keysData] = await Promise.all([
                     apiGet<Agent[]>("/agents"),
                     apiGet<Record<string, string>>("/agent-models"),
-                    apiGet<any[]>("/local-models"),
+                    apiGet<LocalModel[]>("/local-models"),
                     apiGet<Record<string, boolean>>("/api-keys/status")
                 ]);
                 setAgents(agentsData);
@@ -55,9 +60,9 @@ export default function Settings() {
     return (
         <div className="container">
             <header style={{ marginBottom: '2rem' }}>
-                <a href="/" style={{ color: 'var(--accent-color)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Link href="/" style={{ color: 'var(--accent-color)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <span>←</span> Return to Fleet Command
-                </a>
+                </Link>
                 <h1 className="title-glow" style={{ marginTop: '1.5rem', fontSize: '2.5rem' }}>Agent Settings</h1>
                 <p style={{ color: 'var(--text-secondary)' }}>Manage the neural distribution and model routing for the Exegol fleet.</p>
             </header>

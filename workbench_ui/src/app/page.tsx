@@ -35,14 +35,13 @@ export default function Home() {
   }, [activeRepo]);
 
   useEffect(() => {
-    fetchRepos();
+    const timeout = window.setTimeout(() => {
+      void fetchRepos();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [fetchRepos]);
 
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
-  const friendlyName = activeRepoMeta
-    ? activeRepoMeta.repo_path.split(/[/\\]/).filter(Boolean).slice(-1)[0]
-    : "No repo selected";
-
   return (
     <div className="container dashboard-container">
       <header className="page-header">
