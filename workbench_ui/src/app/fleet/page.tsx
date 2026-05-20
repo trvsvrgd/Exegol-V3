@@ -64,7 +64,7 @@ export default function FleetDashboard() {
         </div>
         <div className="summary-card glass">
           <span className="label">Avg Success Rate</span>
-          <span className="value success-text">{summary.avg_successRate?.toFixed(1) || summary.avgSuccessRate.toFixed(1)}%</span>
+          <span className="value success-text">{summary.avgSuccessRate.toFixed(1)}%</span>
         </div>
         <div className="summary-card glass">
           <span className="label">Active Agents</span>

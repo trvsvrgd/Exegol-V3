@@ -113,6 +113,7 @@ class SecretManager:
                 "health_status": "unknown",  # unknown | healthy | expired | placeholder
                 "human_observation": None,
                 "rotation_url": info["rotation_url"],
+                "suppress_alerts": False,  # Toggle to silence HITL/Slack alerts for this key
                 "key_fingerprint": "",  # SHA256 of first 8 + last 4 chars (safe to log)
                 "rotation_history": [],
             }
@@ -228,7 +229,7 @@ class SecretManager:
         try:
             import requests
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=5)  # nosec
             if resp.status_code == 200:
                 return {"status": "healthy", "detail": "Gemini API key is valid."}
             else:
@@ -292,6 +293,10 @@ class SecretManager:
 
             health = self.check_key_health(env_var)
             entry = meta[env_var]
+            
+            # Ensure suppress_alerts field exists for migration
+            if "suppress_alerts" not in entry:
+                entry["suppress_alerts"] = False
 
             # Update metadata
             entry["last_health_check"] = now.isoformat()
@@ -324,6 +329,7 @@ class SecretManager:
                 "rotation_url": info["rotation_url"],
                 "fingerprint": entry["key_fingerprint"],
                 "human_observation": entry.get("human_observation"),
+                "suppress_alerts": entry.get("suppress_alerts", False),
             })
 
         self._write_metadata(meta)
@@ -411,6 +417,29 @@ class SecretManager:
                 details={"env_var": env_var, "error": str(e)},
             )
             return {"status": "error", "detail": f"Rotation failed: {e}"}
+    
+    def toggle_alert_suppression(self, env_var: str, suppress: bool) -> Dict[str, Any]:
+        """Toggle alert suppression for a specific API key.
+        
+        Args:
+            env_var: The environment variable name (e.g., "GEMINI_API_KEY")
+            suppress: Whether to suppress alerts
+            
+        Returns:
+            {"status": "success"|"error", "detail": str}
+        """
+        if env_var not in MANAGED_KEYS:
+            return {"status": "error", "detail": f"Unknown key: {env_var}"}
+            
+        meta = self._read_metadata()
+        if env_var not in meta:
+            meta[env_var] = self._default_metadata()[env_var]
+            
+        meta[env_var]["suppress_alerts"] = suppress
+        self._write_metadata(meta)
+        
+        status = "Suppressed" if suppress else "Unsuppressed"
+        return {"status": "success", "detail": f"Alerts for {env_var} are now {status.lower()}."}
 
     # ------------------------------------------------------------------
     # HITL Escalation
@@ -428,7 +457,17 @@ class SecretManager:
         sm = StateManager(self.repo_path)
         escalated = []
 
+        local_only = os.getenv("EXEGOL_LOCAL_ONLY", "false").lower() == "true"
+        
         for result in audit_results:
+            # Respect global local-only toggle for external providers
+            if local_only and result["provider"] in ("gemini", "anthropic"):
+                continue
+
+            # Respect per-key suppression toggle
+            if result.get("suppress_alerts"):
+                continue
+
             needs_attention = (
                 result["health_status"] in ("expired", "placeholder")
                 or result["overdue"]

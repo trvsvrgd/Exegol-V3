@@ -42,6 +42,7 @@ class IntelImaAgent:
 
     def _calculate_success_metrics(self, repo_path: str) -> dict:
         """Calculates intelligence reporting metrics based on real fleet data."""
+        self.metrics_manager = SuccessMetricsManager(repo_path)
         # Use the specialized metrics manager for real data
         report = self.metrics_manager.calculate_metrics(days=7)
         agent_stats = report.get("agent_breakdown", {}).get(self.name, {})

@@ -38,8 +38,13 @@ def test_agent_spawning_with_llm():
     print(f"Testing spawn for {registry_entry['class']}...")
     
     # Mocking the actual LLM generation to avoid network calls
-    from inference.llm_client import LLMClient  # type: ignore
+    from inference.llm_client import LLMClient, OllamaClient  # type: ignore
     LLMClient._generate_ollama = MagicMock(return_value="Mocked response")
+    OllamaClient.generate = MagicMock(return_value="Mocked response")
+    
+    # Mock web search to prevent external network calls during agent execution
+    import tools.web_search
+    tools.web_search.web_search = MagicMock(return_value=[])
     
     result = sm.spawn_agent_session(
         agent_id="quality_quigon",

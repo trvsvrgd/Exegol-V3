@@ -4,6 +4,8 @@ import uuid
 import datetime
 import uvicorn
 import requests
+import threading
+import time
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
@@ -21,6 +23,8 @@ from tools.egress_filter import EgressFilter
 from tools.fleet_logger import read_interaction_logs
 from tools.tool_registry import ToolRegistry
 from tools.hitl_manager import HITLManager
+from tools.supervisor_health import build_supervisor_health
+from tools.backlog_manager import BacklogManager
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -31,6 +35,7 @@ app = FastAPI(title="Exegol V3 - Control Tower Backend")
 # Enable CORS for Control Tower UI
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     os.getenv("EXEGOL_FRONTEND_URL", "http://localhost:3001") # Support custom frontend ports
 ]
 
@@ -47,7 +52,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 # Public endpoints that do NOT require authentication
-_PUBLIC_PATHS = {"/", "/docs", "/openapi.json", "/redoc"}
+_PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
 
 API_KEY = os.getenv("EXEGOL_API_KEY")
 
@@ -111,6 +116,173 @@ def _execute_agent_sync(session_id: str, repo_path: str, agent_id: str, model: s
         })
 
 
+# --- Fleet Continuous Execution ---
+
+_continuous_mode = False
+_continuous_fleet_thread = None
+_continuous_lock = threading.Lock()
+
+def _continuous_fleet_loop():
+    global _continuous_mode
+    while True:
+        with _continuous_lock:
+            if not _continuous_mode:
+                break
+
+        print("[API] Running continuous fleet cycle...")
+        orchestrator.run_fleet_cycle()
+
+        for _ in range(10):
+            with _continuous_lock:
+                if not _continuous_mode:
+                    return
+            time.sleep(1)
+
+def _autonomous_status() -> Dict[str, Any]:
+    return {
+        "continuous_mode": _continuous_mode,
+        "thread_alive": bool(_continuous_fleet_thread and _continuous_fleet_thread.is_alive()),
+        "cycle_running": orchestrator.is_running_fleet,
+    }
+
+@app.post("/fleet/start-autonomous")
+def start_autonomous_fleet():
+    global _continuous_mode, _continuous_fleet_thread
+    with _continuous_lock:
+        _continuous_mode = True
+        if _continuous_fleet_thread is None or not _continuous_fleet_thread.is_alive():
+            _continuous_fleet_thread = threading.Thread(target=_continuous_fleet_loop, daemon=True)
+            _continuous_fleet_thread.start()
+    return {"status": "success", **_autonomous_status()}
+
+@app.post("/fleet/stop-autonomous")
+def stop_autonomous_fleet():
+    global _continuous_mode
+    with _continuous_lock:
+        _continuous_mode = False
+    orchestrator.is_running_fleet = False
+    return {"status": "success", **_autonomous_status()}
+
+@app.post("/fleet/toggle-autonomous")
+def toggle_autonomous_fleet(req: Dict[str, Any] = None):
+    global _continuous_mode, _continuous_fleet_thread
+    requested = None if req is None else req.get("enabled")
+    if requested is True:
+        return start_autonomous_fleet()
+    if requested is False:
+        return stop_autonomous_fleet()
+
+    with _continuous_lock:
+        should_start = not _continuous_mode
+
+    if should_start:
+        return start_autonomous_fleet()
+    return stop_autonomous_fleet()
+
+@app.get("/fleet/autonomous-status")
+def get_autonomous_status():
+    return _autonomous_status()
+
+@app.get("/fleet/supervisor-health")
+def get_supervisor_health():
+    return build_supervisor_health(
+        orchestrator,
+        _autonomous_status(),
+        perform_endpoint_checks=True,
+        backend_url=os.getenv("EXEGOL_BACKEND_HEALTH_URL", "http://127.0.0.1:8000/health"),
+        frontend_url=os.getenv("EXEGOL_FRONTEND_URL", "http://127.0.0.1:3000"),
+    )
+
+@app.post("/fleet/go")
+def run_fleet_once():
+    started = orchestrator.trigger_go()
+    if not started:
+        return {"status": "busy_or_failed", **_autonomous_status()}
+    return {"status": "success", **_autonomous_status()}
+
+@app.post("/fleet/retry-blocked")
+def retry_blocked_repo(req: Dict[str, Any]):
+    repo_path = req.get("repo_path")
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Missing repo_path")
+
+    retried = orchestrator.retry_blocked_repo(repo_path)
+    if not retried:
+        raise HTTPException(status_code=409, detail="Repository is not blocked or is not configured.")
+    return {"status": "success", "repo_path": repo_path, "agent_status": "idle"}
+
+@app.get("/fleet/active-state")
+def get_fleet_active_state(repo_path: str):
+    """Returns the real-time active state of the fleet for a repository."""
+    state_file = os.path.join(repo_path, ".exegol", "fleet_state.json")
+    
+    # Retrieve repository status from priority_config
+    repo_status = "idle"
+    for r in orchestrator.priority_config.get("repositories", []):
+        if r.get("repo_path") == repo_path:
+            repo_status = r.get("agent_status", "idle")
+            break
+
+    if not os.path.exists(state_file):
+        errors = []
+        output_summary = ""
+        active_agent = None
+        session_id = ""
+        
+        if repo_status == "blocked":
+            # Retrieve last failed interaction log to get the traceback
+            try:
+                logs = read_interaction_logs([repo_path], days=30)
+                logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+                failed_logs = [l for l in logs if l.get("outcome") == "failure" or l.get("errors")]
+                if failed_logs:
+                    last_fail = failed_logs[0]
+                    active_agent = last_fail.get("agent_id")
+                    session_id = last_fail.get("session_id", "")
+                    errors = last_fail.get("errors", [])
+                    output_summary = last_fail.get("task_summary", "")
+            except Exception as e:
+                print(f"[API] Error reading interaction logs for blocked state: {e}")
+                
+        return {
+            "active_repo": repo_path,
+            "active_agent": active_agent,
+            "session_id": session_id,
+            "status": repo_status,
+            "handoff_chain": [],
+            "next_agent_id": "",
+            "monologue": [],
+            "errors": errors,
+            "output_summary": output_summary
+        }
+        
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state_data = json.load(f)
+            
+        # Ensure priority.json blocked state is respected
+        if repo_status == "blocked":
+            state_data["status"] = "blocked"
+            if not state_data.get("errors"):
+                try:
+                    logs = read_interaction_logs([repo_path], days=30)
+                    logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+                    failed_logs = [l for l in logs if l.get("outcome") == "failure" or l.get("errors")]
+                    if failed_logs:
+                        last_fail = failed_logs[0]
+                        if not state_data.get("active_agent"):
+                            state_data["active_agent"] = last_fail.get("agent_id")
+                        if not state_data.get("session_id"):
+                            state_data["session_id"] = last_fail.get("session_id", "")
+                        state_data["errors"] = last_fail.get("errors", [])
+                        state_data["output_summary"] = last_fail.get("task_summary", "")
+                except Exception as e:
+                    print(f"[API] Error reading interaction logs for blocked state: {e}")
+                    
+        return state_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read fleet state: {e}")
+
 # ---------------------------------------------------------------------------
 # Pydantic Models
 # ---------------------------------------------------------------------------
@@ -168,6 +340,10 @@ class ThrawnArchitectureRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/health")
+def healthcheck():
+    return {"status": "ok"}
 
 @app.get("/repos")
 def get_repos():
@@ -253,13 +429,11 @@ def update_human_queue(req: ActionQueueRequest):
 
 @app.get("/backlog")
 def get_backlog(repo_path: str):
-    sm = StateManager(repo_path)
-    return sm.read_json(".exegol/backlog.json") or []
+    return BacklogManager(repo_path).load_backlog()
 
 @app.post("/backlog/update")
 def update_backlog(req: BacklogUpdateRequest):
-    sm = StateManager(req.repo_path)
-    if sm.update_backlog_task(req.task_id, req.updates):
+    if BacklogManager(req.repo_path).update_task(req.task_id, req.updates):
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Task not found")
 
@@ -269,9 +443,6 @@ def add_to_backlog(req: Dict[str, Any]):
     task_summary = req.get("summary")
     if not repo_path or not task_summary:
         raise HTTPException(status_code=400, detail="Missing repo_path or summary")
-
-    sm = StateManager(repo_path)
-    backlog = sm.read_json(".exegol/backlog.json") or []
 
     new_task = {
         "id": f"user_task_{uuid.uuid4().hex[:8]}",
@@ -283,8 +454,7 @@ def add_to_backlog(req: Dict[str, Any]):
         "created_at": datetime.datetime.now().isoformat(),
     }
 
-    backlog.append(new_task)
-    sm.write_json(".exegol/backlog.json", backlog)
+    BacklogManager(repo_path).add_task(new_task)
 
     # Notify Slack (Interaction Layer Sync)
     try:
@@ -302,18 +472,8 @@ def reorder_backlog(req: Dict[str, Any]):
     if not repo_path or not new_order_ids:
         raise HTTPException(status_code=400, detail="Missing repo_path or task_ids")
 
-    sm = StateManager(repo_path)
-    backlog = sm.read_json(".exegol/backlog.json") or []
-
-    task_map = {t["id"]: t for t in backlog}
-    reordered_backlog = [task_map[tid] for tid in new_order_ids if tid in task_map]
-
-    ordered_ids = set(new_order_ids)
-    for t in backlog:
-        if t["id"] not in ordered_ids:
-            reordered_backlog.append(t)
-
-    sm.write_json(".exegol/backlog.json", reordered_backlog)
+    if not BacklogManager(repo_path).save_backlog_order(new_order_ids):
+        raise HTTPException(status_code=400, detail="No task_ids provided.")
     return {"status": "success"}
 
 # --- Epic 3: Agent Settings & Model Routing ---

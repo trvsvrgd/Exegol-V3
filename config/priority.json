@@ -4,7 +4,7 @@
       "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3",
       "priority": 1,
       "model_routing_preference": "ollama",
-      "agent_status": "blocked",
+      "agent_status": "idle",
       "max_steps_policy": 100,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
@@ -81,7 +81,7 @@
       "vibe_vader": 15
     },
     "compliance_monitoring": {
-      "last_run": "2026-04-19",
+      "last_run": "2026-05-19",
       "frequency_days": 30
     },
     "vibe_audit": {

@@ -76,6 +76,23 @@ class StateManager:
             self.write_json(".exegol/backlog.json", backlog)
         return updated
 
+    def read_fleet_state(self) -> Dict[str, Any]:
+        """Read the live fleet state, returning an empty dict when absent or invalid."""
+        data = self.read_json(".exegol/fleet_state.json")
+        return data if isinstance(data, dict) else {}
+
+    def write_fleet_state(self, state: Dict[str, Any]) -> None:
+        """Atomically write the live fleet state used by backend and Workbench UI."""
+        self.write_json(".exegol/fleet_state.json", state)
+
+    def update_fleet_state(self, updates: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Merge updates into fleet_state.json atomically and return the new state."""
+        state = defaults.copy() if defaults else {}
+        state.update(self.read_fleet_state())
+        state.update(updates)
+        self.write_fleet_state(state)
+        return state
+
     def add_hitl_task(self, summary: str, category: str, context: str, task_id: Optional[str] = None) -> str:
         """Standardized method to escalate a task to the human-in-the-loop queue.
         

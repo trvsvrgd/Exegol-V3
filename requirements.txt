@@ -16,3 +16,4 @@ psutil
 mcp
 httpx
 pylint
+playwright

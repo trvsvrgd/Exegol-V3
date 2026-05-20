@@ -27,18 +27,18 @@ class TestHandoffContext:
     def test_frozen_immutability(self):
         """HandoffContext fields cannot be mutated after creation."""
         ctx = HandoffContext(
-            repo_path="/tmp/test_repo",
+            repo_path="test_repo",
             agent_id="test_agent",
             task_id="default",
             model_routing="ollama",
             max_steps=10,
         )
         with pytest.raises(AttributeError):
-            ctx.repo_path = "/tmp/different"  # type: ignore
+            ctx.repo_path = "different"  # type: ignore
 
     def test_auto_generates_session_id(self):
         ctx = HandoffContext(
-            repo_path="/tmp/test_repo",
+            repo_path="test_repo",
             agent_id="test_agent",
             task_id="default",
             model_routing="ollama",
@@ -49,7 +49,7 @@ class TestHandoffContext:
 
     def test_auto_generates_timestamp(self):
         ctx = HandoffContext(
-            repo_path="/tmp/test_repo",
+            repo_path="test_repo",
             agent_id="test_agent",
             task_id="default",
             model_routing="ollama",

@@ -45,6 +45,7 @@ class ProductPoeAgent:
 
     def _calculate_success_metrics(self, repo_path: str) -> dict:
         """Calculates grooming and readiness metrics based on recent logs."""
+        self.metrics_manager = SuccessMetricsManager(repo_path)
         logs = self.metrics_manager.load_logs(days=7)
         agent_logs = [l for l in logs if l.get("agent_id") == self.name]
         

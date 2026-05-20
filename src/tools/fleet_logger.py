@@ -3,7 +3,15 @@ import json
 import datetime
 import uuid
 import time
+import hashlib
 from typing import List, Optional, Dict, Any
+
+
+def failure_backlog_task_id(agent_id: str, task_summary: str, errors: Optional[List[str]] = None) -> str:
+    """Build a stable backlog ID so repeated crashes update one blocker."""
+    error_str = "; ".join(errors) if errors else "Unknown error."
+    signature = hashlib.sha256(f"{agent_id}|{task_summary}|{error_str}".encode("utf-8")).hexdigest()[:12]
+    return f"auto_fail_{agent_id}_{signature}"
 
 def log_interaction(
     agent_id: str,
@@ -17,7 +25,9 @@ def log_interaction(
     state_changes: Optional[Dict[str, Any]] = None,
     metrics: Optional[Dict[str, Any]] = None,
     token_usage: int = 0,
-    prompt_count: int = 0
+    prompt_count: int = 0,
+    artifacts_written: Optional[List[str]] = None,
+    is_final: bool = False
 ) -> str:
     """
     Logs an agent's interaction to the .exegol/interaction_logs directory in JSON format.
@@ -50,12 +60,19 @@ def log_interaction(
         "errors": errors or [],
         "state_changes": state_changes or {},
         "metrics": metrics or {},
+        "artifacts_written": artifacts_written or [],
         "token_usage": token_usage,
         "prompt_count": prompt_count,
         "repo_path": repo_path
     }
     
-    filename = f"log_{agent_id}_{ts_filename}_{unique_id}.json"
+    # Use session_id as the primary filename ONLY if this is the final session summary
+    # This prevents intermediate agent logs from overwriting the orchestrator's aggregate log
+    if is_final and session_id:
+        filename = f"{session_id}.json"
+    else:
+        filename = f"log_{agent_id}_{ts_filename}_{unique_id}.json"
+        
     filepath = os.path.join(interaction_logs_dir, filename)
     
     max_retries = 3
@@ -76,9 +93,10 @@ def log_interaction(
             from tools.backlog_manager import BacklogManager
             from tools.slack_tool import post_to_slack
             
-            bm = BacklogManager(repo_path)
-            error_id = f"auto_fail_{agent_id}_{int(time.time())}"
             error_str = "; ".join(errors) if errors else "Unknown error."
+            bm = BacklogManager(repo_path)
+            error_id = failure_backlog_task_id(agent_id, task_summary, errors)
+            now_iso = datetime.datetime.now().isoformat()
             
             fail_task = {
                 "id": error_id,
@@ -88,16 +106,34 @@ def log_interaction(
                 "status": "todo",
                 "source_agent": "FleetLogger",
                 "rationale": f"System-detected failure. Summary: {task_summary}. Errors: {error_str}",
-                "created_at": datetime.datetime.now().isoformat()
+                "created_at": now_iso,
+                "last_seen_at": now_iso,
+                "occurrences": 1,
+                "last_session_id": log_data["session_id"],
+                "last_interaction_log": filepath
             }
-            bm.add_task(fail_task)
+            if not bm.add_task(fail_task):
+                existing = bm.get_task(error_id) or {}
+                next_occurrences = int(existing.get("occurrences", 1)) + 1
+                status = existing.get("status", "todo")
+                if status in {"done", "completed"}:
+                    status = "todo"
+                bm.update_task(error_id, {
+                    "status": status,
+                    "priority": "high",
+                    "rationale": fail_task["rationale"],
+                    "last_seen_at": now_iso,
+                    "occurrences": next_occurrences,
+                    "last_session_id": log_data["session_id"],
+                    "last_interaction_log": filepath
+                })
             
             # Notify Slack
             msg = (
                 f"💥 *Agent Failure*: `{agent_id}` reported a failure in `{os.path.basename(repo_path)}`.\n"
                 f"*Summary*: {task_summary}\n"
                 f"*Errors*: `{error_str}`\n"
-                f"A bug report has been injected into the backlog."
+                f"Backlog blocker: `{error_id}`."
             )
             post_to_slack(msg)
         except Exception as e:

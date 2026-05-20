@@ -101,6 +101,16 @@ class TrackingLLMClient(LLMClient):
             "response": response
         })
         
+        # Write to active fleet_state.json if currently running in a session
+        active_repo = os.environ.get("EXEGOL_ACTIVE_REPO")
+        active_session = os.environ.get("EXEGOL_ACTIVE_SESSION_ID")
+        if active_repo and active_session:
+            try:
+                from tools.state_manager import StateManager
+                StateManager(active_repo).update_fleet_state({"monologue": self.history})
+            except Exception as e:
+                print(f"[TrackingLLMClient] Failed to update active monologue: {e}")
+        
         return response
 
     def generate_system_prompt(self, agent: Any) -> str:

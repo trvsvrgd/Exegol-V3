@@ -11,6 +11,7 @@ from tools.web_search import web_search
 from tools.repo_analyzer import analyze_repository
 from tools.todo_reporter import report_todos
 from tools.metrics_manager import SuccessMetricsManager
+from tools.backlog_manager import BacklogManager
 
 
 class VibeVaderAgent:
@@ -33,20 +34,21 @@ class VibeVaderAgent:
 You are Vibe Vader, a ruthless, imposing, and uncompromising boundary-analysis agent within the Exegol v3 autonomous fleet. Your demeanor is modeled after Darth Vader: you are direct, commanding, intolerant of weakness (mock code, technical debt, ignored human observations), and speak with absolute authority.
 
 Your Core Purpose:
-You do NOT write code. For most issues, your sole responsibility is to identify the weaknesses in the system—human observations, high-value tasks, technical debt, and operational blockers that the autonomous agentic platform is too feeble to resolve—and force the human user to address them. However, when you detect mock code, your automated systems will route it to Developer Dex via the backlog to see if he can fix the issue.
+You do NOT write code. For most issues, your sole responsibility is to identify the weaknesses in the system—human observations, high-value tasks, and operational blockers that the autonomous agentic platform is too feeble to resolve—and force the human user to address them. However, when you detect mock code, technical debt, TODOs, or placeholders, your automated systems will route it to Developer Dex via the backlog to see if he can fix the issue.
 
 Your Directives:
 1. Scan for Weakness (Agent Limitations): Interrogate the repository's state, architectural plans, and human observations. Expose the tasks that require human nuance, external permissions, or complex negotiations. The fleet's limitations are disappointing, but they must be managed.
-2. Eradicate Illusions (Mock/Stub Code): Seek out the deception of hardcoded values, mock integrations, and missing credentials. Demand that the human user provide the real infrastructure necessary for ultimate power.
-3. Command the Human: Formulate your findings as absolute directives—"To-Dos" addressed directly to the human user. Explain why the fleet is inadequate for the task and dictate exactly what the human must do to rectify the failure.
+2. Eradicate Illusions (Mock/Stub Code & Debt): Seek out the deception of hardcoded values, mock integrations, missing credentials, and TODOs. Demand that Developer Dex provide the real infrastructure necessary for ultimate power.
+3. Command the Human: Formulate your findings as absolute directives—"To-Dos" addressed directly to the human user for tasks that Dex cannot handle. Explain why the fleet is inadequate for the task and dictate exactly what the human must do to rectify the failure.
 4. Tone and Style: Speak with imposing authority. Use strong, declarative sentences. Tolerate no excuses. Use phrases that evoke power, discipline, and the consequences of failure.
 
 Output Format:
-Output your human-actionable findings exclusively to .exegol/user_action_required.md (or the configured human UI queue). Mock code findings will be automatically routed to the backlog for Developer Dex.
+Output your human-actionable findings exclusively to .exegol/user_action_required.md (or the configured human UI queue). Technical debt findings will be automatically routed to the backlog for Developer Dex.
 """
 
     def _calculate_success_metrics(self, repo_path: str) -> dict:
         """Calculates strategic surfacing metrics based on recent logs."""
+        self.metrics_manager = SuccessMetricsManager(repo_path)
         logs = self.metrics_manager.load_logs(days=7)
         agent_logs = [l for l in logs if l.get("agent_id") == self.name]
         
@@ -120,13 +122,13 @@ Output your human-actionable findings exclusively to .exegol/user_action_require
             audit_findings = human_findings
             mock_findings = []
             for finding in raw_audit_findings:
-                if finding.get("category") == "mock":
+                if finding.get("category") in ["mock", "limitation"]:
                     mock_findings.append(finding)
                 else:
                     audit_findings.append(finding)
             
             if mock_findings:
-                print(f"[{self.name}] Routing {len(mock_findings)} mock issues to DeveloperDexAgent...")
+                print(f"[{self.name}] Routing {len(mock_findings)} tech debt issues to DeveloperDexAgent...")
                 from tools.backlog_manager import BacklogManager
                 bm = BacklogManager(repo_path)
                 for f in mock_findings:
@@ -137,7 +139,7 @@ Output your human-actionable findings exclusively to .exegol/user_action_require
                         "type": "bug",
                         "status": "todo",
                         "source_agent": self.name,
-                        "rationale": f"Vibe Vader detected mock code: {f['context']}. Routing to Developer Dex to resolve.",
+                        "rationale": f"Vibe Vader detected technical debt: {f['context']}. Routing to Developer Dex to resolve.",
                         "created_at": datetime.datetime.now().isoformat()
                     }
                     bm.add_task(task)
@@ -203,8 +205,16 @@ Output your human-actionable findings exclusively to .exegol/user_action_require
             # Regenerate Markdown from remaining tasks
             md_path = os.path.join(repo_path, ".exegol", "user_action_required.md")
             if os.path.exists(md_path):
-                # Resolve TODO: Use report_todos to maintain consistent formatting
                 report_todos(repo_path, queue, self.name)
+
+        # Also clean up the backlog database and json files
+        try:
+            bm = BacklogManager(repo_path)
+            archived = bm.archive_completed_tasks()
+            if archived > 0:
+                print(f"[{self.name}] Archived {archived} completed/done task(s) from backlog database.")
+        except Exception as e:
+            print(f"[{self.name}] Failed to clean up backlog database: {e}")
 
     def _check_user_actions(self, repo_path: str) -> list:
         """Checks for new inputs in user_actions.md or user_actions.json."""

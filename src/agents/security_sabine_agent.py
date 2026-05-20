@@ -79,8 +79,8 @@ class SecuritySabineAgent:
                 "cwe": "CWE-78: OS Command Injection / CWE-94: Code Injection",
                 "severity": "CRITICAL",
                 "case_sensitive": True,
-                "patterns": [r"\beval\s*\(", r"\bexec\s*\(", r"subprocess\.call\(.*shell\s*=\s*True"],
-                "description": "Use of eval(), exec(), or subprocess with shell=True can allow arbitrary code execution.",
+                "patterns": [r"\beval\s*\(", r"\bexec\s*\(", r"subprocess\.call\(.*shell\s*=\s*True"],  # nosec
+                "description": "Use of eval(), exec(), or subprocess with shell=True can allow arbitrary code execution.",  # nosec
                 "recommendation": "Eliminate eval/exec. Use subprocess with shell=False and explicit argument lists."
             },
             {

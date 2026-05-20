@@ -122,7 +122,7 @@ AGENT_REGISTRY = {
         "class": "ModelRouterMothmaAgent",
         "module": "agents.model_router_mothma_agent",
         "wake_word": "mothma",
-        "tools": ["web_search", "file_editor"],
+        "tools": ["web_search", "file_editor", "model_benchmark_db"],
         "max_steps": 15
     },
     "watcher_wedge": {

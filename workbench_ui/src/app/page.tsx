@@ -5,8 +5,9 @@ import ActionQueue from "../components/ActionQueue";
 import BacklogBoard from "../components/BacklogBoard";
 import QuickAddTask from "../components/QuickAddTask";
 import ThrawnInteraction from "../components/ThrawnInteraction";
+import ActiveFleetConsole from "../components/ActiveFleetConsole";
 
-import { apiGet } from "../app/api-client";
+import { apiGet, apiPost } from "../app/api-client";
 
 interface Repo {
   repo_path: string;
@@ -15,11 +16,92 @@ interface Repo {
   agent_status: string;
 }
 
+interface AutonomousStatus {
+  continuous_mode: boolean;
+  thread_alive: boolean;
+  cycle_running: boolean;
+}
+
+interface SupervisorHealth {
+  status: "ok" | "degraded";
+  checked_at: string;
+  degraded_services: string[];
+  degraded_repositories: string[];
+}
+
 export default function Home() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [activeRepo, setActiveRepo] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<'poe' | 'thrawn' | 'vader'>('poe');
+  const [autonomousMode, setAutonomousMode] = useState<boolean>(false);
+  const [cycleRunning, setCycleRunning] = useState<boolean>(false);
+  const [controlBusy, setControlBusy] = useState<boolean>(false);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [supervisorHealth, setSupervisorHealth] = useState<SupervisorHealth | null>(null);
+
+  useEffect(() => {
+    async function fetchAutonomousStatus() {
+      try {
+        const data = await apiGet<AutonomousStatus>("/fleet/autonomous-status");
+        setAutonomousMode(data.continuous_mode);
+        setCycleRunning(data.cycle_running);
+      } catch (e) {
+        console.error("Failed to fetch autonomous status", e);
+      }
+    }
+    fetchAutonomousStatus();
+    const interval = setInterval(fetchAutonomousStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    async function fetchSupervisorHealth() {
+      try {
+        const data = await apiGet<SupervisorHealth>("/fleet/supervisor-health");
+        setSupervisorHealth(data);
+      } catch (e) {
+        console.error("Failed to fetch supervisor health", e);
+      }
+    }
+    fetchSupervisorHealth();
+    const interval = setInterval(fetchSupervisorHealth, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const setAutonomousFleet = async (enabled: boolean) => {
+    setControlBusy(true);
+    setControlError(null);
+    try {
+      const endpoint = enabled ? "/fleet/start-autonomous" : "/fleet/stop-autonomous";
+      const data = await apiPost<AutonomousStatus & {status: string}>(endpoint, {});
+      setAutonomousMode(data.continuous_mode);
+      setCycleRunning(data.cycle_running);
+    } catch (e) {
+      console.error("Failed to toggle autonomous mode", e);
+      setControlError("Fleet control request failed. Check backend logs.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const runGoOnce = async () => {
+    setControlBusy(true);
+    setControlError(null);
+    try {
+      const data = await apiPost<AutonomousStatus & {status: string}>("/fleet/go", {});
+      setAutonomousMode(data.continuous_mode);
+      setCycleRunning(data.cycle_running);
+      if (data.status !== "success") {
+        setControlError("Go did not start because another fleet cycle is active or the run failed.");
+      }
+    } catch (e) {
+      console.error("Failed to trigger Go", e);
+      setControlError("Go request failed. Check backend logs.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
 
   const fetchRepos = useCallback(async () => {
     try {
@@ -35,19 +117,47 @@ export default function Home() {
   }, [activeRepo]);
 
   useEffect(() => {
-    fetchRepos();
+    const timeout = window.setTimeout(() => {
+      void fetchRepos();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [fetchRepos]);
 
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
-  const friendlyName = activeRepoMeta
-    ? activeRepoMeta.repo_path.split(/[/\\]/).filter(Boolean).slice(-1)[0]
-    : "No repo selected";
 
   return (
     <div className="container dashboard-container">
       <header className="page-header">
         <h1 className="title-glow">Exegol Command Center</h1>
         <p className="subtitle">Select your target repository and engage with the agent fleet.</p>
+        <div className="fleet-controls" style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+          <button
+            className="fleet-toggle-btn"
+            onClick={runGoOnce}
+            disabled={controlBusy || cycleRunning}
+            title={cycleRunning ? "A fleet cycle is already running." : "Run one autonomous fleet cycle."}
+          >
+            {cycleRunning ? "Go Running" : "Go"}
+          </button>
+          <button 
+            className={`fleet-toggle-btn ${autonomousMode ? 'active' : ''}`}
+            onClick={() => setAutonomousFleet(!autonomousMode)}
+            disabled={controlBusy}
+          >
+            {autonomousMode ? 'Stop Autonomous Fleet' : 'Start Autonomous Fleet'}
+          </button>
+        </div>
+        {controlError && <div className="error-banner control-error">{controlError}</div>}
+        {supervisorHealth?.status === "degraded" && (
+          <div className="error-banner control-error">
+            Supervisor degraded:
+            {" "}
+            {[
+              ...supervisorHealth.degraded_services,
+              ...supervisorHealth.degraded_repositories.map((repo) => repo.split(/[/\\]/).filter(Boolean).slice(-1)[0]),
+            ].join(", ")}
+          </div>
+        )}
       </header>
 
       {fetchError && <div className="error-banner">{fetchError}</div>}
@@ -92,6 +202,10 @@ export default function Home() {
           <div className="repo-empty-state">Select a repository to begin operations.</div>
         )}
       </section>
+
+      {activeRepo && (
+        <ActiveFleetConsole repoPath={activeRepo} autonomousMode={autonomousMode} />
+      )}
 
       {activeRepo && (
         <section className="agent-engagement-section">
@@ -177,6 +291,40 @@ export default function Home() {
         .subtitle {
           color: var(--text-secondary);
           font-size: 1.1rem;
+        }
+
+        .fleet-toggle-btn {
+          padding: 0.8rem 1.5rem;
+          border-radius: 20px;
+          font-weight: bold;
+          font-size: 1.1rem;
+          cursor: pointer;
+          border: 2px solid rgba(255, 255, 255, 0.2);
+          background: rgba(0, 0, 0, 0.5);
+          color: white;
+          transition: all 0.3s ease;
+        }
+
+        .fleet-toggle-btn:hover {
+          background: rgba(255, 255, 255, 0.1);
+        }
+
+        .fleet-toggle-btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .fleet-toggle-btn.active {
+          background: rgba(74, 222, 128, 0.2);
+          border-color: #4ade80;
+          color: #4ade80;
+          box-shadow: 0 0 15px rgba(74, 222, 128, 0.3);
+        }
+
+        .control-error {
+          margin: 1rem auto 0;
+          max-width: 620px;
         }
 
         .repo-selection-panel {

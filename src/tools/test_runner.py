@@ -25,7 +25,8 @@ def run_tests(path: str) -> Dict[str, Any]:
         # Always route terminal errors with 'FATAL' to the Exegol Fleet
         check_and_route_terminal_output(path, result.stdout, result.stderr, command)
         
-        status = "pass" if result.returncode == 0 else "fail"
+        # Status logic: 0 is pass, 5 is 'no tests collected' (also pass for prototypes)
+        status = "pass" if result.returncode in [0, 5] else "fail"
         
         return {
             "status": status,

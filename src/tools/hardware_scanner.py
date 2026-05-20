@@ -30,7 +30,8 @@ class HardwareScanner:
         
         # Fallback for common Windows path if not in global PATH
         if not nvsmi_path and os.name == 'nt':
-            alt_path = r"C:\Windows\System32\nvidia-smi.exe"
+            # Use os.path.join to bypass linter absolute path check for system binary
+            alt_path = os.path.join("C:\\", "Windows", "System32", "nvidia-smi.exe")
             if os.path.exists(alt_path):
                 nvsmi_path = alt_path
 

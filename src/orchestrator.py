@@ -6,6 +6,7 @@ import sys
 import schedule
 import hmac
 import hashlib
+import traceback
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -32,13 +33,14 @@ class ExegolOrchestrator:
             log_every_session=self._get_isolation_setting("log_every_session", True)
         )
         self.is_running_fleet = False
+        self._fleet_cycle_lock = threading.Lock()
         self._should_stop_scheduler = False
         self.job_history = self._load_job_history()
         
         # --- SLACK INTEGRATION CHECK ---
         if not slack_manager.bot_token and not slack_manager.webhook_url:
             print("\n" + "!"*60)
-            print("⚠️  CRITICAL WARNING: Slack Integration is OFFLINE.")
+            print("CRITICAL WARNING: Slack Integration is OFFLINE.")
             print("Exegol is running in [CONSOLE-ONLY] mode. Interactive approvals and")
             print("remote wake-words will NOT function.")
             print("FIX: See docs/guides/slack_integration_fix.md")
@@ -59,8 +61,11 @@ class ExegolOrchestrator:
         self.queue_condition = threading.Condition()
         self.current_running_agent = None
         
-        # Initialize Autonomous Cadence Engine
-        self._setup_cadence_engine()
+        # Initialize Autonomous Cadence Engine unless startup explicitly disables it.
+        if os.getenv("EXEGOL_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}:
+            print("[Scheduler] Disabled by EXEGOL_DISABLE_SCHEDULER.")
+        else:
+            self._setup_cadence_engine()
 
     def get_agent_priority(self, agent_id):
         try:
@@ -167,6 +172,25 @@ class ExegolOrchestrator:
             schedule.run_pending()
             time.sleep(self._check_interval)
 
+    def restart_scheduler(self) -> bool:
+        """Restart the in-process cadence scheduler after supervisor detects a dead thread."""
+        if os.getenv("EXEGOL_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}:
+            return False
+
+        existing = getattr(self, "scheduler_thread", None)
+        if existing and existing.is_alive():
+            return True
+
+        self._should_stop_scheduler = False
+        try:
+            schedule.clear()
+        except Exception as exc:
+            print(f"[Scheduler] Failed to clear stale scheduler jobs before restart: {exc}")
+
+        self._setup_cadence_engine()
+        restarted = getattr(self, "scheduler_thread", None)
+        return bool(restarted and restarted.is_alive())
+
     def _load_job_history(self) -> Dict[str, str]:
         if os.path.exists(HISTORY_FILE_PATH):
             try:
@@ -251,18 +275,21 @@ class ExegolOrchestrator:
             return
 
         slack_manager.post_message(f"⏰ *Scheduled Task*: {summary}. Waking `{agent_id}`...")
-        self.wake_and_execute_agent(
-            repo_info=target,
-            routing=routing,
-            max_steps=20,
-            agent_id=agent_id,
-            scheduled_prompt=summary
-        )
+        
+        def run_task():
+            self.wake_and_execute_agent(
+                repo_info=target,
+                routing=routing,
+                max_steps=20,
+                agent_id=agent_id,
+                scheduled_prompt=summary
+            )
+            # Update history AFTER successful (or at least attempted) execution
+            if job_id:
+                self.job_history[job_id] = datetime.now().isoformat()
+                self._save_job_history()
 
-        # Update history AFTER successful (or at least attempted) execution
-        if job_id:
-            self.job_history[job_id] = datetime.now().isoformat()
-            self._save_job_history()
+        threading.Thread(target=run_task, daemon=True).start()
 
     def load_config(self):
         """Loads priority and agent configuration from priority.json"""
@@ -290,6 +317,97 @@ class ExegolOrchestrator:
                 print(f"[Status Update] Repository {repo_path} status changed to {new_status}")
             except Exception as e:
                 print(f"[Status Update] Failed to update priority.json: {e}")
+
+    def _write_fleet_state(self, repo_path: str, status: str, active_agent: str = None,
+                           session_id: str = "", handoff_chain: List[str] = None,
+                           next_agent_id: str = "", errors: List[str] = None,
+                           output_summary: str = ""):
+        """Writes a truthful repo-level state even when no agent session owns the failure."""
+        if not repo_path:
+            return
+
+        try:
+            sm = StateManager(repo_path)
+            existing = sm.read_fleet_state()
+
+            state_data = {
+                "active_repo": repo_path,
+                "active_agent": active_agent,
+                "session_id": session_id or existing.get("session_id", ""),
+                "status": status,
+                "started_at": datetime.now().isoformat(),
+                "handoff_chain": handoff_chain or [],
+                "next_agent_id": next_agent_id,
+                "monologue": existing.get("monologue", []),
+                "errors": errors or [],
+                "output_summary": output_summary,
+                "retry_available": status == "blocked",
+                "failure_logged_at": datetime.now().isoformat() if status == "blocked" else "",
+            }
+            sm.write_fleet_state(state_data)
+        except Exception as e:
+            print(f"[Status Update] Failed to write fleet_state.json: {e}")
+
+    def _record_repo_failure(self, repo_info: Dict[str, Any], message: str,
+                             errors: List[str] = None, handoff_chain: List[str] = None):
+        repo_path = repo_info.get("repo_path", "")
+        error_list = errors or [message]
+        self.update_repo_status(repo_path, "blocked")
+        self._write_fleet_state(
+            repo_path=repo_path,
+            status="blocked",
+            active_agent="orchestrator",
+            handoff_chain=handoff_chain or [],
+            errors=error_list,
+            output_summary=message,
+        )
+        log_interaction(
+            agent_id="orchestrator",
+            outcome="failure",
+            task_summary=message,
+            repo_path=repo_path,
+            errors=error_list,
+            state_changes={"handoff_chain": handoff_chain or []},
+        )
+
+    def retry_blocked_repo(self, repo_path: str) -> bool:
+        """Move a blocked repository back to idle so the next fleet cycle can retry it."""
+        self.load_config()
+        sm = StateManager(repo_path)
+        state_data = {}
+        state_blocked = False
+        try:
+            state_data = sm.read_fleet_state()
+            state_blocked = state_data.get("status") == "blocked"
+        except Exception as e:
+            print(f"[Status Update] Failed to read fleet_state.json for retry: {e}")
+
+        for repo in self.priority_config.get("repositories", []):
+            if repo.get("repo_path") == repo_path:
+                if repo.get("agent_status") != "blocked" and not state_blocked:
+                    return False
+                if repo.get("agent_status") == "blocked":
+                    self.update_repo_status(repo_path, "idle")
+                self.load_config()
+                self.active_target = self.get_highest_priority_task()
+                if state_data:
+                    try:
+                        previous_errors = state_data.get("errors", [])
+                        state_data["status"] = "idle"
+                        state_data["active_agent"] = None
+                        state_data["session_id"] = ""
+                        state_data["handoff_chain"] = []
+                        state_data["next_agent_id"] = ""
+                        state_data["errors"] = []
+                        state_data["retry_available"] = False
+                        state_data["output_summary"] = "Blocked state cleared for retry."
+                        if previous_errors:
+                            state_data["last_cleared_errors"] = previous_errors
+                        sm.write_fleet_state(state_data)
+                    except Exception as e:
+                        print(f"[Status Update] Failed to update fleet_state.json for retry: {e}")
+                return True
+        return False
 
     def _get_isolation_setting(self, key: str, default=None):
         """Read a context_isolation setting from global_settings."""
@@ -326,31 +444,102 @@ class ExegolOrchestrator:
                     else:
                         print("[Event Watcher] No actionable targets found.")
 
+    def _watch_exegol_state_loop(self):
+        """Daemon that monitors .exegol directories for state changes and triggers fleet cycle."""
+        last_mtimes = {}
+        while not self._should_stop_scheduler:
+            time.sleep(2)
+            
+            # Skip checking if a fleet cycle is already actively running
+            if self.is_running_fleet:
+                continue
+                
+            repos = self.priority_config.get("repositories", [])
+            active_repos = [r for r in repos if r.get('agent_status', 'idle') in ['active', 'idle']]
+            
+            fleet_triggered = False
+            for repo in active_repos:
+                repo_path = repo.get("repo_path")
+                if not repo_path:
+                    continue
+                
+                exegol_dir = os.path.join(repo_path, ".exegol")
+                if not os.path.exists(exegol_dir):
+                    continue
+                
+                # Check critical state files for new tasks or state changes
+                for filename in ["backlog.json", "user_action_required.json"]:
+                    file_path = os.path.join(exegol_dir, filename)
+                    if os.path.exists(file_path):
+                        current_mtime = os.path.getmtime(file_path)
+                        
+                        if file_path not in last_mtimes:
+                            last_mtimes[file_path] = current_mtime
+                        elif current_mtime > last_mtimes[file_path]:
+                            last_mtimes[file_path] = current_mtime
+                            print(f"\n[Exegol Daemon] State change detected in {filename} for {repo_path}")
+                            fleet_triggered = True
+                            
+            if fleet_triggered:
+                print("[Exegol Daemon] Automatically triggering fleet cycle...")
+                # Run fleet cycle asynchronously to prevent blocking the daemon
+                threading.Thread(target=self.run_fleet_cycle, daemon=True).start()
+
+
     def start_event_listener(self):
-        """Starts the event listener thread to watch for priority.json changes."""
+        """Starts the event listener threads to watch for config and state changes."""
         listener_thread = threading.Thread(target=self._watch_config_loop, daemon=True)
         listener_thread.start()
-        print("Event listener started. Watching priority.json for updates.")
+        
+        exegol_watcher_thread = threading.Thread(target=self._watch_exegol_state_loop, daemon=True)
+        exegol_watcher_thread.start()
+        
+        print("Event listeners started. Watching priority.json and .exegol directories for updates.")
 
     def run_fleet_cycle(self):
         """Runs one full cycle through the fleet, processing each repo by priority."""
+        if not self._fleet_cycle_lock.acquire(blocking=False):
+            print("[Orchestrator] Fleet cycle already running. Skipping overlapping request.")
+            return False
+
         print("\nStarting Fleet Cycle...")
         self.is_running_fleet = True
-        
-        # Periodic Audits
-        self.check_compliance_monitoring()
+        all_success = True
+        try:
+            # Periodic Audits
+            self.check_compliance_monitoring()
 
-        repos = self.priority_config.get("repositories", [])
-        active_repos = [r for r in repos if r.get('agent_status', 'idle') == 'active']
-        sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
-        
-        for repo_info in sorted_repos:
-            if not self.is_running_fleet:
-                break
-            self.process_repo(repo_info)
-        
-        print("Fleet Cycle complete.")
-        self.is_running_fleet = False
+            repos = self.priority_config.get("repositories", [])
+            active_repos = [r for r in repos if r.get('agent_status', 'idle') in ['active', 'idle']]
+            sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
+            
+            for repo_info in sorted_repos:
+                if not self.is_running_fleet:
+                    break
+                repo_path = repo_info.get("repo_path", "")
+                self._write_fleet_state(
+                    repo_path=repo_path,
+                    status="running",
+                    active_agent="orchestrator",
+                    output_summary="Fleet cycle is evaluating this repository.",
+                )
+                try:
+                    self.process_repo(repo_info)
+                except Exception as e:
+                    all_success = False
+                    message = f"Fleet cycle failed while processing repository: {type(e).__name__}: {e}"
+                    print(f"[Orchestrator] {message}")
+                    self._record_repo_failure(
+                        repo_info,
+                        message,
+                        errors=traceback.format_exception_only(type(e), e),
+                    )
+            
+            print("Fleet Cycle complete.")
+            return all_success
+        finally:
+            self.is_running_fleet = False
+            self._fleet_cycle_lock.release()
 
 
 
@@ -380,7 +569,12 @@ class ExegolOrchestrator:
                 return
 
         # If it's a Monday or specific time, run review/optimizer (Logic TBD)
-        print("💤 Repo is idle.")
+        print("Repo is idle.")
+        self._write_fleet_state(
+            repo_path=repo_path,
+            status="idle",
+            output_summary="No pending autonomous work found.",
+        )
 
     def check_compliance_monitoring(self):
         """Checks if a monthly compliance sweep is due and triggers Cody."""
@@ -426,22 +620,45 @@ class ExegolOrchestrator:
 
     def trigger_go(self):
         """Manual 'Go' trigger for the active target."""
-        # --- SECURITY GUARD: CLI Auth (sec_sec_arch_001) ---
-        api_key = os.getenv("EXEGOL_API_KEY")
-        if api_key:
-             # In a real CLI, we might prompt for a key or check a local token
-             # For now, we just log that we are running in authenticated mode
-             print("[Orchestrator] Running 'Go' in authenticated CLI mode.")
+        if not self._fleet_cycle_lock.acquire(blocking=False):
+            print("[Orchestrator] Another fleet cycle or Go run is already active. Skipping duplicate Go.")
+            return False
 
-        print("Received 'Go' trigger. Initiating orchestration cycle...")
-        target_repo = self.active_target
-        if not target_repo:
-            print("No actionable repositories found.")
-            return
-        
-        routing = target_repo.get('model_routing_preference', 'ollama')
-        max_steps = target_repo.get('max_steps_policy', 50)
-        self.wake_and_execute_agent(target_repo, routing, max_steps)
+        try:
+            # --- SECURITY GUARD: CLI Auth (sec_sec_arch_001) ---
+            api_key = os.getenv("EXEGOL_API_KEY")
+            if api_key:
+                 # In a real CLI, we might prompt for a key or check a local token
+                 # For now, we just log that we are running in authenticated mode
+                 print("[Orchestrator] Running 'Go' in authenticated CLI mode.")
+
+            print("Received 'Go' trigger. Initiating orchestration cycle...")
+            target_repo = self.active_target
+            if not target_repo:
+                print("No actionable repositories found.")
+                return False
+            
+            repo_path = target_repo.get("repo_path", "")
+            self._write_fleet_state(
+                repo_path=repo_path,
+                status="running",
+                active_agent="orchestrator",
+                output_summary="Manual Go is evaluating this repository.",
+            )
+            try:
+                self.process_repo(target_repo)
+                return True
+            except Exception as e:
+                message = f"Manual Go failed while processing repository: {type(e).__name__}: {e}"
+                print(f"[Orchestrator] {message}")
+                self._record_repo_failure(
+                    target_repo,
+                    message,
+                    errors=traceback.format_exception_only(type(e), e),
+                )
+                return False
+        finally:
+            self._fleet_cycle_lock.release()
 
     def wake_and_execute_agent(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
                                 agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
@@ -521,6 +738,14 @@ class ExegolOrchestrator:
             )
             
             self.update_repo_status(repo_info.get("repo_path"), "blocked")
+            self._write_fleet_state(
+                repo_path=repo_info.get("repo_path", ""),
+                status="blocked",
+                active_agent="orchestrator",
+                handoff_chain=chain_history,
+                errors=[msg],
+                output_summary="Loop depth guard triggered.",
+            )
             self.escalate_to_human(msg, repo_info.get("repo_path"))
             return None
 
@@ -543,6 +768,14 @@ class ExegolOrchestrator:
                 )
                 
                 self.update_repo_status(repo_info.get("repo_path"), "blocked")
+                self._write_fleet_state(
+                    repo_path=repo_info.get("repo_path", ""),
+                    status="blocked",
+                    active_agent="orchestrator",
+                    handoff_chain=chain_history,
+                    errors=[msg],
+                    output_summary="Circuit breaker triggered.",
+                )
                 self.escalate_to_human(msg, repo_info.get("repo_path"))
                 return None
 

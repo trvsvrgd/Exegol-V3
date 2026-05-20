@@ -46,9 +46,15 @@ class BacklogManager:
                     rationale TEXT,
                     created_at TEXT,
                     archived_at TEXT,
+                    rank INTEGER,
                     data TEXT
                 )
             """)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "rank" not in columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN rank INTEGER")
             conn.commit()
 
     def _migrate_if_needed(self):
@@ -96,8 +102,8 @@ class BacklogManager:
             
         conn.execute("""
             INSERT OR IGNORE INTO tasks 
-            (id, summary, priority, type, status, source_agent, rationale, created_at, archived_at, data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, summary, priority, type, status, source_agent, rationale, created_at, archived_at, rank, data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
             task.get("summary"),
@@ -108,6 +114,7 @@ class BacklogManager:
             task.get("rationale"),
             task.get("created_at"),
             archived_at,
+            task.get("rank"),
             json.dumps(task)
         ))
 
@@ -116,7 +123,7 @@ class BacklogManager:
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT data FROM tasks WHERE archived_at IS NULL")
+            cursor.execute("SELECT data FROM tasks WHERE archived_at IS NULL ORDER BY COALESCE(rank, 999999), created_at, id")
             return [json.loads(row["data"]) for row in cursor.fetchall()]
 
     def load_archive(self) -> List[Dict[str, Any]]:
@@ -126,6 +133,38 @@ class BacklogManager:
             cursor = conn.cursor()
             cursor.execute("SELECT data FROM tasks WHERE archived_at IS NOT NULL")
             return [json.loads(row["data"]) for row in cursor.fetchall()]
+
+    def save_backlog_order(self, ordered_task_ids: List[str]) -> bool:
+        """Persist UI ordering while keeping all active tasks and SQLite as source of truth."""
+        active = self.load_backlog()
+        if not ordered_task_ids:
+            return False
+
+        task_map = {task.get("id"): task for task in active if task.get("id")}
+        ordered = []
+        seen = set()
+        for task_id in ordered_task_ids:
+            task = task_map.get(task_id)
+            if task:
+                ordered.append(task)
+                seen.add(task_id)
+
+        for task in active:
+            task_id = task.get("id")
+            if task_id not in seen:
+                ordered.append(task)
+
+        with self._get_conn() as conn:
+            for index, task in enumerate(ordered):
+                task["rank"] = index
+                conn.execute(
+                    "UPDATE tasks SET rank = ?, data = ? WHERE id = ?",
+                    (index, json.dumps(task), task.get("id")),
+                )
+            conn.commit()
+
+        self._sync_to_json()
+        return True
 
     def add_task(self, task: Dict[str, Any]) -> bool:
         """Adds a new task to the backlog if it doesn't already exist."""
@@ -145,6 +184,57 @@ class BacklogManager:
         self._sync_to_json()
         return True
 
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Returns a task by ID from the active or archived backlog."""
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return json.loads(row["data"])
+
+    def update_task(self, task_id: str, updates: Dict[str, Any]) -> bool:
+        """Updates arbitrary task fields while keeping indexed columns in sync."""
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            task = json.loads(row["data"])
+            task.update(updates)
+
+            conn.execute(
+                """
+                UPDATE tasks
+                SET summary = ?, priority = ?, type = ?, status = ?,
+                    source_agent = ?, rationale = ?, created_at = ?,
+                    archived_at = ?, rank = ?, data = ?
+                WHERE id = ?
+                """,
+                (
+                    task.get("summary"),
+                    task.get("priority"),
+                    task.get("type"),
+                    task.get("status"),
+                    task.get("source_agent"),
+                    task.get("rationale"),
+                    task.get("created_at"),
+                    task.get("archived_at"),
+                    task.get("rank"),
+                    json.dumps(task),
+                    task_id,
+                ),
+            )
+            conn.commit()
+
+        self._sync_to_json()
+        return True
+
     def update_task_status(self, task_id: str, new_status: str) -> bool:
         """Updates the status of a specific task and refreshes its 'data' blob."""
         with self._get_conn() as conn:
@@ -158,8 +248,10 @@ class BacklogManager:
             task = json.loads(row["data"])
             task["status"] = new_status
             
-            conn.execute("UPDATE tasks SET status = ?, data = ? WHERE id = ?", 
-                         (new_status, json.dumps(task), task_id))
+            conn.execute(
+                "UPDATE tasks SET status = ?, rank = ?, data = ? WHERE id = ?",
+                (new_status, task.get("rank"), json.dumps(task), task_id),
+            )
             conn.commit()
             
         self._sync_to_json()

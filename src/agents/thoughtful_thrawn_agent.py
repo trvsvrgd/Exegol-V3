@@ -113,7 +113,10 @@ Your Directives:
                         mgr.add_roadmap_item(action["section"], action["item"])
 
         # 6. Identify Open Questions
-        open_questions = [q["question"] for q in intel["questions"] if not q["answer"]]
+        open_questions = [
+            q["question"] for q in intel["questions"] 
+            if isinstance(q, dict) and not q.get("answer")
+        ]
         num_open = len(open_questions)
 
         # 7. Handle Initial Onboarding or Grooming
@@ -205,10 +208,17 @@ Your Directives:
             mgr = ThrawnIntelManager(repo_path)
             intel = mgr.read_intent()
             total_qs = len(intel["questions"])
-            answered_qs = len([
-                q for q in intel["questions"]
-                if isinstance(q, dict) and q.get("answer") and q["answer"].strip().lower() != "pending"
-            ])
+            answered_qs = 0
+            try:
+                for q in intel["questions"]:
+                    try:
+                        # Defensive check for malformed 'answer' or non-dict entries
+                        if isinstance(q, dict) and q.get("answer") and str(q.get("answer", "")).strip().lower() != "pending":
+                            answered_qs += 1
+                    except:
+                        continue
+            except Exception:
+                answered_qs = 0
             
             if total_qs > 0:
                 metrics["questions_answered_rate"] = round(answered_qs / total_qs, 2)

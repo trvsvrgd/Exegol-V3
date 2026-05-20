@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import threading
 from typing import Optional, Dict, Any, Callable
@@ -26,12 +27,21 @@ class SlackManager:
             return
             
         load_dotenv()
-        self.bot_token = os.getenv("SLACK_BOT_TOKEN")
-        self.app_token = os.getenv("SLACK_APP_TOKEN")
-        self.webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        disable_slack = os.getenv("EXEGOL_DISABLE_SLACK", "").lower() in {"1", "true", "yes"}
+        self.bot_token = None if disable_slack else os.getenv("SLACK_BOT_TOKEN")
+        self.app_token = None if disable_slack else os.getenv("SLACK_APP_TOKEN")
+        self.webhook_url = None if disable_slack else os.getenv("SLACK_WEBHOOK_URL")
         
         self.client = WebClient(token=self.bot_token) if self.bot_token else None
-        self.app = App(token=self.bot_token) if self.bot_token else None
+        self.app = None
+        if self.bot_token:
+            try:
+                self.app = App(token=self.bot_token, token_verification_enabled=False)
+            except Exception as e:
+                print(f"[SlackManager] Slack app initialization failed; using console mode. Detail: {e}")
+                self.client = None
+                self.app = None
+                self.bot_token = None
         self.handler = None
         
         # Approval tracking: {callback_id: threading.Event()}
@@ -61,7 +71,7 @@ class SlackManager:
             print(f"[SlackManager] Failed to save mapping: {e}")
 
     def is_bot_active(self) -> bool:
-        return self.bot_token is not None and self.app_token is not None
+        return self.app is not None and self.bot_token is not None and self.app_token is not None
 
     def post_message(self, text: str, blocks: Optional[list] = None, channel: Optional[str] = None) -> str:
         """Sends a message to Slack using Bot Token (preferred) or Webhook (fallback)."""
@@ -233,11 +243,14 @@ class SlackManager:
 
         def run_socket():
             print("[SlackManager] Starting Socket Mode Listener...")
-            self.handler = SocketModeHandler(self.app, self.app_token)
-            self.handler.connect()  # Use connect instead of start to avoid blocking or signal issues
-            import time
-            while True:
-                time.sleep(1)
+            try:
+                self.handler = SocketModeHandler(self.app, self.app_token)
+                self.handler.connect()  # Use connect instead of start to avoid blocking or signal issues
+                import time
+                while True:
+                    time.sleep(1)
+            except Exception as e:
+                print(f"[SlackManager] Socket listener failed; continuing without Slack listener. Detail: {e}")
 
         threading.Thread(target=run_socket, daemon=True).start()
 

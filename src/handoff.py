@@ -66,6 +66,8 @@ class SessionResult:
     prompt_count: int = 0
     monologue: List[Dict[str, Any]] = field(default_factory=list)
     regression_context: str = ""      # Details captured for failure analysis/retry
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    state_changes: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize for JSON persistence in interaction_logs/."""
@@ -82,6 +84,8 @@ class SessionResult:
             "next_agent_id": self.next_agent_id,
             "snapshot_hash": self.snapshot_hash,
             "regression_context": self.regression_context,
+            "metrics": self.metrics,
+            "state_changes": self.state_changes,
             "token_usage": self.token_usage,
             "prompt_count": self.prompt_count,
             "monologue": self.monologue,

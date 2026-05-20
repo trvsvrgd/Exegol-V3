@@ -16,6 +16,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 's
 from src.agents.quality_quigon_agent import QualityQuigonAgent
 from src.handoff import HandoffContext
 
+# Mock web_search globally for this test file to prevent actual network requests
+import tools.web_search
+tools.web_search.web_search = MagicMock(return_value=[])
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -182,7 +186,7 @@ class TestLogValidationReport:
 # ---------------------------------------------------------------------------
 
 class TestQualityQuigonExecute:
-    @patch("src.tools.linter.run_lint")
+    @patch("src.agents.quality_quigon_agent.run_lint")
     @patch("src.agents.quality_quigon_agent.run_regression_eval")
     @patch("src.agents.quality_quigon_agent.log_interaction")
     def test_execute_returns_string(self, mock_log, mock_eval, mock_lint, agent, handoff):
@@ -192,7 +196,7 @@ class TestQualityQuigonExecute:
         assert isinstance(result, str)
         assert "Validation Cycle complete" in result
 
-    @patch("src.tools.linter.run_lint")
+    @patch("src.agents.quality_quigon_agent.run_lint")
     @patch("src.agents.quality_quigon_agent.run_regression_eval")
     @patch("src.agents.quality_quigon_agent.log_interaction")
     def test_regression_fail_chains_to_dex(self, mock_log, mock_eval, mock_lint, agent, handoff):
@@ -202,7 +206,7 @@ class TestQualityQuigonExecute:
         agent.execute(handoff)
         assert agent.next_agent_id == "developer_dex"
 
-    @patch("src.tools.linter.run_lint")
+    @patch("src.agents.quality_quigon_agent.run_lint")
     @patch("src.agents.quality_quigon_agent.run_regression_eval")
     @patch("src.agents.quality_quigon_agent.log_interaction")
     def test_regression_pass_chains_to_uat_ulic(self, mock_log, mock_eval, mock_lint, agent, handoff):
@@ -214,7 +218,7 @@ class TestQualityQuigonExecute:
         agent.execute(handoff)
         assert agent.next_agent_id == "uat_ulic"
 
-    @patch("src.tools.linter.run_lint")
+    @patch("src.agents.quality_quigon_agent.run_lint")
     @patch("src.agents.quality_quigon_agent.run_regression_eval")
     @patch("src.agents.quality_quigon_agent.log_interaction")
     def test_lint_failure_recorded_in_results(self, mock_log, mock_eval, mock_lint, agent, handoff):
@@ -224,7 +228,7 @@ class TestQualityQuigonExecute:
         result = agent.execute(handoff)
         assert "fail" in result.lower() or "issue" in result.lower()
 
-    @patch("src.tools.linter.run_lint")
+    @patch("src.agents.quality_quigon_agent.run_lint")
     @patch("src.agents.quality_quigon_agent.run_regression_eval")
     @patch("src.agents.quality_quigon_agent.log_interaction")
     def test_scheduled_prompt_included_in_results(self, mock_log, mock_eval, mock_lint, agent, handoff):

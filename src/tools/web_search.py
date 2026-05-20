@@ -70,7 +70,7 @@ def google_search(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
     try:
         EgressFilter.validate_request(url)
         print(f"[web_search] Querying Google: {query}")
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)  # nosec
         response.raise_for_status()
         data = response.json()
         

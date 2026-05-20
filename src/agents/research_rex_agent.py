@@ -56,6 +56,7 @@ class ResearchRexAgent:
 
     def _calculate_success_metrics(self, repo_path: str, hardware_profile: dict = None, cost_score: float = None) -> dict:
         """Calculates research and utilization metrics based on recent scans."""
+        self.metrics_manager = SuccessMetricsManager(repo_path)
         logs = self.metrics_manager.load_logs(days=14)
         agent_logs = [l for l in logs if l.get("agent_id") == self.name]
         

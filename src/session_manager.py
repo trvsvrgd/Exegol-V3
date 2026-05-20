@@ -15,10 +15,13 @@ import time
 import traceback
 import hmac
 import hashlib
+import datetime
 from typing import Optional, Any, Dict
 
 from handoff import HandoffContext, SessionResult
 from tools.heartbeat_monitor import HeartbeatMonitor
+from tools.fleet_logger import failure_backlog_task_id, log_interaction
+from tools.state_manager import StateManager
 
 
 class SessionManager:
@@ -128,10 +131,29 @@ class SessionManager:
             # 1. Fresh import + instantiation — no cached instances
             agent_instance = self._create_fresh_instance(module_path, class_name, llm_client)
 
+            # Record current active state
+            self._write_active_state(
+                repo_path=handoff.repo_path,
+                agent_id=agent_id,
+                session_id=handoff.session_id,
+                status="running",
+                handoff_chain=handoff.chain_history or [],
+                next_agent_id="",
+                monologue=[],
+                errors=[],
+                output_summary=""
+            )
+
             # 2. Execute with the standardised handoff contract
             os.environ["EXEGOL_ACTIVE_AGENT"] = agent_id
+            os.environ["EXEGOL_ACTIVE_REPO"] = handoff.repo_path
+            os.environ["EXEGOL_ACTIVE_SESSION_ID"] = handoff.session_id
+            
             output = agent_instance.execute(handoff)
+            
             os.environ.pop("EXEGOL_ACTIVE_AGENT", None)
+            os.environ.pop("EXEGOL_ACTIVE_REPO", None)
+            os.environ.pop("EXEGOL_ACTIVE_SESSION_ID", None)
 
             result.outcome = "success"
             result.output_summary = str(output) if output else ""
@@ -159,8 +181,15 @@ class SessionManager:
         except Exception as exc:
             result.outcome = "failure"
             error_details = f"{type(exc).__name__}: {exc}"
-            result.errors.append(error_details)
-            result.output_summary = "Agent execution failed."
+            traceback_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+            result.errors = [error_details, "".join(traceback_lines)]
+            result.output_summary = f"Agent execution failed: {error_details}"
+            result.status_update = "blocked"
+            result.state_changes["failure_recovery"] = {
+                "blocked": True,
+                "retry_available": True,
+                "backlog_item_id": failure_backlog_task_id(agent_id, result.output_summary, result.errors),
+            }
             traceback.print_exc()
 
             # Always route terminal errors with 'FATAL' to the Exegol Fleet
@@ -171,39 +200,25 @@ class SessionManager:
                 except Exception as route_err:
                     print(f"[SessionManager] Failed to route fatal error: {route_err}")
 
-            # --- UNIVERSAL SELF-HEALING: Capture hard crashes ---
-            try:
-                from tools.backlog_manager import BacklogManager
-                from tools.slack_tool import post_to_slack
-                import datetime
-
-                repo_path = handoff.repo_path
-                bm = BacklogManager(repo_path)
-                
-                fail_task = {
-                    "id": f"crash_{agent_id}_{int(time.time())}",
-                    "summary": f"CRITICAL: {agent_id} hard crash",
-                    "priority": "critical",
-                    "type": "bug",
-                    "status": "todo",
-                    "source_agent": "SessionManager",
-                    "rationale": f"Agent crashed during execution. Session: {handoff.session_id}. Error: {error_details}",
-                    "created_at": datetime.datetime.now().isoformat()
-                }
-                bm.add_task(fail_task)
-                
-                slack_msg = (
-                    f"💀 *Agent Crash*: `{agent_id}` suffered a hard crash in session `{handoff.session_id}`.\n"
-                    f"*Error*: `{error_details}`\n"
-                    f"A critical bug report has been added to the backlog."
-                )
-                post_to_slack(slack_msg)
-            except Exception as inner_exc:
-                print(f"[SessionManager] Double-fault: Failed to report crash: {inner_exc}")
-
         finally:
             elapsed = time.time() - start_time
             result.duration_seconds = elapsed
+
+            # Update active state to finished status (success -> done, failure -> blocked)
+            status_map = {"success": "done", "failure": "blocked"}
+            self._write_active_state(
+                repo_path=handoff.repo_path,
+                agent_id=agent_id,
+                session_id=handoff.session_id,
+                status=status_map.get(result.outcome, "blocked"),
+                handoff_chain=handoff.chain_history or [],
+                next_agent_id=result.next_agent_id,
+                monologue=result.monologue,
+                errors=result.errors,
+                output_summary=result.output_summary,
+                backlog_item_id=result.state_changes.get("failure_recovery", {}).get("backlog_item_id", ""),
+                retry_available=result.outcome == "failure",
+            )
 
             # 3. Destroy the instance — no state retained
             del agent_instance
@@ -277,16 +292,61 @@ class SessionManager:
 
     @staticmethod
     def _persist_session_log(repo_path: str, result: SessionResult) -> Optional[str]:
-        """Write the SessionResult to .exegol/interaction_logs/{session_id}.json."""
-        logs_dir = os.path.join(repo_path, ".exegol", "interaction_logs")
-        os.makedirs(logs_dir, exist_ok=True)
-
-        log_file = os.path.join(logs_dir, f"{result.session_id}.json")
+        """Delegate persistence to fleet_logger for unified schema and naming."""
         try:
-            with open(log_file, "w", encoding="utf-8") as f:
-                json.dump(result.to_dict(), f, indent=4)
-            print(f"[SessionManager] Session log persisted -> {log_file}")
-            return log_file
+            filepath = log_interaction(
+                agent_id=result.agent_id,
+                outcome=result.outcome,
+                task_summary=result.output_summary,
+                repo_path=repo_path,
+                steps_used=result.steps_used,
+                duration_seconds=result.duration_seconds,
+                errors=result.errors,
+                session_id=result.session_id,
+                state_changes=result.state_changes,
+                metrics=result.metrics,
+                token_usage=result.token_usage,
+                prompt_count=result.prompt_count,
+                artifacts_written=result.artifacts_written,
+                is_final=True
+            )
+            print(f"[SessionManager] Session log persisted via fleet_logger -> {filepath}")
+            return filepath
         except Exception as exc:
             print(f"[SessionManager] Failed to persist log: {exc}")
             return None
+
+    @staticmethod
+    def _write_active_state(
+        repo_path: str,
+        agent_id: str,
+        session_id: str,
+        status: str,
+        handoff_chain: list,
+        next_agent_id: str = "",
+        monologue: list = None,
+        errors: list = None,
+        output_summary: str = "",
+        backlog_item_id: str = "",
+        retry_available: bool = False
+    ):
+        """Writes the active agent state to .exegol/fleet_state.json for live UI dashboard reporting."""
+        try:
+            state_data = {
+                "active_repo": repo_path,
+                "active_agent": agent_id,
+                "session_id": session_id,
+                "status": status,
+                "started_at": datetime.datetime.now().isoformat(),
+                "handoff_chain": handoff_chain,
+                "next_agent_id": next_agent_id,
+                "monologue": monologue or [],
+                "errors": errors or [],
+                "output_summary": output_summary,
+                "backlog_item_id": backlog_item_id,
+                "retry_available": retry_available,
+                "failure_logged_at": datetime.datetime.now().isoformat() if status == "blocked" else "",
+            }
+            StateManager(repo_path).write_fleet_state(state_data)
+        except Exception as e:
+            print(f"[SessionManager] Failed to write fleet_state.json: {e}")

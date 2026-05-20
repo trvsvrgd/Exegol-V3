@@ -1,5 +1,12 @@
 import sys
 import os
+
+os.environ["EXEGOL_DISABLE_SCHEDULER"] = "true"
+os.environ["EXEGOL_DISABLE_SLACK"] = "true"
+os.environ["SLACK_BOT_TOKEN"] = ""
+os.environ["SLACK_APP_TOKEN"] = ""
+os.environ["SLACK_WEBHOOK_URL"] = ""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +21,10 @@ class TestLoopGuard(unittest.TestCase):
         # Mock priority.json path to avoid modifying real config during tests
         self.priority_patcher = patch('orchestrator.PRIORITY_FILE_PATH', 'tests/mock_priority.json')
         self.mock_priority_path = self.priority_patcher.start()
+        self.scheduler_patcher = patch.object(ExegolOrchestrator, '_setup_cadence_engine', lambda _self: None)
+        self.scheduler_patcher.start()
+        self.listener_patcher = patch('orchestrator.slack_manager.setup_listener')
+        self.listener_patcher.start()
         
         # Create a dummy mock_priority.json
         with open('tests/mock_priority.json', 'w') as f:
@@ -31,6 +42,8 @@ class TestLoopGuard(unittest.TestCase):
 
     def tearDown(self):
         self.slack_patcher.stop()
+        self.listener_patcher.stop()
+        self.scheduler_patcher.stop()
         self.priority_patcher.stop()
         if os.path.exists('tests/mock_priority.json'):
             os.remove('tests/mock_priority.json')

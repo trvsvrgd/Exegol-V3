@@ -21,6 +21,10 @@ _FALSE_POSITIVE_PHRASES = (
     "resolve mock",     # instructions about mocks, not a mock itself
     "mock findings",    # vibe_vader routing description
     "mock issues",
+    "mock notice",
+    "mock mode",
+    "os.getenv",
+    "os.environ",
     "unhandled fetch calls and hardcoded",  # watcher wedge docstring
 )
 
@@ -110,6 +114,10 @@ def analyze_repository(repo_path: str, scan_path: str = "src") -> List[Dict]:
                     # so we still allow comment lines through.
                     is_comment = "#" in line or "//" in line
                     if inside_triple_quote and not is_comment:
+                        continue
+                    
+                    # Skip comments that look like status documentation (e.g. # choice1 | choice2 | choice3)
+                    if is_comment and ("|" in lower_line or "unknown" in lower_line):
                         continue
 
                     # Skip lines that are false-positive prose (system prompts referencing mock code)

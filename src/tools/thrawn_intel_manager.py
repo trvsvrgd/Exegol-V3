@@ -88,8 +88,11 @@ class ThrawnIntelManager:
                     current_q["answered_at"] = mtime
                 intel["questions"].append(current_q)
 
-        # Sanitize: ensure all question entries are dicts (guard against parse corruption)
-        intel["questions"] = [q for q in intel["questions"] if isinstance(q, dict)]
+        # Sanitize: ensure all question entries are dicts and have a 'question' key (guard against parse corruption)
+        intel["questions"] = [
+            q for q in intel["questions"] 
+            if isinstance(q, dict) and "question" in q
+        ]
 
         return intel
 

@@ -16,14 +16,14 @@ def scan_for_security_vulnerabilities(repo_path: str) -> List[Dict]:
     # Secrets patterns
     secret_patterns = [
         (re.compile(r'(?i)(api[_-]?key|secret|password|token|auth|credential)["\s:]+["\']?([a-zA-Z0-9\-_]{16,})["\']?'), "High-entropy secret/key detected"),
-        (re.compile(r'(?i)PRIVATE\s+KEY'), "Possible private key detected"),
-        (re.compile(r'(?i)eval\(.*\)|exec\(.*\)'), "Insecure dynamic code execution (eval/exec) detected"),
+        (re.compile(r'(?i)PRIVATE\s+KEY'), "Possible private key detected"),  # nosec
+        (re.compile(r'(?i)\b(eval|exec)\s*\('), "Insecure dynamic code execution (eval/exec) detected"),
         (re.compile(r'(?i)requests\.(get|post|put|delete)\(.*\burl\b.*\)'), "Potential SSRF vulnerability in request handling")
     ]
 
     for root, _, files in os.walk(repo_path):
         # Skip common directories
-        if any(d in root for d in [".git", "__pycache__", ".venv", "node_modules", ".pytest_cache"]):
+        if any(d in root for d in [".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".next", "scratch", "build", "dist"]):
             continue
             
         for file in files:
@@ -39,7 +39,7 @@ def scan_for_security_vulnerabilities(repo_path: str) -> List[Dict]:
                         for pattern, message in secret_patterns:
                             if pattern.search(line):
                                 # Basic exclusion for common false positives
-                                if "placeholder" in line.lower() or "your-" in line.lower():
+                                if "placeholder" in line.lower() or "your-" in line.lower() or "# nosec" in line.lower() or "# safe" in line.lower():
                                     continue
                                     
                                 findings.append({

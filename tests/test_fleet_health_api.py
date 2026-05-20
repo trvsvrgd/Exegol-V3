@@ -3,6 +3,12 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
+os.environ["EXEGOL_DISABLE_SCHEDULER"] = "true"
+os.environ["EXEGOL_DISABLE_SLACK"] = "true"
+os.environ["SLACK_BOT_TOKEN"] = ""
+os.environ["SLACK_APP_TOKEN"] = ""
+os.environ["SLACK_WEBHOOK_URL"] = ""
+
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 

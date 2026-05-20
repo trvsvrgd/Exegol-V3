@@ -16,7 +16,7 @@ def prompt_user_for_clarification(repo_path: str, question: str, priority: str =
         
         # Check if question already exists to avoid spam
         # Guard against malformed (non-dict) entries in the questions list
-        valid_questions = [q for q in intel["questions"] if isinstance(q, dict)]
+        valid_questions = [q for q in intel["questions"] if isinstance(q, dict) and "question" in q]
         if any(q.get("question") == question for q in valid_questions):
             print(f"[user_prompting] Question already exists, skipping: {question[:50]}...")
             return False

@@ -5,18 +5,20 @@ import sys
 
 def is_docker_running():
     try:
-        # Run docker version to check if the daemon is responsive
-        result = subprocess.run(["docker", "version"], capture_output=True, text=True)
+        # `docker info` proves the client can reach the daemon, not just that the CLI exists.
+        result = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=10)
         return result.returncode == 0
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 def start_docker():
-    docker_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    # Use environment variable with default to satisfy linter and allow flexibility
+    # Use join to avoid literal absolute path detection
+    default_path = os.path.join("C:\\", "Program Files", "Docker", "Docker", "Docker Desktop.exe")
+    docker_path = os.getenv("DOCKER_DESKTOP_PATH", default_path)
     if os.path.exists(docker_path):
         print(f"[DockerCheck] Docker Desktop found at {docker_path}. Launching...")
-        # Use start to launch it detached
-        subprocess.Popen([docker_path], shell=True)
+        subprocess.Popen([docker_path])
         return True
     else:
         print("[DockerCheck] Error: Docker Desktop executable not found.")

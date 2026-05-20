@@ -98,15 +98,22 @@ def _manual_ast_lint(path: str) -> Dict[str, Any]:
                         for target in node.targets:
                             if isinstance(target, ast.Name) and any(kw in target.id.lower() for kw in ['key', 'secret', 'password', 'token']):
                                 if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                                    if len(node.value.value) > 8:
+                                    val = node.value.value
+                                    # Skip if it looks like a filename or path rather than a secret
+                                    if len(val) > 8 and not any(val.endswith(ext) for ext in ['.json', '.txt', '.py', '.md', '.yaml', '.yml']):
                                         issues.append(f"{py_file.name}:{node.lineno} - Warning: Potential hardcoded credential in '{target.id}'")
 
                     # 2. Hardcoded Absolute Paths (Python)
                     if isinstance(node, ast.Constant) and isinstance(node.value, str):
                         val = node.value
                         # Matches Windows (C:\...) or Unix-style absolute paths (/usr/...)
-                        if re.match(r'^[a-z]:[\\/][^"\'\n]{2,}', val, re.I) or re.match(r'^/[^"\'\n/]{2,}/[^"\'\n/]{2,}', val):
-                            if not any(fp in val for fp in ["/dev/null", "/usr/bin/env", "node_modules", ".svg", ".png"]):
+                        # Harden Unix regex to avoid matching API routes (e.g. /api/v1/...)
+                        is_windows_path = re.match(r'^[a-z]:[\\/][^"\'\n]{2,}', val, re.I)
+                        is_unix_path = re.match(r'^/(?:bin|boot|dev|etc|home|lib|media|mnt|opt|root|run|sbin|srv|sys|tmp|usr|var|Users)/[^"\'\n/]{1,}', val)
+                        
+                        if is_windows_path or is_unix_path:
+                            # Skip API routes with parameters or common route chars
+                            if "{" not in val and "<" not in val and not any(fp in val for fp in ["/dev/null", "/usr/bin/env", "node_modules", ".svg", ".png"]):
                                 issues.append(f"{py_file.name}:{node.lineno} - Warning: Potential hardcoded absolute path '{val}'")
         except Exception as e:
             issues.append(f"Error reading {py_file.name}: {str(e)}")
@@ -147,8 +154,11 @@ def _manual_web_lint(path: str) -> List[str]:
                     # 2. Check for absolute paths
                     for match in path_pattern.finditer(line):
                         path_val = match.group(2)
-                        # Filter false positives
-                        if not any(fp in path_val for fp in ["/dev/null", "/usr/bin/env", "node_modules", ".svg", ".png"]):
+                        # Filter false positives: skip if it contains curly braces (likely API route) or is a known non-absolute path
+                        if "{" not in path_val and "<" not in path_val and not any(fp in path_val for fp in ["/dev/null", "/usr/bin/env", "node_modules", ".svg", ".png"]):
+                             # Additional check: Unix paths should start with a root dir
+                             if path_val.startswith("/") and not any(path_val.startswith(f"/{d}/") for d in ["bin", "boot", "dev", "etc", "home", "lib", "media", "mnt", "opt", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var", "Users"]):
+                                 continue
                              issues.append(f"{web_file.relative_to(root)}:{i} - Warning: Potential hardcoded absolute path '{path_val}'")
         except Exception as e:
             issues.append(f"Error reading {web_file}: {str(e)}")

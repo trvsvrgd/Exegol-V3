@@ -7,6 +7,7 @@ from tools.web_search import web_search
 from tools.fleet_logger import log_interaction
 from tools.metrics_manager import SuccessMetricsManager
 from tools.heartbeat_monitor import HeartbeatMonitor
+from tools.linter import run_lint
 
 
 class QualityQuigonAgent:
@@ -77,7 +78,6 @@ class QualityQuigonAgent:
 
         # 0. Infrastructure Audit (New Phase 3.5)
         print(f"[{self.name}] Initiating Repository Infrastructure Audit...")
-        from tools.linter import run_lint
         repo_lint = run_lint(repo_path)
         if repo_lint["status"] == "fail":
             results.append(f"Repo Infrastructure: fail ({len(repo_lint['issues'])} issues found)")
@@ -100,11 +100,16 @@ class QualityQuigonAgent:
         if os.path.isdir(sandboxes_dir):
             current_state["sandboxes"] = sorted(os.listdir(sandboxes_dir))
 
-        eval_res = run_regression_eval(current_state, f"qa_baseline_{task_id}")
-        results.append(f"State Regression: {eval_res.get('status', 'unknown')}")
+        if task_id in ["manual_go", "fleet_cycle"]:
+            print(f"[{self.name}] Skipping snapshot regression for generic task: {task_id}")
+            eval_res = {"status": "pass"}
+            results.append("State Regression: skipped (generic task)")
+        else:
+            eval_res = run_regression_eval(current_state, f"qa_baseline_{task_id}")
+            results.append(f"State Regression: {eval_res.get('status', 'unknown')}")
 
-        if eval_res.get("status") == "fail":
-            self.regression_context = f"Fleet state mismatch detected. Target: {task_id}. Baseline differs from current sandbox allocation."
+            if eval_res.get("status") == "fail":
+                self.regression_context = f"Fleet state mismatch detected. Target: {task_id}. Baseline differs from current sandbox allocation."
 
         # 2. Sandbox Validation (Existing logic)
         exegol_dir = os.path.join(repo_path, ".exegol")

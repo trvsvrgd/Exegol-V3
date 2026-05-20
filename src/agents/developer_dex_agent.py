@@ -69,6 +69,7 @@ class DeveloperDexAgent:
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required."""
         start_time = time.time()
+        duration = 0.0
         self._steps_used = 0
         repo_path = handoff.repo_path
         print(f"[{self.name}] Session {handoff.session_id} — waking up for repo: {repo_path}")
