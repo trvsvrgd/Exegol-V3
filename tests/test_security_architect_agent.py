@@ -115,6 +115,7 @@ def test_risk_score_low_when_empty():
 # Full Execute Cycle
 # ------------------------------------------------------------------
 
+@pytest.mark.external
 def test_execute_returns_summary_string(agent, handoff):
     result = agent.execute(handoff)
     assert isinstance(result, str)
@@ -122,6 +123,7 @@ def test_execute_returns_summary_string(agent, handoff):
     assert "Backlog submissions" in result
 
 
+@pytest.mark.external
 def test_execute_creates_report_file(agent, handoff):
     agent.execute(handoff)
     reports_dir = os.path.join(REPO_PATH, ".exegol", "security_reports")
@@ -130,6 +132,7 @@ def test_execute_creates_report_file(agent, handoff):
     assert len(report_files) >= 1
 
 
+@pytest.mark.external
 def test_execute_writes_to_backlog(agent, handoff):
     backlog_path = os.path.join(REPO_PATH, ".exegol", "backlog.json")
     # Count before
@@ -147,6 +150,7 @@ def test_execute_writes_to_backlog(agent, handoff):
     assert after_count >= before_count
 
 
+@pytest.mark.external
 def test_criticality_chains_to_compliance(agent, handoff):
     """If CRITICAL findings exist, agent should chain to compliance_cody."""
     agent.execute(handoff)

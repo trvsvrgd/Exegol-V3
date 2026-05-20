@@ -146,6 +146,20 @@ python src/orchestrator.py --fleet
 .\Start_Exegol.bat
 ```
 
+### Local Test Commands
+
+Run deterministic backend tests without network/provider/Docker dependencies:
+
+```bash
+python -m pytest -m "not external" --basetemp .pytest_tmp/local
+```
+
+Run quarantined external tests separately when providers, network, and Docker are available:
+
+```bash
+python -m pytest -m external --basetemp .pytest_tmp/external
+```
+
 Or, if you already know what you want: just say **`go`** and Exegol will identify the highest-priority repository and execute the predefined task suite for the appropriate agent — automatically.
 
 ---

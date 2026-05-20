@@ -23,8 +23,14 @@ from tools.egress_filter import EgressFilter
 from tools.fleet_logger import read_interaction_logs
 from tools.tool_registry import ToolRegistry
 from tools.hitl_manager import HITLManager
+<<<<<<< HEAD
 from tools.supervisor_health import build_supervisor_health
 from tools.backlog_manager import BacklogManager
+=======
+from tools.backlog_manager import BacklogManager
+from tools.operations import audit_env_health, docker_health, get_backend_process_state, is_retry_allowed, normalize_blocker_type, redact_secret
+from tools.state_migrations import StateMigrationManager
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -54,7 +60,7 @@ app.add_middleware(
 # Public endpoints that do NOT require authentication
 _PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
 
-API_KEY = os.getenv("EXEGOL_API_KEY")
+API_KEY = os.getenv("EXEGOL_API_KEY", "dev-local-key")
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -337,6 +343,22 @@ class ThrawnArchitectureRequest(BaseModel):
     repo_path: str
     pattern: str
 
+class AutonomousSoakRequest(BaseModel):
+    repo_path: str
+    cases: Optional[List[str]] = None
+
+class AutonomousSoakRetryRequest(BaseModel):
+    repo_path: str
+    case_name: str
+
+class RepoRequest(BaseModel):
+    repo_path: str
+
+class BlockerActionRequest(BaseModel):
+    repo_path: str
+    blocker_id: str
+    notes: Optional[str] = None
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -349,6 +371,17 @@ def healthcheck():
 def get_repos():
     orchestrator.load_config()
     return orchestrator.priority_config.get("repositories", [])
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+        "backend": get_backend_process_state(),
+        "docker": docker_health(timeout_seconds=1.5),
+        "env": audit_env_health(),
+        "api_key_configured": bool(API_KEY),
+        "timestamp": datetime.datetime.now().isoformat(),
+    }
 
 @app.get("/agents")
 def get_agents():
@@ -425,11 +458,85 @@ def update_human_queue(req: ActionQueueRequest):
 
     raise HTTPException(status_code=404, detail="Item not found")
 
+@app.post("/blockers/clear")
+def clear_blocker(req: BlockerActionRequest):
+    hm = HITLManager(req.repo_path)
+    if hm.resolve_task(req.blocker_id, status="done", notes=req.notes or "Cleared by operator."):
+        return {"status": "success", "action": "cleared", "blocker_id": req.blocker_id}
+    raise HTTPException(status_code=404, detail="Blocker not found")
+
+@app.post("/blockers/retry-go")
+def retry_blocked_repo_and_go(req: BlockerActionRequest):
+    hm = HITLManager(req.repo_path)
+    queue = hm.get_queue()
+    blocker = next((item for item in queue if item.get("id") == req.blocker_id), None)
+    if not blocker:
+        raise HTTPException(status_code=404, detail="Blocker not found")
+    if not is_retry_allowed(queue):
+        raise HTTPException(status_code=409, detail="Retry blocked: required HITL items are still pending.")
+
+    blocker["last_retry_at"] = datetime.datetime.now().isoformat()
+    blocker["retry_count"] = int(blocker.get("retry_count", 0)) + 1
+    hm.sm.write_json(hm.queue_file, queue)
+
+    session_id = uuid.uuid4().hex[:12]
+    _running_tasks[session_id] = {
+        "session_id": session_id,
+        "agent_id": "product_poe",
+        "repo_path": req.repo_path,
+        "status": "queued",
+        "result": None,
+        "started_at": datetime.datetime.now().isoformat(),
+        "finished_at": None,
+    }
+    _executor.submit(_execute_agent_sync, session_id, req.repo_path, "product_poe", "ollama")
+    return {"status": "queued", "action": "retry_go", "session_id": session_id, "blocker_id": req.blocker_id}
+
+@app.post("/autonomous/start")
+def start_autonomous(req: RepoRequest):
+    session_id = uuid.uuid4().hex[:12]
+    _running_tasks[session_id] = {
+        "session_id": session_id,
+        "agent_id": "fleet_cycle",
+        "repo_path": req.repo_path,
+        "status": "queued",
+        "result": None,
+        "started_at": datetime.datetime.now().isoformat(),
+        "finished_at": None,
+    }
+
+    def _run_cycle():
+        _running_tasks[session_id]["status"] = "running"
+        try:
+            orchestrator.run_fleet_cycle()
+            _running_tasks[session_id].update({
+                "status": "done",
+                "result": {"outcome": "success", "output_summary": "Fleet cycle completed."},
+                "finished_at": datetime.datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            _running_tasks[session_id].update({
+                "status": "error",
+                "result": {"outcome": "failure", "errors": [str(redact_secret(exc))]},
+                "finished_at": datetime.datetime.now().isoformat(),
+            })
+
+    _executor.submit(_run_cycle)
+    return {"status": "queued", "action": "start_autonomous", "session_id": session_id}
+
 # --- Epic 2: Backlog Management ---
 
 @app.get("/backlog")
 def get_backlog(repo_path: str):
     return BacklogManager(repo_path).load_backlog()
+
+@app.post("/backlog/dedupe")
+def dedupe_backlog(req: RepoRequest):
+    return BacklogManager(req.repo_path).dedupe_auto_failures()
+
+@app.post("/state/migrate")
+def migrate_state(req: RepoRequest):
+    return StateMigrationManager(req.repo_path).migrate()
 
 @app.post("/backlog/update")
 def update_backlog(req: BacklogUpdateRequest):
@@ -614,9 +721,22 @@ def get_fleet_health():
     """Aggregates health metrics across all managed repositories."""
     orchestrator.load_config()
     repos = orchestrator.priority_config.get("repositories", [])
+    valid_repos = [
+        repo for repo in repos
+        if repo.get("repo_path")
+        and os.path.isabs(repo.get("repo_path"))
+        and os.path.exists(repo.get("repo_path"))
+    ]
+    if not valid_repos:
+        root_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        valid_repos = [{
+            "repo_path": root_path,
+            "priority": 1,
+            "agent_status": "idle",
+        }]
     health_data = []
 
-    for repo in repos:
+    for repo in valid_repos:
         path = repo.get("repo_path")
         sm = StateManager(path)
         
@@ -655,6 +775,67 @@ def get_fleet_health():
         })
 
     return health_data
+
+@app.get("/fleet/supervisor-health")
+def get_supervisor_health(repo_path: str):
+    sm = StateManager(repo_path)
+    state = sm.read_json(".exegol/supervisor_state.json")
+    if state:
+        return state
+    from tools.prod_supervisor import ProdSupervisor
+    return ProdSupervisor.for_orchestrator(repo_path, orchestrator).run_once()
+
+@app.get("/fleet/operations")
+def get_operations(repo_path: str):
+    sm = StateManager(repo_path)
+    supervisor = sm.read_json(".exegol/supervisor_state.json") or {}
+    fleet_state = sm.read_json(".exegol/fleet_state.json") or {}
+    backlog = sm.read_json(".exegol/backlog.json") or []
+    queue = HITLManager(repo_path).get_queue()
+    logs = read_interaction_logs([repo_path], days=7)
+    logs.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    active_blockers = [item for item in queue if item.get("status") != "done"]
+    latest_blocker = active_blockers[0] if active_blockers else None
+    active_agent = getattr(orchestrator, "current_running_agent", None) or {}
+    scheduler_thread = getattr(orchestrator, "scheduler_thread", None)
+    scheduler_health = {
+        "status": "healthy" if scheduler_thread and scheduler_thread.is_alive() else "degraded",
+        "enabled": not getattr(orchestrator, "_should_stop_scheduler", False),
+        "heartbeat": datetime.datetime.now().isoformat() if scheduler_thread and scheduler_thread.is_alive() else None,
+    }
+    scheduler_state = sm.read_json(".exegol/scheduler_state.json")
+    if scheduler_state:
+        scheduler_health.update(scheduler_state)
+    return {
+        "status": supervisor.get("status") or fleet_state.get("supervisor_status") or "unknown",
+        "backend": get_backend_process_state(),
+        "components": supervisor.get("components") or fleet_state.get("process_state") or {},
+        "scheduler": scheduler_health,
+        "autonomous_loop": {
+            "status": "running" if getattr(orchestrator, "is_running_fleet", False) else "idle",
+        },
+        "active_agent": active_agent.get("agent_id") if isinstance(active_agent, dict) else None,
+        "queue_length": len([task for task in backlog if task.get("status") in ["todo", "pending_prioritization", "backlogged"]]),
+        "latest_blocker": latest_blocker,
+        "latest_blocker_type": normalize_blocker_type(latest_blocker.get("blocker_type")) if latest_blocker else None,
+        "recent_failures": [
+            {
+                "timestamp": log.get("timestamp"),
+                "agent_id": log.get("agent_id"),
+                "outcome": log.get("outcome"),
+                "errors": redact_secret(log.get("errors", [])),
+            }
+            for log in logs
+            if log.get("outcome") in {"failure", "timeout"}
+        ][:10],
+        "health_report": {
+            "supervisor": supervisor,
+            "fleet_state": fleet_state,
+            "scheduler_state": scheduler_state,
+            "env": audit_env_health(),
+            "pending_hitl": active_blockers,
+        },
+    }
 
 @app.get("/fleet/tools")
 def get_fleet_tools(repo_path: str):
@@ -819,6 +1000,55 @@ def audit_secrets(req: Dict[str, Any]):
     sm = SecretManager(repo_path)
     escalated = sm.escalate_unhealthy_keys()
     return {"status": "success", "escalated_count": len(escalated), "task_ids": escalated}
+
+
+# --- Production Soak Harness ---
+
+@app.post("/autonomous-soak/run")
+def run_autonomous_soak_endpoint(req: AutonomousSoakRequest):
+    """Run local autonomous failure injections and write a pass/fail artifact."""
+    from tools.autonomous_soak_harness import run_autonomous_soak
+    return run_autonomous_soak(req.repo_path, cases=req.cases)
+
+@app.post("/autonomous-soak/retry")
+def retry_autonomous_soak_endpoint(req: AutonomousSoakRetryRequest):
+    """Retry one soak case after an operator acknowledges or remediates a blocker."""
+    from tools.autonomous_soak_harness import retry_autonomous_soak_case
+    return retry_autonomous_soak_case(req.repo_path, req.case_name)
+
+@app.post("/supervisor/health/run")
+def run_supervisor_health(req: Dict[str, Any]):
+    """Run one production supervisor health/remediation pass for a repository."""
+    from tools.prod_supervisor import ProdSupervisor
+    repo_path = req.get("repo_path")
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Missing repo_path")
+    supervisor = ProdSupervisor.for_orchestrator(repo_path, orchestrator)
+    return supervisor.run_once()
+
+@app.post("/shutdown")
+def shutdown(req: Dict[str, Any]):
+    repo_path = req.get("repo_path") or os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+    sm = StateManager(repo_path)
+    state = sm.read_json(".exegol/fleet_state.json") or {}
+    state.update({
+        "schema_version": 1,
+        "updated_at": datetime.datetime.now().isoformat(),
+        "shutdown_requested": True,
+        "autonomous_loop": "stopped",
+        "scheduler": "stopping",
+        "process_state": {
+            **state.get("process_state", {}),
+            "autonomous_loop": {"status": "stopped"},
+            "scheduler": {"status": "stopping"},
+        },
+    })
+    sm.write_json(".exegol/fleet_state.json", state)
+    orchestrator._should_stop_scheduler = True
+    orchestrator.is_running_fleet = False
+    if hasattr(orchestrator, "session_manager"):
+        orchestrator.session_manager.shutdown_monitors()
+    return {"status": "success", "message": "Shutdown requested."}
 
 
 if __name__ == "__main__":

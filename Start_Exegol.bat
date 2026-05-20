@@ -6,11 +6,27 @@ cd /d "%~dp0"
 echo [Exegol] Launching Workbench...
 echo.
 
+<<<<<<< HEAD
 :: 0. Verify local startup configuration
 echo [0/4] Verifying startup configuration...
 if not exist ".venv\Scripts\python.exe" (
     echo [ERROR] Virtual environment not found at .venv\Scripts\python.exe
     echo Please create the virtual environment and install requirements first.
+=======
+:: 0. Verify Docker
+echo [0/3] Verifying Docker Status...
+call .venv\Scripts\activate & python scripts\verify_docker.py
+if %errorlevel% neq 0 (
+    echo [WARNING] Docker is not running. Sandbox features may be limited.
+    echo Continuing startup anyway...
+)
+
+:: 1. Start Supervisor (Backend + Frontend, log rotation, hung-start detection)
+echo [1/3] Starting process supervisor...
+if not exist ".venv\Scripts\activate" (
+    echo [ERROR] Virtual environment not found at .venv\Scripts\activate
+    echo Please ensure you are running this from the project root.
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
     pause
     exit /b 1
 )
@@ -38,6 +54,7 @@ if not exist "src\api.py" (
     pause
     exit /b 1
 )
+<<<<<<< HEAD
 start /min "Exegol Backend" cmd /k "set ""EXEGOL_REPO_PATH=%~dp0"" && set ""EXEGOL_DISABLE_SCHEDULER=true"" && call .venv\Scripts\activate && cd /d ""%~dp0src"" && python api.py"
 
 echo Waiting for backend health check...
@@ -51,6 +68,11 @@ if %errorlevel% neq 0 (
 
 :: 3. Start Frontend
 echo [3/4] Starting Frontend UI...
+=======
+
+:: 2. Verify Frontend Dependencies
+echo [2/3] Verifying Frontend UI dependencies...
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
 if not exist "workbench_ui" (
     echo [ERROR] workbench_ui folder not found.
     pause
@@ -69,6 +91,7 @@ if not exist "node_modules\" (
         exit /b 1
     )
 )
+<<<<<<< HEAD
 start /min "Exegol Frontend" cmd /k "npm run dev -- --hostname 127.0.0.1 --port 3000"
 popd
 
@@ -90,6 +113,29 @@ echo =======================================================
 echo  Exegol Workbench is running.
 echo  API: http://127.0.0.1:8000
 echo  UI:  http://127.0.0.1:3000
+=======
+popd
+
+if not exist ".exegol\logs" mkdir ".exegol\logs"
+start /min "Exegol Supervisor" cmd /c "call .venv\Scripts\activate & python scripts\supervisor.py --repo-root ""%CD%"""
+
+
+:: 3. Verify Startup and Open Browser
+echo [3/3] Verifying startup contract...
+timeout /t 5 >nul
+call .venv\Scripts\activate & python scripts\verify_startup.py --repo-path "%CD%"
+if %errorlevel% neq 0 (
+    echo [WARNING] Startup verification reported degraded state. See .exegol\logs\backend.log and .exegol\logs\frontend.log.
+)
+start http://localhost:3000
+
+echo.
+echo =======================================================
+echo  🚀 Exegol Workbench is now running in the background.
+echo  API: http://localhost:8000
+echo  UI:  http://localhost:3000
+echo  Logs: .exegol\logs\backend.log and .exegol\logs\frontend.log
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
 echo =======================================================
 echo.
 echo Press any key to stop all processes and exit...

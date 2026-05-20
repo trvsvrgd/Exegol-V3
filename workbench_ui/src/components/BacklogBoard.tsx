@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiGet, apiPost } from '../app/api-client';
 
 interface Task {
@@ -12,12 +12,14 @@ interface Task {
     description?: string;
 }
 
+type TaskUpdate = Partial<Pick<Task, "summary" | "priority" | "status" | "target_agent" | "description">>;
+
 export default function BacklogBoard({ repoPath }: { repoPath: string }) {
     const [backlog, setBacklog] = useState<Task[]>([]);
     const [loading, setLoading] = useState(true);
     const [hideDone, setHideDone] = useState(true);
 
-    const fetchBacklog = async () => {
+    const fetchBacklog = useCallback(async () => {
         try {
             const data = await apiGet<Task[]>(`/backlog?repo_path=${encodeURIComponent(repoPath)}`);
             setBacklog(data);
@@ -26,13 +28,16 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
             console.error("Backlog fetch error:", err);
             setLoading(false);
         }
-    };
-
-    useEffect(() => {
-        fetchBacklog();
     }, [repoPath]);
 
-    const handleUpdate = async (taskId: string, updates: any) => {
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            void fetchBacklog();
+        }, 0);
+        return () => window.clearTimeout(timeout);
+    }, [fetchBacklog]);
+
+    const handleUpdate = async (taskId: string, updates: TaskUpdate) => {
         try {
             await apiPost('/backlog/update', { repo_path: repoPath, task_id: taskId, updates });
             fetchBacklog();

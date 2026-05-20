@@ -1,8 +1,9 @@
 {
   "repositories": [
     {
-      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3",
+      "repo_path": "test_repo",
       "priority": 1,
+<<<<<<< HEAD
       "model_routing_preference": "ollama",
       "agent_status": "idle",
       "max_steps_policy": 100,
@@ -62,12 +63,14 @@
       "max_steps_policy": 6,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
+=======
+      "agent_status": "blocked"
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
     }
   ],
   "global_settings": {
-    "slack_approvals_enabled": true,
-    "report_email": "travisvreugdenhil@gmail.com",
     "context_isolation": {
+<<<<<<< HEAD
       "enabled": true,
       "fresh_instance_per_execution": true,
       "max_handoff_fields": 7,
@@ -87,6 +90,9 @@
     "vibe_audit": {
       "last_run": "2026-05-02",
       "frequency_days": 7
+=======
+      "max_handoff_depth": 3
+>>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
     }
   }
 }

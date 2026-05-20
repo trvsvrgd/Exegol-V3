@@ -158,7 +158,10 @@ export default function CostDashboard() {
   }, [repoPath, days]);
 
   useEffect(() => {
-    fetchCosts();
+    const timeout = window.setTimeout(() => {
+      void fetchCosts();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [fetchCosts]);
 
   const topAgentMax = report

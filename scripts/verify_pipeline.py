@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 's
 from session_manager import SessionManager
 from handoff import HandoffContext
 from agents.registry import AGENT_REGISTRY
+from tools.state_manager import StateManager
 
 # --- SETUP ---
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -28,8 +29,7 @@ def setup_dummy_backlog():
             "status": "todo"
         }
     ]
-    with open(BACKLOG_FILE, 'w') as f:
-        json.dump(backlog, f, indent=4)
+    StateManager(REPO_PATH).write_json(".exegol/backlog.json", backlog)
     
     if os.path.exists(USER_ACTION_FILE):
         os.remove(USER_ACTION_FILE)
