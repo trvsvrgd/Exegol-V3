@@ -81,10 +81,10 @@ def _manual_ast_lint(path: str) -> Dict[str, Any]:
     issues = []
     
     for py_file in root.rglob("*.py"):
-        if "node_modules" in str(py_file) or "venv" in str(py_file) or ".exegol" in str(py_file):
+        if "node_modules" in str(py_file) or "venv" in str(py_file) or ".exegol" in str(py_file) or "scratch" in str(py_file):
             continue
         try:
-            with open(py_file, "r", encoding="utf-8") as f:
+            with open(py_file, "r", encoding="utf-8-sig") as f:
                 content = f.read()
                 try:
                     tree = ast.parse(content)
@@ -139,11 +139,11 @@ def _manual_web_lint(path: str) -> List[str]:
 
     for web_file in files_to_scan:
         # Skip build artifacts and dependencies
-        if any(skip in str(web_file) for skip in ["node_modules", ".next", "dist", "build", ".exegol"]):
+        if any(skip in str(web_file) for skip in ["node_modules", ".next", "dist", "build", ".exegol", "venv", ".venv", "scratch"]):
             continue
             
         try:
-            with open(web_file, "r", encoding="utf-8") as f:
+            with open(web_file, "r", encoding="utf-8-sig") as f:
                 for i, line in enumerate(f, 1):
                     # 1. Check for secrets
                     for match in secret_pattern.finditer(line):

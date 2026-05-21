@@ -22,6 +22,7 @@ interface AutonomousStatus {
   continuous_mode: boolean;
   thread_alive: boolean;
   cycle_running: boolean;
+  repo_path?: string | null;
 }
 
 interface SupervisorHealth {
@@ -78,7 +79,8 @@ export default function Home() {
     setControlMessage(null);
     try {
       const endpoint = enabled ? "/fleet/start-autonomous" : "/fleet/stop-autonomous";
-      const data = await apiPost<AutonomousStatus & {status: string}>(endpoint, {});
+      const payload = enabled && activeRepo ? { repo_path: activeRepo } : {};
+      const data = await apiPost<AutonomousStatus & {status: string}>(endpoint, payload);
       setAutonomousMode(data.continuous_mode);
       setCycleRunning(data.cycle_running);
       setControlMessage(enabled ? "Autonomous fleet loop started." : "Autonomous fleet loop stopped.");
@@ -96,9 +98,10 @@ export default function Home() {
     setControlError(null);
     setControlMessage(null);
     try {
-      await apiPost<{status: string; session_id: string}>("/autonomous/start", { repo_path: activeRepo });
-      setCycleRunning(true);
-      setControlMessage("Fleet run queued for the selected repository.");
+      const data = await apiPost<AutonomousStatus & {status: string}>("/fleet/start-autonomous", { repo_path: activeRepo });
+      setAutonomousMode(data.continuous_mode);
+      setCycleRunning(data.cycle_running);
+      setControlMessage("Autonomous fleet loop started for the selected repository.");
     } catch (e) {
       console.error("Failed to run autonomous fleet", e);
       setControlError("Fleet run request failed. Check backend logs.");

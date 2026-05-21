@@ -44,10 +44,10 @@ MANAGED_KEYS = {
     "SLACK_BOT_TOKEN": {
         "provider": "slack",
         "display_name": "Slack Bot Token",
-        "placeholder": "",
+        "placeholder": "your_slack_token_here",
         "rotation_url": "https://api.slack.com/apps",
     },
-    "EXEGOL_API_KEY": {
+    "EXEGOL_API_KEY":{
         "provider": "exegol",
         "display_name": "Exegol Control Tower",
         "placeholder": "dev-local-key",

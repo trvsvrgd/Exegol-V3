@@ -35,16 +35,23 @@ def _extract_json_array(text: str) -> Optional[list]:
     if not text:
         return None
 
+    def unwrap_dict(d: dict) -> Optional[list]:
+        for key in ("actions", "steps", "plan", "tasks"):
+            if isinstance(d.get(key), list):
+                return d[key]
+        if "type" in d and "path" in d:
+            return [d]
+        return None
+
     # Strategy 1: Direct parse
     try:
         result = json.loads(text)
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
-            # Unwrap common LLM dict wrappers
-            for key in ("actions", "steps", "plan", "tasks"):
-                if isinstance(result.get(key), list):
-                    return result[key]
+            unwrapped = unwrap_dict(result)
+            if unwrapped is not None:
+                return unwrapped
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -55,9 +62,9 @@ def _extract_json_array(text: str) -> Optional[list]:
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
-            for key in ("actions", "steps", "plan", "tasks"):
-                if isinstance(result.get(key), list):
-                    return result[key]
+            unwrapped = unwrap_dict(result)
+            if unwrapped is not None:
+                return unwrapped
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -77,9 +84,9 @@ def _extract_json_array(text: str) -> Optional[list]:
         try:
             result = json.loads(match.group(1))
             if isinstance(result, dict):
-                for key in ("actions", "steps", "plan", "tasks"):
-                    if isinstance(result.get(key), list):
-                        return result[key]
+                unwrapped = unwrap_dict(result)
+                if unwrapped is not None:
+                    return unwrapped
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -106,7 +113,7 @@ def _validate_plan(actions: list) -> list:
 
         # Normalise key aliases before validation
         action.setdefault("path", action.pop("file", action.pop("filename", None)))
-        action.setdefault("content", action.pop("text", action.pop("code", None)))
+        action.setdefault("content", action.pop("text", action.pop("code", action.pop("replacement", None))))
         action.setdefault("target", action.pop("pattern", ""))
         action.setdefault("reason", "Applying agentic coding update")
 
@@ -195,12 +202,42 @@ def execute_coding_task(
     # 2. Plan
     files_in_repo = os.listdir(repo_path)
 
+    # Automatically extract candidate files mentioned in the prompt and read their contents to provide context
+    candidates = re.findall(r'[a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9_]+', task_description)
+    mentioned_files = {}
+    for candidate in candidates:
+        norm_path = candidate.replace('\\', '/').strip('`*"\'')
+        possible_paths = [
+            os.path.join(repo_path, norm_path),
+            os.path.join(repo_path, 'src', norm_path),
+        ]
+        for p in possible_paths:
+            if os.path.isfile(p):
+                abs_p = os.path.realpath(p)
+                if abs_p.startswith(os.path.realpath(repo_path)):
+                    try:
+                        with open(abs_p, 'r', encoding='utf-8-sig') as f:
+                            content = f.read()
+                        mentioned_files[norm_path] = content
+                        break
+                    except Exception:
+                        pass
+
+    file_contents_context = ""
+    if mentioned_files:
+        file_contents_context = "\n\nFile Contents for Context:\n"
+        for fname, fcontent in mentioned_files.items():
+            lines = fcontent.splitlines()
+            if len(lines) > 300:
+                fcontent = "\n".join(lines[:300]) + "\n[... truncated ...]"
+            file_contents_context += f"--- Path: {fname} ---\n{fcontent}\n\n"
+
     planning_prompt = f"""You are the 'Agentic Coding' engine. Your ONLY output must be a valid JSON array — no explanations, no markdown, no prose.
 
 Task to implement:
 {task_description}
 
-Implementation Research: {json.dumps(research_results)}
+Implementation Research: {json.dumps(research_results)}{file_contents_context}
 
 Existing Files (Top Level): {files_in_repo}
 

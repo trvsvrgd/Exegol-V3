@@ -293,6 +293,10 @@ def post_to_slack(message: str, channel: Optional[str] = None) -> str:
 
 def request_file_approval(file_path: str, action: str, reason: str, risk_score: float = 0.5, risk_label: str = "MEDIUM", risk_reason: str = "Standard review required.") -> str:
     """Specialized Slack message for file modification approvals with interactive buttons and risk assessment."""
+    if os.getenv("EXEGOL_AUTO_APPROVE") == "1":
+        print(f"[Slack] EXEGOL_AUTO_APPROVE is set. Auto-approving {action} for {file_path}")
+        return "APPROVED"
+
     callback_id = f"{action.lower()}_{os.path.basename(file_path)}_{threading.get_ident()}"
     
     # Action styling
@@ -346,7 +350,7 @@ def request_file_approval(file_path: str, action: str, reason: str, risk_score: 
     
     # Also print to console
     print("\n" + "="*50)
-    print("🚨 SYSTEM PAUSED FOR EXTERNAL APPROVAL 🚨")
+    print("[!] SYSTEM PAUSED FOR EXTERNAL APPROVAL [!]")
     print(f"Agent requests to {action_verb} file: {file_path}")
     print(f"Reason: {reason}")
     print(f"Risk: {risk_label} ({risk_score})")

@@ -125,6 +125,7 @@ def _execute_agent_sync(session_id: str, repo_path: str, agent_id: str, model: s
 
 _continuous_mode = False
 _continuous_fleet_thread = None
+_continuous_repo_path: Optional[str] = None
 _continuous_lock = threading.Lock()
 
 def _continuous_fleet_loop():
@@ -133,9 +134,14 @@ def _continuous_fleet_loop():
         with _continuous_lock:
             if not _continuous_mode:
                 break
+            repo_path = _continuous_repo_path
 
-        print("[API] Running continuous fleet cycle...")
-        orchestrator.run_fleet_cycle()
+        if repo_path:
+            print(f"[API] Running continuous fleet cycle for {repo_path}...")
+            orchestrator.run_fleet_cycle(repo_path=repo_path)
+        else:
+            print("[API] Running continuous fleet cycle...")
+            orchestrator.run_fleet_cycle()
 
         for _ in range(10):
             with _continuous_lock:
@@ -148,12 +154,15 @@ def _autonomous_status() -> Dict[str, Any]:
         "continuous_mode": _continuous_mode,
         "thread_alive": bool(_continuous_fleet_thread and _continuous_fleet_thread.is_alive()),
         "cycle_running": orchestrator.is_running_fleet,
+        "repo_path": _continuous_repo_path,
     }
 
 @app.post("/fleet/start-autonomous")
-def start_autonomous_fleet():
-    global _continuous_mode, _continuous_fleet_thread
+def start_autonomous_fleet(req: Optional[RepoRequest] = None):
+    global _continuous_mode, _continuous_fleet_thread, _continuous_repo_path
     with _continuous_lock:
+        if req and req.repo_path:
+            _continuous_repo_path = os.path.abspath(req.repo_path)
         _continuous_mode = True
         if _continuous_fleet_thread is None or not _continuous_fleet_thread.is_alive():
             _continuous_fleet_thread = threading.Thread(target=_continuous_fleet_loop, daemon=True)
@@ -162,9 +171,10 @@ def start_autonomous_fleet():
 
 @app.post("/fleet/stop-autonomous")
 def stop_autonomous_fleet():
-    global _continuous_mode
+    global _continuous_mode, _continuous_repo_path
     with _continuous_lock:
         _continuous_mode = False
+        _continuous_repo_path = None
     orchestrator.is_running_fleet = False
     return {"status": "success", **_autonomous_status()}
 
@@ -173,7 +183,8 @@ def toggle_autonomous_fleet(req: Dict[str, Any] = None):
     global _continuous_mode, _continuous_fleet_thread
     requested = None if req is None else req.get("enabled")
     if requested is True:
-        return start_autonomous_fleet()
+        repo_path = req.get("repo_path") if req else None
+        return start_autonomous_fleet(RepoRequest(repo_path=repo_path) if repo_path else None)
     if requested is False:
         return stop_autonomous_fleet()
 

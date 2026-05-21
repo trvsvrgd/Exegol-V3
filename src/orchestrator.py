@@ -20,6 +20,7 @@ from session_manager import SessionManager
 from tools.slack_tool import slack_manager
 from tools.fleet_logger import log_interaction
 from tools.state_manager import StateManager
+from tools.objective_manager import ObjectiveManager
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
@@ -658,6 +659,9 @@ class ExegolOrchestrator:
             self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "thoughtful_thrawn")
             return
 
+        if self._dispatch_objective_step(repo_info):
+            return
+
         # Check backlog for pending tasks
         backlog_path = os.path.join(exegol_dir, "backlog.json")
         if os.path.exists(backlog_path):
@@ -678,6 +682,138 @@ class ExegolOrchestrator:
             status="idle",
             output_summary="No pending autonomous work found.",
         )
+
+    def _dispatch_objective_step(self, repo_info: Dict[str, Any]) -> bool:
+        """Route active objective phases before falling back to generic backlog work."""
+        repo_path = repo_info.get("repo_path")
+        manager = ObjectiveManager(repo_path)
+        objective = manager.load()
+        goal = str(objective.get("goal") or "").strip()
+        if not goal:
+            return False
+
+        phase = objective.get("phase", "idle")
+        if phase in {"done", "failed_budget", "blocked_human"}:
+            self._write_fleet_state(
+                repo_path=repo_path,
+                status=objective.get("status", "idle"),
+                active_agent=None,
+                output_summary=self._objective_status_summary(objective),
+            )
+            return True
+
+        if phase == "blocked_environment":
+            if manager.can_transition("remediating"):
+                objective = manager.transition("remediating", last_agent_id="orchestrator")
+                phase = objective["phase"]
+
+        if phase == "idle":
+            objective = manager.transition("planning", last_agent_id="orchestrator")
+            phase = objective["phase"]
+
+        dispatch = self._objective_dispatch_for_phase(phase)
+        if not dispatch:
+            return False
+
+        agent_id, max_steps = dispatch
+        self._write_fleet_state(
+            repo_path=repo_path,
+            status="running",
+            active_agent=agent_id,
+            output_summary=f"Objective phase '{phase}' dispatched to {agent_id}.",
+        )
+        result = self.wake_and_execute_agent(
+            repo_info,
+            repo_info.get("model_routing_preference", "ollama"),
+            max_steps,
+            agent_id,
+        )
+        self._record_objective_result(manager, phase, agent_id, result)
+        return True
+
+    @staticmethod
+    def _objective_dispatch_for_phase(phase: str) -> Optional[tuple[str, int]]:
+        dispatch = {
+            "planning": ("product_poe", 10),
+            "implementing": ("developer_dex", 15),
+            "validating": ("quality_quigon", 10),
+            "retrying": ("developer_dex", 10),
+            "remediating": ("watcher_wedge", 10),
+        }
+        return dispatch.get(phase)
+
+    def _record_objective_result(self, manager: ObjectiveManager, phase: str, agent_id: str, result: Any) -> None:
+        result_summary = self._objective_result_payload(result)
+        if not result:
+            self._safe_objective_transition(
+                manager,
+                "blocked_environment",
+                last_agent_id=agent_id,
+                last_result=result_summary,
+                blocked_reason=f"{agent_id} did not return a result.",
+            )
+            return
+
+        outcome = getattr(result, "outcome", "unknown")
+        if outcome == "success":
+            next_phase = {
+                "planning": "implementing",
+                "implementing": "validating",
+                "validating": "done",
+                "retrying": "implementing",
+                "remediating": "retrying",
+            }.get(phase)
+            if next_phase:
+                self._safe_objective_transition(
+                    manager,
+                    next_phase,
+                    last_agent_id=getattr(result, "agent_id", agent_id),
+                    last_result=result_summary,
+                )
+            return
+
+        blocked_reason = "; ".join(getattr(result, "errors", []) or []) or getattr(result, "output_summary", "") or f"{agent_id} failed."
+        next_phase = "retrying" if phase in {"implementing", "validating"} else "blocked_environment"
+        self._safe_objective_transition(
+            manager,
+            next_phase,
+            last_agent_id=getattr(result, "agent_id", agent_id),
+            last_result=result_summary,
+            blocked_reason=blocked_reason if next_phase == "blocked_environment" else None,
+        )
+
+    @staticmethod
+    def _objective_result_payload(result: Any) -> Dict[str, Any]:
+        if not result:
+            return {"outcome": "missing_result"}
+        return {
+            "agent_id": getattr(result, "agent_id", None),
+            "session_id": getattr(result, "session_id", None),
+            "outcome": getattr(result, "outcome", None),
+            "output_summary": getattr(result, "output_summary", ""),
+            "errors": getattr(result, "errors", []),
+            "next_agent_id": getattr(result, "next_agent_id", ""),
+        }
+
+    @staticmethod
+    def _objective_status_summary(objective: Dict[str, Any]) -> str:
+        goal = objective.get("goal") or "Objective"
+        phase = objective.get("phase") or "unknown"
+        if objective.get("blocked_reason"):
+            return f"{goal} is {phase}: {objective['blocked_reason']}"
+        return f"{goal} is {phase}."
+
+    @staticmethod
+    def _safe_objective_transition(manager: ObjectiveManager, phase: str, **kwargs) -> None:
+        try:
+            manager.transition(phase, **kwargs)
+        except ValueError as exc:
+            manager.transition(
+                "blocked_environment",
+                last_agent_id=kwargs.get("last_agent_id"),
+                last_result=kwargs.get("last_result"),
+                blocked_reason=str(exc),
+            )
 
     def check_compliance_monitoring(self):
         """Checks if a monthly compliance sweep is due and triggers Cody."""

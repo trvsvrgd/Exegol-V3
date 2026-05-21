@@ -65,7 +65,7 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
         await apiPost("/blockers/retry-go", { repo_path: repoPath, blocker_id: ops.latest_blocker.id });
       }
       if (action === "autonomous") {
-        await apiPost("/autonomous/start", { repo_path: repoPath });
+        await apiPost("/fleet/start-autonomous", { repo_path: repoPath });
       }
       await refresh();
     } catch (err) {

@@ -13,7 +13,9 @@ os.environ["SLACK_WEBHOOK_URL"] = ""
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import orchestrator as orchestrator_module
+from handoff import SessionResult
 from orchestrator import ExegolOrchestrator
+from tools.objective_manager import ObjectiveManager
 
 
 @pytest.fixture
@@ -236,3 +238,170 @@ def test_trigger_go_records_processing_failure(orchestrator, monkeypatch):
 
     config = json.loads(priority_file.read_text(encoding="utf-8"))
     assert config["repositories"][0]["agent_status"] == "blocked"
+
+
+def test_objective_idle_dispatches_planning_before_backlog(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    ObjectiveManager(str(repo_path)).create_or_update(goal="Ship the objective loop")
+    (repo_path / ".exegol" / "backlog.json").write_text(
+        json.dumps([{"id": "generic", "status": "todo", "summary": "Generic backlog work"}]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        calls.append((repo_info["repo_path"], routing, max_steps, agent_id))
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="planning123",
+            outcome="success",
+            output_summary="Planned objective work.",
+        )
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    assert calls == [(os.path.abspath(repo_path), "ollama", 10, "product_poe")]
+    objective = ObjectiveManager(str(repo_path)).load()
+    assert objective["phase"] == "implementing"
+    assert objective["last_agent_id"] == "product_poe"
+    assert objective["last_result"]["outcome"] == "success"
+
+
+def test_objective_implementing_dispatches_developer_dex(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    manager = ObjectiveManager(str(repo_path))
+    manager.create_or_update(goal="Ship the objective loop")
+    manager.transition("planning")
+    manager.transition("implementing", active_task_id="objective_loop_dispatch")
+    calls = []
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        calls.append((max_steps, agent_id))
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="dex123",
+            outcome="success",
+            output_summary="Implemented objective slice.",
+        )
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    assert calls == [(15, "developer_dex")]
+    objective = ObjectiveManager(str(repo_path)).load()
+    assert objective["phase"] == "validating"
+    assert objective["last_agent_id"] == "developer_dex"
+
+
+def test_empty_objective_falls_back_to_backlog_dispatch(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    ObjectiveManager(str(repo_path)).load()
+    (repo_path / ".exegol" / "backlog.json").write_text(
+        json.dumps([{"id": "generic", "status": "todo", "summary": "Generic backlog work"}]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        calls.append((max_steps, agent_id))
+        return SessionResult(agent_id=agent_id, session_id="poe123", outcome="success")
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    assert calls == [(10, "product_poe")]
+
+
+def test_seeded_objective_advances_to_done_across_fleet_cycles(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    ObjectiveManager(str(repo_path)).create_or_update(
+        goal="Make Run Autonomous Fleet production ready",
+        success_criteria=["planning completed", "implementation completed", "validation completed"],
+        constraints=["deterministic local test only"],
+    )
+    dispatched = []
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        dispatched.append(agent_id)
+        return SessionResult(
+            agent_id=agent_id,
+            session_id=f"{agent_id}-session",
+            outcome="success",
+            output_summary=f"{agent_id} completed objective phase.",
+        )
+
+    monkeypatch.setattr(orch, "check_compliance_monitoring", lambda: None)
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
+    assert ObjectiveManager(str(repo_path)).load()["phase"] == "implementing"
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
+    assert ObjectiveManager(str(repo_path)).load()["phase"] == "validating"
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
+    objective = ObjectiveManager(str(repo_path)).load()
+
+    assert dispatched == ["product_poe", "developer_dex", "quality_quigon"]
+    assert objective["phase"] == "done"
+    assert objective["status"] == "done"
+    assert objective["last_agent_id"] == "quality_quigon"
+    assert objective["last_result"]["outcome"] == "success"
+
+    events = (repo_path / ".exegol" / "objective_events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"phase": "done"' in event for event in events)
+
+
+def test_objective_implementation_failure_transitions_to_retrying(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    manager = ObjectiveManager(str(repo_path))
+    manager.create_or_update(goal="Recover from implementation failure")
+    manager.transition("planning")
+    manager.transition("implementing", active_task_id="objective_loop_verification")
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="dex-failed",
+            outcome="failure",
+            output_summary="Patch failed validation before write.",
+            errors=["synthetic implementation failure"],
+        )
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    objective = ObjectiveManager(str(repo_path)).load()
+    assert objective["phase"] == "retrying"
+    assert objective["status"] == "running"
+    assert objective["last_agent_id"] == "developer_dex"
+    assert objective["last_result"]["errors"] == ["synthetic implementation failure"]
+
+
+def test_objective_planning_failure_records_environment_blocker(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    ObjectiveManager(str(repo_path)).create_or_update(goal="Recover from planning failure")
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="poe-failed",
+            outcome="failure",
+            output_summary="Provider unavailable during planning.",
+            errors=["provider unavailable"],
+        )
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    objective = ObjectiveManager(str(repo_path)).load()
+    assert objective["phase"] == "blocked_environment"
+    assert objective["status"] == "blocked"
+    assert objective["blocked_reason"] == "provider unavailable"
+    assert objective["last_agent_id"] == "product_poe"
