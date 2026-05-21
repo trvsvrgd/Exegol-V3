@@ -29,11 +29,11 @@ def probe(url: str, api_key: str = "") -> bool:
         return False
 
 
-def start_process(name: str, command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen:
+def start_process(name: str, command: list[str], cwd: Path, log_path: Path, env: Optional[dict] = None) -> subprocess.Popen:
     rotate_log(log_path)
     log_file = open(log_path, "a", encoding="utf-8", buffering=1)
     log_file.write(f"\n[{datetime.now().isoformat()}] starting {name}: {' '.join(command)}\n")
-    return subprocess.Popen(command, cwd=str(cwd), stdout=log_file, stderr=subprocess.STDOUT, text=True)
+    return subprocess.Popen(command, cwd=str(cwd), stdout=log_file, stderr=subprocess.STDOUT, text=True, env=env)
 
 
 def stop_process(proc: Optional[subprocess.Popen]) -> None:
@@ -61,11 +61,15 @@ def main() -> int:
     venv_python = root / ".venv" / "Scripts" / "python.exe"
     python_exe = str(venv_python if venv_python.exists() else sys.executable)
     backend_cmd = [python_exe, "api.py"]
-    frontend_cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "dev"]
+    backend_env = os.environ.copy()
+    backend_env["EXEGOL_DEFER_MISSED_JOBS"] = "1"
+    frontend_cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", "3000"]
+    frontend_env = os.environ.copy()
+    frontend_env["PORT"] = "3000"
 
     processes: Dict[str, subprocess.Popen] = {
-        "backend": start_process("backend", backend_cmd, root / "src", logs_dir / "backend.log"),
-        "frontend": start_process("frontend", frontend_cmd, root / "workbench_ui", logs_dir / "frontend.log"),
+        "backend": start_process("backend", backend_cmd, root / "src", logs_dir / "backend.log", env=backend_env),
+        "frontend": start_process("frontend", frontend_cmd, root / "workbench_ui", logs_dir / "frontend.log", env=frontend_env),
     }
 
     stopping = False
@@ -96,9 +100,9 @@ def main() -> int:
             if proc.poll() is not None:
                 print(f"[supervisor] {name} exited with {proc.returncode}; restarting.")
                 if name == "backend":
-                    processes[name] = start_process(name, backend_cmd, root / "src", logs_dir / "backend.log")
+                    processes[name] = start_process(name, backend_cmd, root / "src", logs_dir / "backend.log", env=backend_env)
                 else:
-                    processes[name] = start_process(name, frontend_cmd, root / "workbench_ui", logs_dir / "frontend.log")
+                    processes[name] = start_process(name, frontend_cmd, root / "workbench_ui", logs_dir / "frontend.log", env=frontend_env)
         time.sleep(args.poll_seconds)
 
     for proc in processes.values():

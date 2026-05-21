@@ -86,6 +86,7 @@ class ProdSupervisor:
         findings.extend(self._check_stale_sessions())
 
         remediations = [self._remediate(finding) for finding in findings]
+        self._reconcile_resolved_blockers(remediations)
         state = {
             "timestamp": self._now(),
             "status": "healthy" if not findings else "degraded",
@@ -247,9 +248,50 @@ class ProdSupervisor:
             subject=f"{component}:{subject}",
             source="prod_supervisor",
         )
+        for item in queue:
+            if item.get("id") == blocker_id:
+                item["supervisor_component"] = component
+                break
         self.sm.write_json(self.hitl.queue_file, queue)
         self.hitl._sync_to_markdown(queue)
         return blocker_id
+
+    def _reconcile_resolved_blockers(self, remediations: List[Dict[str, Any]]) -> None:
+        active_blocked_components = {
+            item.get("component")
+            for item in remediations
+            if item.get("outcome") == "blocked" and item.get("component")
+        }
+        queue = self.hitl.get_queue()
+        changed = False
+        now = self._now()
+
+        for item in queue:
+            if item.get("status") == "done":
+                continue
+            if item.get("source") != "prod_supervisor" or item.get("category") != "blocker":
+                continue
+
+            component = item.get("supervisor_component") or self._component_from_task(item.get("task", ""))
+            if component in active_blocked_components:
+                continue
+
+            item["status"] = "done"
+            item["completed_at"] = now
+            item["notes"] = "Resolved by prod supervisor after health check recovered."
+            changed = True
+            self._record_event(component or "unknown", "blocker_resolved", {"blocker_id": item.get("id")})
+
+        if changed:
+            self.sm.write_json(self.hitl.queue_file, queue)
+            self.hitl._sync_to_markdown(queue)
+
+    def _component_from_task(self, task: str) -> Optional[str]:
+        prefix = "SUPERVISOR BLOCKER: "
+        if not task.startswith(prefix):
+            return None
+        remainder = task[len(prefix):].strip()
+        return remainder.split(" ", 1)[0] if remainder else None
 
     def _blocker_type_for_component(self, component: str) -> str:
         return {

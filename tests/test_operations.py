@@ -35,3 +35,17 @@ def test_retry_blocked_by_manual_hitl():
 def test_redact_secret_dict_and_text():
     assert redact_secret({"api_key": "abc123456789012345678901234"})["api_key"] == "[REDACTED]"
     assert "abc123456789012345678901234" not in redact_secret("token=abc123456789012345678901234")
+
+
+def test_redact_secret_preserves_internal_identifiers():
+    data = {
+        "id": "soak_malformed_llm_output",
+        "blocker_id": "soak_duplicate_start_attempt",
+        "api_key": "abc123456789012345678901234",
+    }
+
+    redacted = redact_secret(data)
+
+    assert redacted["id"] == "soak_malformed_llm_output"
+    assert redacted["blocker_id"] == "soak_duplicate_start_attempt"
+    assert redacted["api_key"] == "[REDACTED]"

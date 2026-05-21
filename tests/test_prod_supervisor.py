@@ -46,6 +46,40 @@ def test_supervisor_restarts_dead_scheduler_without_blocker(tmp_path):
     assert not (tmp_path / ".exegol" / "user_action_required.json").exists()
 
 
+def test_supervisor_marks_recovered_blockers_done(tmp_path):
+    queue_path = tmp_path / ".exegol" / "user_action_required.json"
+    queue_path.parent.mkdir(parents=True)
+    queue_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "blocker_stale_heartbeat_scheduler",
+                    "task": "SUPERVISOR BLOCKER: scheduler dead",
+                    "category": "blocker",
+                    "blocker_type": "stale_heartbeat",
+                    "source": "prod_supervisor",
+                    "status": "pending",
+                },
+                {
+                    "id": "hitl_rotate_gemini",
+                    "task": "Rotate Gemini key",
+                    "category": "credentials",
+                    "status": "pending",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = ProdSupervisor(str(tmp_path), scheduler_probe=lambda: True).run_once()
+
+    assert result["status"] == "healthy"
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert queue[0]["status"] == "done"
+    assert queue[0]["notes"] == "Resolved by prod supervisor after health check recovered."
+    assert queue[1]["status"] == "pending"
+
+
 def test_supervisor_reports_docker_unavailable_without_restart(tmp_path):
     supervisor = ProdSupervisor(str(tmp_path), docker_probe=lambda: False)
 

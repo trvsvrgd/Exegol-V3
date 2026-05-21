@@ -1,4 +1,5 @@
 import datetime
+import pytest
 
 from orchestrator import ExegolOrchestrator
 
@@ -45,3 +46,53 @@ def test_missed_job_startup_cap_records_skipped_events(tmp_path, monkeypatch):
     assert triggered == ["job1"]
     events = (tmp_path / ".exegol" / "scheduler_events.json").read_text(encoding="utf-8")
     assert "missed_job_skipped" in events
+
+
+def test_scheduler_disabled_by_env_writes_disabled_state(tmp_path, monkeypatch):
+    orchestrator = make_orchestrator(tmp_path)
+    states = []
+    monkeypatch.setenv("EXEGOL_DISABLE_SCHEDULER_FOR_TESTS", "1")
+    monkeypatch.setattr(orchestrator, "_write_scheduler_state", lambda status, detail="", registered_jobs=None: states.append((status, detail)))
+
+    orchestrator._setup_cadence_engine()
+
+    assert states == [("disabled", "disabled by EXEGOL_DISABLE_SCHEDULER_FOR_TESTS")]
+
+
+def test_duplicate_scheduler_start_is_noop_with_healthy_state(tmp_path, monkeypatch):
+    class RunningThread:
+        def is_alive(self):
+            return True
+
+    orchestrator = make_orchestrator(tmp_path)
+    orchestrator.scheduler_thread = RunningThread()
+    states = []
+    monkeypatch.delenv("EXEGOL_DISABLE_SCHEDULER_FOR_TESTS", raising=False)
+    monkeypatch.setattr(orchestrator, "_write_scheduler_state", lambda status, detail="", registered_jobs=None: states.append((status, detail)))
+
+    orchestrator._setup_cadence_engine()
+
+    assert states == [("healthy", "scheduler already running")]
+
+
+def test_shutdown_marks_scheduler_stopping_and_stops_monitors(tmp_path, monkeypatch):
+    class SessionManagerStub:
+        def __init__(self):
+            self.shutdown_called = False
+
+        def shutdown_monitors(self):
+            self.shutdown_called = True
+
+    orchestrator = make_orchestrator(tmp_path)
+    orchestrator.session_manager = SessionManagerStub()
+    states = []
+    monkeypatch.setattr(orchestrator, "_write_scheduler_state", lambda status, detail="", registered_jobs=None: states.append((status, detail)))
+    monkeypatch.setattr("orchestrator.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(SystemExit):
+        orchestrator.shutdown()
+
+    assert orchestrator._should_stop_scheduler is True
+    assert orchestrator.is_running_fleet is False
+    assert states == [("stopping", "orchestrator shutdown requested")]
+    assert orchestrator.session_manager.shutdown_called is True

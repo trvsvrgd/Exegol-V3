@@ -124,10 +124,7 @@ export default function Home() {
   }, [fetchRepos]);
 
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
-<<<<<<< HEAD
 
-=======
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
   return (
     <div className="container dashboard-container">
       <header className="page-header">

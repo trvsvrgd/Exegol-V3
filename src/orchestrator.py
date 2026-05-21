@@ -15,12 +15,11 @@ load_dotenv()
 
 from typing import Dict, Any, List, Optional
 from agents.registry import AGENT_REGISTRY
-from handoff import HandoffContext, SessionResult
+from handoff import HandoffContext
 from session_manager import SessionManager
 from tools.slack_tool import slack_manager
 from tools.fleet_logger import log_interaction
 from tools.state_manager import StateManager
-from tools.operations import docker_health, upsert_blocker
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
@@ -37,19 +36,11 @@ class ExegolOrchestrator:
         self._fleet_cycle_lock = threading.Lock()
         self._should_stop_scheduler = False
         self.job_history = self._load_job_history()
-        self.job_history_path = "config/job_history.json"
-        self.scheduler_state_file = ".exegol/scheduler_state.json"
-        self._check_interval = 60
-        self.scheduler_thread = None
         
         # --- SLACK INTEGRATION CHECK ---
         if not slack_manager.bot_token and not slack_manager.webhook_url:
             print("\n" + "!"*60)
-<<<<<<< HEAD
             print("CRITICAL WARNING: Slack Integration is OFFLINE.")
-=======
-            print("WARNING: Slack Integration is OFFLINE.")
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
             print("Exegol is running in [CONSOLE-ONLY] mode. Interactive approvals and")
             print("remote wake-words will NOT function.")
             print("FIX: See docs/guides/slack_integration_fix.md")
@@ -107,7 +98,7 @@ class ExegolOrchestrator:
             self._write_scheduler_state("disabled", detail="disabled by EXEGOL_DISABLE_SCHEDULER_FOR_TESTS")
             return
 
-        if self.scheduler_thread and self.scheduler_thread.is_alive():
+        if getattr(self, "scheduler_thread", None) and self.scheduler_thread.is_alive():
             self._write_scheduler_state("healthy", detail="scheduler already running")
             return
 
@@ -227,8 +218,8 @@ class ExegolOrchestrator:
 
     def _save_job_history(self):
         try:
-            root_path = os.path.dirname(os.path.dirname(__file__))
-            StateManager(root_path).write_json(getattr(self, "job_history_path", "config/job_history.json"), self.job_history)
+            with open(HISTORY_FILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.job_history, f, indent=4)
         except Exception as e:
             print(f"[Scheduler] Failed to save job history: {e}")
 
@@ -236,9 +227,9 @@ class ExegolOrchestrator:
         """Checks if any jobs should have run while the fleet was down."""
         from datetime import timedelta
         now = datetime.now()
-        
         max_missed = int(config.get("global_settings", {}).get("max_missed_jobs_on_startup", 3))
         triggered_missed = 0
+        
         for job in config.get("schedules", []):
             if not job.get("enabled", True): continue
             job_id = job.get("id")
@@ -285,9 +276,11 @@ class ExegolOrchestrator:
                     self._record_scheduler_event("missed_job_skipped", job_id, f"startup cap reached: {max_missed}")
                     continue
                 print(f"[Scheduler] Detected missed job: {job.get('summary')} ({job_id}). {reason}.")
-                # Trigger it now (it will queue in the priority execution lock)
                 triggered_missed += 1
                 self._record_scheduler_event("missed_job_triggered", job_id, reason)
+                if os.getenv("EXEGOL_DEFER_MISSED_JOBS") == "1":
+                    self._record_scheduler_event("missed_job_deferred", job_id, "deferred during backend startup")
+                    continue
                 self._scheduled_trigger(job.get("agent_id"), f"[MISSED] {job.get('summary')}", job_id)
 
         self._save_job_history()
@@ -320,15 +313,9 @@ class ExegolOrchestrator:
             if job_id:
                 self.job_history[job_id] = datetime.now().isoformat()
                 self._save_job_history()
+                self._record_scheduler_event("job_completed", job_id, summary)
 
-<<<<<<< HEAD
         threading.Thread(target=run_task, daemon=True).start()
-=======
-        # Update history AFTER successful (or at least attempted) execution
-        if job_id:
-            self.job_history[job_id] = datetime.now().isoformat()
-            self._save_job_history()
-            self._record_scheduler_event("job_completed", job_id, summary)
 
     def _write_scheduler_state(self, status: str, detail: str = "", registered_jobs: Optional[int] = None):
         target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
@@ -337,12 +324,10 @@ class ExegolOrchestrator:
             "schema_version": 1,
             "status": status,
             "detail": detail,
-            "heartbeat": datetime.now().isoformat(),
-            "registered_jobs": registered_jobs if registered_jobs is not None else len(schedule.get_jobs("exegol")),
-            "disabled": status == "disabled",
-            "should_stop": self._should_stop_scheduler,
+            "registered_jobs": registered_jobs,
+            "updated_at": datetime.now().isoformat(),
         }
-        StateManager(repo_path).write_json(self.scheduler_state_file, state)
+        StateManager(repo_path).write_json(getattr(self, "scheduler_state_file", ".exegol/scheduler_state.json"), state)
 
     def _record_scheduler_event(self, event_type: str, job_id: str, detail: str):
         target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
@@ -356,12 +341,12 @@ class ExegolOrchestrator:
             "detail": detail,
         })
         sm.write_json(".exegol/scheduler_events.json", events)
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
 
     def load_config(self):
         """Loads priority and agent configuration from priority.json"""
         if os.path.exists(PRIORITY_FILE_PATH):
-            self.priority_config = StateManager(os.path.dirname(os.path.dirname(__file__))).read_json("config/priority.json") or {}
+            with open(PRIORITY_FILE_PATH, 'r') as f:
+                self.priority_config = json.load(f)
             print("Configuration loaded successfully.")
         else:
             print(f"Warning: Configuration file not found at {PRIORITY_FILE_PATH}")
@@ -378,7 +363,8 @@ class ExegolOrchestrator:
         
         if updated:
             try:
-                StateManager(os.path.dirname(os.path.dirname(__file__))).write_json("config/priority.json", self.priority_config)
+                with open(PRIORITY_FILE_PATH, 'w') as f:
+                    json.dump(self.priority_config, f, indent=2)
                 print(f"[Status Update] Repository {repo_path} status changed to {new_status}")
             except Exception as e:
                 print(f"[Status Update] Failed to update priority.json: {e}")
@@ -561,8 +547,10 @@ class ExegolOrchestrator:
         
         print("Event listeners started. Watching priority.json and .exegol directories for updates.")
 
-    def run_fleet_cycle(self):
-        """Runs one full cycle through the fleet, processing each repo by priority."""
+    def run_fleet_cycle(self, repo_path: Optional[str] = None):
+        """Runs one full cycle through the fleet, or a selected repo when provided."""
+        if not hasattr(self, "_fleet_cycle_lock"):
+            self._fleet_cycle_lock = threading.Lock()
         if not self._fleet_cycle_lock.acquire(blocking=False):
             print("[Orchestrator] Fleet cycle already running. Skipping overlapping request.")
             return False
@@ -574,9 +562,12 @@ class ExegolOrchestrator:
             # Periodic Audits
             self.check_compliance_monitoring()
 
-            repos = self.priority_config.get("repositories", [])
-            active_repos = [r for r in repos if r.get('agent_status', 'idle') in ['active', 'idle']]
-            sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
+            if repo_path:
+                sorted_repos = [self._repo_info_for_path(repo_path)]
+            else:
+                repos = self.priority_config.get("repositories", [])
+                active_repos = [r for r in repos if r.get('agent_status', 'idle') in ['active', 'idle']]
+                sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
             
             for repo_info in sorted_repos:
                 if not self.is_running_fleet:
@@ -607,6 +598,22 @@ class ExegolOrchestrator:
             self._fleet_cycle_lock.release()
 
 
+    def _repo_info_for_path(self, repo_path: str) -> Dict[str, Any]:
+        """Return configured repo metadata for a path, falling back to a runnable target."""
+        normalized = os.path.abspath(repo_path)
+        for repo in self.priority_config.get("repositories", []):
+            configured = repo.get("repo_path", "")
+            if os.path.abspath(configured) == normalized:
+                repo_info = dict(repo)
+                repo_info["repo_path"] = normalized
+                return repo_info
+        return {
+            "repo_path": normalized,
+            "priority": 1,
+            "agent_status": "active",
+            "model_routing_preference": os.getenv("LLM_PROVIDER", "ollama"),
+        }
+
 
     def process_repo(self, repo_info: Dict[str, Any]):
         """Decides which agent to wake for a given repo based on its current state."""
@@ -623,7 +630,8 @@ class ExegolOrchestrator:
         # Check backlog for pending tasks
         backlog_path = os.path.join(exegol_dir, "backlog.json")
         if os.path.exists(backlog_path):
-            backlog = StateManager(repo_path).read_json(".exegol/backlog.json") or []
+            with open(backlog_path, 'r') as f:
+                backlog = json.load(f)
             
             # Check backlog for pending tasks (including prioritized 'todo' tasks)
             pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged", "todo"]]
@@ -676,7 +684,8 @@ class ExegolOrchestrator:
     def save_config(self):
         """Saves current priority_config back to priority.json."""
         try:
-            StateManager(os.path.dirname(os.path.dirname(__file__))).write_json("config/priority.json", self.priority_config)
+            with open(PRIORITY_FILE_PATH, 'w') as f:
+                json.dump(self.priority_config, f, indent=2)
             print("[Config] priority.json updated successfully.")
         except Exception as e:
             print(f"[Config] Failed to save priority.json: {e}")
@@ -728,10 +737,6 @@ class ExegolOrchestrator:
                                 loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
         if agent_id is None:
             agent_id = "product_poe"
-
-        docker_status = self._docker_gate(repo_info.get("repo_path", ""), agent_id)
-        if docker_status:
-            return docker_status
             
         self.acquire_execution_lock(agent_id)
         result = None
@@ -814,7 +819,7 @@ class ExegolOrchestrator:
                 output_summary="Loop depth guard triggered.",
             )
             self.escalate_to_human(msg, repo_info.get("repo_path"))
-            return None        
+            return None
 
         # 2. Circuit Breaker: Detect simple cycles (A -> B -> A) or repeated agents
         if agent_id in chain_history:
@@ -900,10 +905,7 @@ class ExegolOrchestrator:
 
     def _sign_handoff(self, handoff: HandoffContext) -> HandoffContext:
         """Computes and attaches an HMAC signature to the HandoffContext."""
-        secret = os.getenv("EXEGOL_HMAC_SECRET")
-        if not secret:
-            # Fallback to a stable hash of the repo path if no secret is provided
-            secret = hashlib.sha256(handoff.repo_path.encode()).hexdigest()
+        secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
         
         data = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
         
@@ -921,16 +923,16 @@ class ExegolOrchestrator:
         """Escalates a critical autonomous failure to the human-in-the-loop queue."""
         sm = StateManager(repo_path)
         
-        queue = sm.read_json(".exegol/user_action_required.json") or []
-        upsert_blocker(
-            queue,
-            blocker_type="loop_guard",
-            task=f"BLOCKING ISSUE: {message}",
+        # Generate a stable ID for the loop guard failure
+        task_id = f"loop_guard_{hashlib.md5(message.encode()).hexdigest()[:8]}"
+        
+        # Use the standardized escalation method
+        sm.add_hitl_task(
+            summary=f"BLOCKING ISSUE: {message}",
+            category="infrastructure",
             context="Orchestrator loop guard or depth limit reached.",
-            subject=message,
-            source="orchestrator",
+            task_id=task_id
         )
-        sm.write_json(".exegol/user_action_required.json", queue)
         
         print(f"[Orchestrator] Escalated to human: {message}")
 
@@ -1102,33 +1104,6 @@ class ExegolOrchestrator:
         
         print("[Shutdown] Exiting process.")
         sys.exit(0)
-
-    def _docker_gate(self, repo_path: str, agent_id: str) -> Optional[SessionResult]:
-        if os.getenv("EXEGOL_SKIP_DOCKER_GATE") == "1":
-            return None
-        docker_optional = {"thoughtful_thrawn", "product_poe", "vibe_vader", "markdown_mace", "report_revan"}
-        if agent_id in docker_optional:
-            return None
-        health = docker_health(timeout_seconds=2.0)
-        if health["status"] == "healthy":
-            return None
-        sm = StateManager(repo_path)
-        queue = sm.read_json(".exegol/user_action_required.json") or []
-        blocker_id = upsert_blocker(
-            queue,
-            blocker_type="docker_unavailable",
-            task=f"Docker unavailable blocks {agent_id}",
-            context=str(health.get("detail", "")),
-            subject=f"docker:{agent_id}",
-            source="orchestrator",
-        )
-        sm.write_json(".exegol/user_action_required.json", queue)
-        result = SessionResult(agent_id=agent_id, session_id="")
-        result.outcome = "failure"
-        result.status_update = "blocked"
-        result.output_summary = "Docker unavailable; workflow blocked before agent execution."
-        result.errors = [f"Docker unavailable. Blocker: {blocker_id}"]
-        return result
 
 if __name__ == "__main__":
     orchestrator = ExegolOrchestrator()

@@ -13,7 +13,6 @@ echo.
 echo [1/3] 🧹 Closing Exegol terminal windows...
 taskkill /FI "WINDOWTITLE eq Exegol Backend*" /F /T >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Exegol Frontend*" /F /T >nul 2>&1
-taskkill /FI "WINDOWTITLE eq Exegol Supervisor*" /F /T >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Exegol V3 - Workbench Launcher*" /F /T >nul 2>&1
 timeout /t 1 >nul
 

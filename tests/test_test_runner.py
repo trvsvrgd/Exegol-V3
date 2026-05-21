@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for src/tools/test_runner.py — the standardized test execution tool used by QualityQuigonAgent.
 """
 import os
@@ -60,6 +60,11 @@ def empty_test_dir(temp_dir):
 # ---------------------------------------------------------------------------
 
 class TestRunTests:
+    @staticmethod
+    def _marker_arg(command):
+        marker_index = command.index("-m", command.index("pytest") + 1)
+        return command[marker_index + 1]
+
     def test_missing_path_returns_error(self):
         result = run_tests("/path/that/does/not/exist")
         assert result["status"] == "error"
@@ -98,6 +103,25 @@ class TestRunTests:
         assert "stderr" in result
         assert isinstance(result["stderr"], str)
 
+    def test_defaults_to_local_deterministic_scope(self, temp_dir):
+        with patch("src.tools.test_runner.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_tests(temp_dir)
+
+        assert result["status"] == "pass"
+        command = run.call_args.args[0]
+        assert self._marker_arg(command) == "not external"
+        assert "--basetemp" in command
+
+    def test_external_scope_must_be_explicit(self, temp_dir):
+        with patch("src.tools.test_runner.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_tests(temp_dir, include_external=True)
+
+        assert result["status"] == "pass"
+        command = run.call_args.args[0]
+        assert self._marker_arg(command) == "external"
+
 
 # ---------------------------------------------------------------------------
 # Timeout handling — mocked
@@ -108,10 +132,11 @@ class TestRunTestsTimeout:
         """Simulate a subprocess.TimeoutExpired and ensure graceful error return."""
         import subprocess
         with patch("src.tools.test_runner.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=60)):
-            result = run_tests(temp_dir)
+                   side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=1)):
+            result = run_tests(temp_dir, timeout_seconds=1)
         assert result["status"] == "error"
         assert "timed out" in result["message"].lower()
+        assert "1 seconds" in result["message"]
 
     def test_generic_exception_returns_error(self, temp_dir):
         """Simulate an unexpected exception during subprocess call."""

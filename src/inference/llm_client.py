@@ -3,6 +3,7 @@ import json
 import re
 import datetime
 import requests
+import time
 from urllib.parse import urlparse
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union
@@ -10,6 +11,42 @@ from dotenv import load_dotenv
 from tools.egress_filter import EgressFilter
 
 load_dotenv()
+
+
+PROVIDER_ERROR_PREFIXES = {
+    "ollama error": "ollama",
+    "gemini error": "gemini",
+    "anthropic error": "anthropic",
+    "vllm error": "vllm",
+    "llama.cpp error": "llama.cpp",
+    "security error": "security",
+}
+
+
+def classify_provider_failure(response: str) -> Optional[Dict[str, Any]]:
+    """Return a normalized provider failure record for known provider error strings."""
+    if not isinstance(response, str):
+        return None
+    lowered = response.strip().lower()
+    for prefix, provider in PROVIDER_ERROR_PREFIXES.items():
+        if lowered.startswith(prefix):
+            return {
+                "status": "degraded",
+                "blocker_type": "provider_failure",
+                "provider": provider,
+                "retryable": provider != "security",
+                "detail": response,
+            }
+    timeout_terms = ("timeout", "timed out", "temporarily unavailable", "connection refused", "rate limit")
+    if any(term in lowered for term in timeout_terms):
+        return {
+            "status": "degraded",
+            "blocker_type": "provider_failure",
+            "provider": "unknown",
+            "retryable": True,
+            "detail": response,
+        }
+    return None
 
 class LLMClient(ABC):
     """Abstract base class for all inference providers."""
@@ -87,8 +124,7 @@ class TrackingLLMClient(LLMClient):
         self.prompt_count += 1
         # Simple heuristic: 1 token ~= 4 characters for now
         self.token_usage += (len(prompt) + (len(system_instruction) if system_instruction else 0)) // 4
-        
-        response = self.base_client.generate(prompt, system_instruction, json_format)
+        response = self._generate_with_resilience(prompt, system_instruction, json_format)
         
         # Add response tokens
         self.token_usage += len(response) // 4
@@ -101,17 +137,43 @@ class TrackingLLMClient(LLMClient):
             "response": response
         })
         
-        # Write to active fleet_state.json if currently running in a session
-        active_repo = os.environ.get("EXEGOL_ACTIVE_REPO")
-        active_session = os.environ.get("EXEGOL_ACTIVE_SESSION_ID")
-        if active_repo and active_session:
-            try:
-                from tools.state_manager import StateManager
-                StateManager(active_repo).update_fleet_state({"monologue": self.history})
-            except Exception as e:
-                print(f"[TrackingLLMClient] Failed to update active monologue: {e}")
-        
         return response
+
+    def _generate_with_resilience(self, prompt: str, system_instruction: Optional[str], json_format: bool) -> str:
+        attempts = max(1, int(os.getenv("EXEGOL_LLM_RETRY_ATTEMPTS", "1")))
+        backoff_seconds = max(0.0, float(os.getenv("EXEGOL_LLM_RETRY_BACKOFF_SECONDS", "0.25")))
+        last_response = ""
+        last_failure = None
+
+        for attempt in range(attempts):
+            last_response = self.base_client.generate(prompt, system_instruction, json_format)
+            last_failure = classify_provider_failure(last_response)
+            if not last_failure or not last_failure.get("retryable"):
+                break
+            if attempt < attempts - 1 and backoff_seconds:
+                time.sleep(backoff_seconds * (attempt + 1))
+
+        if last_failure:
+            self.history.append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "event_type": "provider_failure",
+                "failure": last_failure,
+            })
+            fallback_enabled = os.getenv("EXEGOL_ENABLE_LOCAL_LLM_FALLBACK", "0") == "1"
+            base_is_local = isinstance(self.base_client, globals().get("OllamaClient", ()))
+            if fallback_enabled and not base_is_local and last_failure.get("retryable"):
+                fallback = OllamaClient()
+                fallback_response = fallback.generate(prompt, system_instruction, json_format)
+                if not classify_provider_failure(fallback_response):
+                    self.history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "event_type": "provider_fallback",
+                        "from_provider": last_failure.get("provider"),
+                        "to_provider": "ollama",
+                    })
+                    return fallback_response
+
+        return last_response
 
     def generate_system_prompt(self, agent: Any) -> str:
         return self.base_client.generate_system_prompt(agent)

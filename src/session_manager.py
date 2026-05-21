@@ -20,12 +20,8 @@ from typing import Optional, Any, Dict
 
 from handoff import HandoffContext, SessionResult
 from tools.heartbeat_monitor import HeartbeatMonitor
-<<<<<<< HEAD
 from tools.fleet_logger import failure_backlog_task_id, log_interaction
 from tools.state_manager import StateManager
-=======
-from tools.operations import redact_secret
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
 
 
 class SessionManager:
@@ -160,7 +156,7 @@ class SessionManager:
             os.environ.pop("EXEGOL_ACTIVE_SESSION_ID", None)
 
             result.outcome = "success"
-            result.output_summary = str(redact_secret(output)) if output else ""
+            result.output_summary = str(output) if output else ""
             result.steps_used = getattr(agent_instance, "_steps_used", 1)
             
             # Capture tracking metrics
@@ -182,11 +178,8 @@ class SessionManager:
             if result.regression_context:
                 print(f"[SessionManager] Regression context captured: {result.regression_context}")
 
-            self._validate_session_result(result)
-
         except Exception as exc:
             result.outcome = "failure"
-<<<<<<< HEAD
             error_details = f"{type(exc).__name__}: {exc}"
             traceback_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
             result.errors = [error_details, "".join(traceback_lines)]
@@ -197,11 +190,6 @@ class SessionManager:
                 "retry_available": True,
                 "backlog_item_id": failure_backlog_task_id(agent_id, result.output_summary, result.errors),
             }
-=======
-            error_details = str(redact_secret(f"{type(exc).__name__}: {exc}"))
-            result.errors.append(error_details)
-            result.output_summary = "Agent execution failed."
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
             traceback.print_exc()
 
             # Always route terminal errors with 'FATAL' to the Exegol Fleet
@@ -212,48 +200,9 @@ class SessionManager:
                 except Exception as route_err:
                     print(f"[SessionManager] Failed to route fatal error: {route_err}")
 
-<<<<<<< HEAD
-=======
-            # --- UNIVERSAL SELF-HEALING: Capture hard crashes ---
-            try:
-                from tools.backlog_manager import BacklogManager
-                from tools.slack_tool import post_to_slack
-                import datetime
-
-                repo_path = handoff.repo_path
-                bm = BacklogManager(repo_path)
-                
-                fail_task = {
-                    "id": f"crash_{agent_id}_{int(time.time())}",
-                    "summary": f"CRITICAL: {agent_id} hard crash",
-                    "priority": "critical",
-                    "type": "bug",
-                    "blocker_type": "agent_crash",
-                    "status": "todo",
-                    "source_agent": "SessionManager",
-                    "rationale": f"Agent crashed during execution. Session: {handoff.session_id}. Error: {error_details}",
-                    "created_at": datetime.datetime.now().isoformat()
-                }
-                bm.add_task(fail_task)
-                
-                slack_msg = (
-                    f"💀 *Agent Crash*: `{agent_id}` suffered a hard crash in session `{handoff.session_id}`.\n"
-                    f"*Error*: `{error_details}`\n"
-                    f"A critical bug report has been added to the backlog."
-                )
-                post_to_slack(slack_msg)
-            except Exception as inner_exc:
-                print(f"[SessionManager] Double-fault: Failed to report crash: {inner_exc}")
-
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
         finally:
             elapsed = time.time() - start_time
             result.duration_seconds = elapsed
-            deadline_seconds = self._get_agent_deadline(agent_id, handoff.repo_path)
-            if elapsed > deadline_seconds and result.outcome == "success":
-                result.outcome = "timeout"
-                result.errors.append(f"Agent exceeded deadline of {deadline_seconds:.0f}s.")
-                result.status_update = "blocked"
 
             # Update active state to finished status (success -> done, failure -> blocked)
             status_map = {"success": "done", "failure": "blocked"}
@@ -341,36 +290,10 @@ class SessionManager:
                 pass
         return self._default_cooldown
 
-    def _get_agent_deadline(self, agent_id: str, repo_path: str) -> float:
-        default_deadline = float(os.getenv("EXEGOL_AGENT_DEADLINE_SECONDS", "900"))
-        priority_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "priority.json")
-        if os.path.exists(priority_path):
-            try:
-                with open(priority_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                deadlines = config.get("global_settings", {}).get("agent_deadlines", {})
-                return float(deadlines.get(agent_id, deadlines.get("default", default_deadline)))
-            except Exception:
-                pass
-        return default_deadline
-
-    @staticmethod
-    def _validate_session_result(result: SessionResult) -> None:
-        if result.outcome not in {"success", "failure", "timeout", "unknown"}:
-            result.outcome = "failure"
-            result.errors.append("Malformed SessionResult: invalid outcome.")
-        if result.steps_used < 0:
-            result.steps_used = 0
-            result.errors.append("Malformed SessionResult: negative steps_used corrected.")
-        if not isinstance(result.errors, list):
-            result.errors = [str(result.errors)]
-            result.outcome = "failure"
-
     @staticmethod
     def _persist_session_log(repo_path: str, result: SessionResult) -> Optional[str]:
         """Delegate persistence to fleet_logger for unified schema and naming."""
         try:
-<<<<<<< HEAD
             filepath = log_interaction(
                 agent_id=result.agent_id,
                 outcome=result.outcome,
@@ -389,12 +312,6 @@ class SessionManager:
             )
             print(f"[SessionManager] Session log persisted via fleet_logger -> {filepath}")
             return filepath
-=======
-            with open(log_file, "w", encoding="utf-8") as f:
-                json.dump(redact_secret(result.to_dict()), f, indent=4)
-            print(f"[SessionManager] Session log persisted -> {log_file}")
-            return log_file
->>>>>>> ff5eaef6564eaad195d74a2ad85dae0c4034de1e
         except Exception as exc:
             print(f"[SessionManager] Failed to persist log: {exc}")
             return None

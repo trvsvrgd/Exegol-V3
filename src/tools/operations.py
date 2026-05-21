@@ -24,6 +24,20 @@ SECRET_VALUE_PATTERN = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)(['\"\s:=]+)([^'\"\s,;}]+)"
 )
 LONG_SECRET_PATTERN = re.compile(r"\b([A-Za-z0-9_\-]{24,})\b")
+IDENTIFIER_KEYS = {
+    "id",
+    "agent_id",
+    "backlog_item_id",
+    "blocker_id",
+    "case",
+    "category",
+    "event_type",
+    "job_id",
+    "session_id",
+    "source",
+    "status",
+    "task_id",
+}
 
 
 def normalize_blocker_type(value: Optional[str], default: str = "manual_hitl") -> str:
@@ -45,6 +59,8 @@ def redact_secret(value: Any) -> Any:
         for key, item in value.items():
             if SECRET_NAME_PATTERN.search(str(key)):
                 redacted[key] = "[REDACTED]"
+            elif str(key) in IDENTIFIER_KEYS:
+                redacted[key] = item
             else:
                 redacted[key] = redact_secret(item)
         return redacted

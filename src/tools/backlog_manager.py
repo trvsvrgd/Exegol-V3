@@ -5,9 +5,6 @@ import sqlite3
 from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 
-from tools.operations import normalize_blocker_type, stable_blocker_id
-from tools.state_manager import StateManager
-
 class BacklogManager:
     """Centralized manager for the project backlog and its archive using SQLite.
     
@@ -21,7 +18,6 @@ class BacklogManager:
         self.db_path = os.path.join(self.exegol_dir, "backlog.db")
         self.backlog_json = os.path.join(self.exegol_dir, "backlog.json")
         self.archive_json = os.path.join(self.exegol_dir, "backlog_archive.json")
-        self.sm = StateManager(repo_path)
         os.makedirs(self.exegol_dir, exist_ok=True)
         
         self._init_db()
@@ -121,72 +117,6 @@ class BacklogManager:
             task.get("rank"),
             json.dumps(task)
         ))
-
-    def dedupe_auto_failures(self) -> Dict[str, Any]:
-        """Collapse timestamped auto_fail/crash failures into stable blocker records."""
-        active = self.load_backlog()
-        archived = self.load_archive()
-        combined = active + archived
-        groups: Dict[str, List[Dict[str, Any]]] = {}
-
-        for task in combined:
-            task_id = str(task.get("id", ""))
-            summary = str(task.get("summary", ""))
-            if not (task_id.startswith("auto_fail_") or task_id.startswith("crash_") or "hard crash" in summary.lower()):
-                continue
-            agent = task.get("target_agent") or task.get("source_agent") or task.get("agent_id") or "unknown_agent"
-            error = task.get("rationale") or task.get("description") or summary
-            stable_subject = f"{agent}:{summary.split(':')[-1].strip() or error[:120]}"
-            groups.setdefault(stable_subject, []).append(task)
-
-        if not groups:
-            return {"status": "success", "deduped_groups": 0, "removed_duplicates": 0}
-
-        now = datetime.datetime.now().isoformat()
-        removed_ids = set()
-        replacement_tasks: List[Dict[str, Any]] = []
-        for subject, tasks in groups.items():
-            if len(tasks) < 2:
-                continue
-            tasks.sort(key=lambda item: item.get("created_at") or item.get("timestamp") or "")
-            canonical = dict(tasks[-1])
-            blocker_type = normalize_blocker_type(canonical.get("blocker_type"), "agent_crash")
-            canonical["id"] = stable_blocker_id(blocker_type, subject)
-            canonical["blocker_type"] = blocker_type
-            canonical["status"] = canonical.get("status", "todo")
-            canonical["priority"] = canonical.get("priority", "critical")
-            canonical["summary"] = canonical.get("summary") or "Agent crash blocker"
-            canonical["updated_at"] = now
-            canonical["occurrences"] = [
-                {
-                    "id": item.get("id"),
-                    "created_at": item.get("created_at") or item.get("timestamp"),
-                    "summary": item.get("summary"),
-                    "rationale": item.get("rationale") or item.get("description"),
-                }
-                for item in tasks
-            ]
-            canonical["related_failures"] = [item.get("id") for item in tasks if item.get("id")]
-            replacement_tasks.append(canonical)
-            removed_ids.update(item.get("id") for item in tasks if item.get("id"))
-
-        if not replacement_tasks:
-            return {"status": "success", "deduped_groups": 0, "removed_duplicates": 0}
-
-        with self._get_conn() as conn:
-            for task_id in removed_ids:
-                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-            for task in replacement_tasks:
-                self._insert_task(conn, task, archived=False)
-            conn.commit()
-
-        self._sync_to_json()
-        return {
-            "status": "success",
-            "deduped_groups": len(replacement_tasks),
-            "removed_duplicates": len(removed_ids),
-            "blocker_ids": [task["id"] for task in replacement_tasks],
-        }
 
     def load_backlog(self) -> List[Dict[str, Any]]:
         """Loads the active backlog (not archived)."""
@@ -354,12 +284,14 @@ class BacklogManager:
         """Synchronizes the database state to the legacy JSON files."""
         active = self.load_backlog()
         try:
-            self.sm.write_json(".exegol/backlog.json", active)
+            with open(self.backlog_json, "w", encoding="utf-8") as f:
+                json.dump(active, f, indent=4)
         except Exception as e:
             print(f"[BacklogManager] Failed to sync backlog.json: {e}")
             
         archived = self.load_archive()
         try:
-            self.sm.write_json(".exegol/backlog_archive.json", archived)
+            with open(self.archive_json, "w", encoding="utf-8") as f:
+                json.dump(archived, f, indent=4)
         except Exception as e:
             print(f"[BacklogManager] Failed to sync backlog_archive.json: {e}")
