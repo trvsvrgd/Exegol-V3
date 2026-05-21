@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost } from "../app/api-client";
 
 interface OperationsPanelProps {
@@ -34,7 +34,7 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const data = await apiGet<OperationsState>(`/fleet/operations?repo_path=${encodeURIComponent(repoPath)}`);
       setOps(data);
@@ -43,13 +43,16 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
       console.error(err);
       setError("Unable to load operations state.");
     }
-  };
+  }, [repoPath]);
 
   useEffect(() => {
-    void refresh();
+    const timeout = window.setTimeout(() => void refresh(), 0);
     const id = window.setInterval(() => void refresh(), 10000);
-    return () => window.clearInterval(id);
-  }, [repoPath]);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(id);
+    };
+  }, [refresh]);
 
   const act = async (action: "clear" | "retry" | "autonomous") => {
     if (!ops) return;

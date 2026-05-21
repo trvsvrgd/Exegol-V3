@@ -444,6 +444,7 @@ class ExegolOrchestrator:
                 if state_data:
                     try:
                         previous_errors = state_data.get("errors", [])
+                        self._clear_stale_heartbeat(repo_path, state_data.get("session_id", ""))
                         state_data["status"] = "idle"
                         state_data["active_agent"] = None
                         state_data["session_id"] = ""
@@ -459,6 +460,36 @@ class ExegolOrchestrator:
                         print(f"[Status Update] Failed to update fleet_state.json for retry: {e}")
                 return True
         return False
+
+    def _clear_stale_heartbeat(self, repo_path: str, session_id: str) -> None:
+        """Mark stale heartbeat records as cleared so supervisor polling does not re-block them."""
+        heartbeat_dir = os.path.join(repo_path, ".exegol", "heartbeats")
+        if not os.path.isdir(heartbeat_dir):
+            return
+
+        candidate_paths = []
+        if session_id:
+            candidate_paths.append(os.path.join(heartbeat_dir, f"{session_id}.json"))
+        for filename in os.listdir(heartbeat_dir):
+            if filename.endswith(".json"):
+                path = os.path.join(heartbeat_dir, filename)
+                if path not in candidate_paths:
+                    candidate_paths.append(path)
+
+        for heartbeat_path in candidate_paths:
+            if not os.path.exists(heartbeat_path):
+                continue
+            try:
+                with open(heartbeat_path, "r", encoding="utf-8") as f:
+                    heartbeat = json.load(f)
+                if heartbeat.get("status") in {"active", "zombie"}:
+                    heartbeat["status"] = "cleared"
+                    heartbeat["cleared_at"] = datetime.now().isoformat()
+                    heartbeat["clear_reason"] = "Cleared from Workbench retry control."
+                    with open(heartbeat_path, "w", encoding="utf-8") as f:
+                        json.dump(heartbeat, f, indent=2)
+            except Exception as e:
+                print(f"[Status Update] Failed to clear heartbeat {os.path.basename(heartbeat_path)}: {e}")
 
     def _get_isolation_setting(self, key: str, default=None):
         """Read a context_isolation setting from global_settings."""

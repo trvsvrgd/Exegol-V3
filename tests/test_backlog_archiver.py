@@ -41,12 +41,50 @@ def test_backlog_archiving():
         
         assert len(backlog_final) == 1
         assert backlog_final[0]["id"] == "test_001"
-        
         assert len(archive_final) == 1
         assert archive_final[0]["id"] == "test_002"
         assert "archived_at" in archive_final[0]
-        
+
         print("Verification SUCCESS: Backlog archiving is working correctly!")
+
+
+def test_backlog_dedupe_auto_failures_archives_repeated_rows(tmp_path):
+    bm = BacklogManager(str(tmp_path))
+    first = {
+        "id": "auto_fail_DeveloperDexAgent_1",
+        "summary": "FIX: DeveloperDexAgent autonomous failure",
+        "priority": "high",
+        "status": "todo",
+        "created_at": "2026-05-01T00:00:00",
+    }
+    duplicate = {
+        "id": "auto_fail_DeveloperDexAgent_2",
+        "summary": "FIX: DeveloperDexAgent autonomous failure",
+        "priority": "high",
+        "status": "todo",
+        "created_at": "2026-05-02T00:00:00",
+    }
+    distinct = {
+        "id": "manual_task",
+        "summary": "Implement a separate feature",
+        "priority": "medium",
+        "status": "todo",
+        "created_at": "2026-05-03T00:00:00",
+    }
+
+    assert bm.add_task(first)
+    assert bm.add_task(duplicate)
+    assert bm.add_task(distinct)
+
+    result = bm.dedupe_auto_failures()
+
+    assert result["removed_duplicates"] == 1
+    active_ids = {task["id"] for task in bm.load_backlog()}
+    assert active_ids == {"auto_fail_DeveloperDexAgent_1", "manual_task"}
+    canonical = bm.get_task("auto_fail_DeveloperDexAgent_1")
+    archived = bm.get_task("auto_fail_DeveloperDexAgent_2")
+    assert canonical["merged_duplicate_ids"] == ["auto_fail_DeveloperDexAgent_2"]
+    assert archived["canonical_task_id"] == "auto_fail_DeveloperDexAgent_1"
 
 
 if __name__ == "__main__":

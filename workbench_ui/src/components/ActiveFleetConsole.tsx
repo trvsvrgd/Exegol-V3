@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiGet, apiPost } from "../app/api-client";
 
 interface MonologueItem {
@@ -22,6 +22,8 @@ interface FleetState {
   backlog_item_id?: string;
   retry_available?: boolean;
   failure_logged_at?: string;
+  blocker_type?: string;
+  last_cleared_errors?: string[];
 }
 
 interface ActiveFleetConsoleProps {
@@ -30,14 +32,14 @@ interface ActiveFleetConsoleProps {
 }
 
 const AGENT_META: Record<string, { name: string; color: string; icon: string; role: string }> = {
-  product_poe: { name: "Product Poe", color: "#eab308", icon: "⚪", role: "Backlog & Product Design" },
-  developer_dex: { name: "Developer Dex", color: "#22c55e", icon: "👨‍🔧", role: "Code Implementation" },
-  quality_quigon: { name: "Quality Qui-Gon", color: "#3b82f6", icon: "⚔️", role: "Testing & Validation" },
-  thoughtful_thrawn: { name: "Thoughtful Thrawn", color: "#6366f1", icon: "🧠", role: "Onboarding & Strategy" },
-  vibe_vader: { name: "Vibe Vader", color: "#ef4444", icon: "🔴", role: "HITL & Human Intervention" },
-  watcher_wedge: { name: "Watcher Wedge", color: "#f97316", icon: "📡", role: "System Health & Failures" },
-  optimizer_ahsoka: { name: "Optimizer Ahsoka", color: "#06b6d4", icon: "💪", role: "Agent Instruction Tuning" },
-  compliance_cody: { name: "Compliance Cody", color: "#6b7280", icon: "📋", role: "Regulatory & Compliance Audit" },
+  product_poe: { name: "Product Poe", color: "#eab308", icon: "P", role: "Backlog & Product Design" },
+  developer_dex: { name: "Developer Dex", color: "#22c55e", icon: "D", role: "Code Implementation" },
+  quality_quigon: { name: "Quality Qui-Gon", color: "#3b82f6", icon: "Q", role: "Testing & Validation" },
+  thoughtful_thrawn: { name: "Thoughtful Thrawn", color: "#6366f1", icon: "T", role: "Onboarding & Strategy" },
+  vibe_vader: { name: "Vibe Vader", color: "#ef4444", icon: "V", role: "HITL & Human Intervention" },
+  watcher_wedge: { name: "Watcher Wedge", color: "#f97316", icon: "W", role: "System Health & Failures" },
+  optimizer_ahsoka: { name: "Optimizer Ahsoka", color: "#06b6d4", icon: "A", role: "Agent Instruction Tuning" },
+  compliance_cody: { name: "Compliance Cody", color: "#6b7280", icon: "C", role: "Regulatory & Compliance Audit" },
 };
 
 export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveFleetConsoleProps) {
@@ -45,35 +47,32 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchState() {
-      try {
-        const data = await apiGet<FleetState>(`/fleet/active-state?repo_path=${encodeURIComponent(repoPath)}`);
-        setState(data);
-      } catch (err) {
-        console.error("Failed to fetch active fleet state:", err);
-      }
-    }
-
-    fetchState();
-    // Poll more frequently if fleet is running
-    const interval = setInterval(fetchState, 2000);
-
-    return () => clearInterval(interval);
-  }, [repoPath]);
-
-  const refreshState = async () => {
+  const refreshState = useCallback(async () => {
     const data = await apiGet<FleetState>(`/fleet/active-state?repo_path=${encodeURIComponent(repoPath)}`);
     setState(data);
-  };
+  }, [repoPath]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void refreshState();
+    }, 0);
+    const interval = setInterval(refreshState, 2000);
+    return () => {
+      window.clearTimeout(timeout);
+      clearInterval(interval);
+    };
+  }, [refreshState]);
 
   const clearBlockedState = async () => {
     setRetrying(true);
     setRetryError(null);
+    setRetryMessage(null);
     try {
       await apiPost("/fleet/retry-blocked", { repo_path: repoPath });
       await refreshState();
+      setRetryMessage("Blocker cleared. The fleet is idle and ready to run again.");
     } catch (err) {
       setRetryError(err instanceof Error ? err.message : "Failed to clear blocked state.");
     } finally {
@@ -86,7 +85,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
   const currentAgent = state.active_agent ? AGENT_META[state.active_agent] || {
     name: state.active_agent,
     color: "#a855f7",
-    icon: "🤖",
+    icon: "?",
     role: "Specialist Agent"
   } : null;
 
@@ -106,11 +105,13 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
     return prompt;
   };
 
+  const isStaleHeartbeat = state.blocker_type === "stale_heartbeat";
+
   return (
     <div className="fleet-console glass">
       <div className="console-header">
         <div className="title-area">
-          <span className="console-indicator animate-pulse"></span>
+          <span className="console-indicator"></span>
           <h3>Live Fleet Telemetry</h3>
         </div>
         <span className={`status-badge ${getStatusBadgeClass()}`}>
@@ -121,15 +122,17 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
       {state.status === "idle" && (
         <div className="idle-state">
           <p>
-            💤 The Fleet is currently resting. Waking Poe or triggering &quot;Go&quot; starts autonomous operations.
+            The fleet is idle. Running the autonomous fleet starts work for the selected repository.
             {autonomousMode && " Autonomous mode is enabled and waiting for the next cycle."}
           </p>
+          {state.last_cleared_errors && state.last_cleared_errors.length > 0 && (
+            <p className="last-cleared">Last cleared blocker: {state.last_cleared_errors[0]}</p>
+          )}
         </div>
       )}
 
       {state.status !== "idle" && (
         <div className="active-layout">
-          {/* Active Agent card */}
           {currentAgent && (
             <div className="agent-status-card" style={{ borderColor: currentAgent.color }}>
               <div className="agent-avatar" style={{ backgroundColor: `${currentAgent.color}22` }}>
@@ -138,22 +141,21 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
               <div className="agent-info-text">
                 <span className="agent-role">{currentAgent.role}</span>
                 <h4 style={{ color: currentAgent.color }}>{currentAgent.name}</h4>
-                <p className="session-id">Session: <code>{state.session_id}</code></p>
+                <p className="session-id">Session: <code>{state.session_id || "none"}</code></p>
               </div>
             </div>
           )}
 
-          {/* Troubleshooting / Unblocking Guide */}
           {state.status === "blocked" && (
             <div className="unblock-guide glass animate-fade-in">
               <div className="guide-header">
-                <span className="guide-icon">🛡️</span>
-                <h4>How to Unblock the Fleet</h4>
+                <span className="guide-icon">!</span>
+                <h4>{isStaleHeartbeat ? "Stale Session Blocked the Fleet" : "Fleet Blocked"}</h4>
               </div>
-              
+
               {state.errors && state.errors.length > 0 && (
                 <div className="error-traceback">
-                  <strong>Traceback Details:</strong>
+                  <strong>Traceback Details</strong>
                   <div className="error-scroll">
                     {state.errors.map((err, i) => (
                       <pre key={i} className="error-pre">{err}</pre>
@@ -170,48 +172,51 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
                 {state.failure_logged_at && (
                   <span>Logged: {new Date(state.failure_logged_at).toLocaleString()}</span>
                 )}
+                {state.blocker_type && (
+                  <span>Type: <code>{state.blocker_type}</code></span>
+                )}
                 <button
                   type="button"
                   className="retry-button"
                   onClick={clearBlockedState}
                   disabled={retrying}
                 >
-                  {retrying ? "Clearing..." : "Clear Blocker for Retry"}
+                  {retrying ? "Clearing..." : isStaleHeartbeat ? "Clear Stale Session" : "Clear Blocker for Retry"}
                 </button>
                 {retryError && <span className="retry-error">{retryError}</span>}
+                {retryMessage && <span className="retry-success">{retryMessage}</span>}
               </div>
-              
+
               <div className="guide-steps">
                 <div className="step-card">
                   <div className="step-num">A</div>
                   <div className="step-details">
-                    <h5>Fix Underlying Runtime & Logic Errors</h5>
-                    <p>The last agent crashed or hit a validation/policy failure during execution. Inspect the Traceback Details or the linked backlog blocker, apply the fix, clear the blocker here, then click <strong>&quot;Go&quot;</strong> or <strong>&quot;Start Autonomous Fleet&quot;</strong> to retry.</p>
+                    <h5>{isStaleHeartbeat ? "What This Means" : "Fix Runtime Or Logic Errors"}</h5>
+                    <p>{isStaleHeartbeat ? "A previous session stopped sending heartbeat updates. Clearing it marks that stale session closed so the supervisor does not keep reporting the old run as active." : "The last agent crashed or hit a validation/policy failure. Inspect the traceback or linked backlog blocker, fix the cause, clear the blocker, then run the fleet again."}</p>
                   </div>
                 </div>
-                
+
                 <div className="step-card">
                   <div className="step-num">B</div>
                   <div className="step-details">
-                    <h5>Resolve Human Interventions (HITL Queue)</h5>
-                    <p>The fleet might be paused waiting for critical credentials, token key rotations, or manual decisions. Scroll down to the <strong>Vibe Vader (Action Queue & Interventions)</strong> section below, complete the required task, and click <strong>&quot;Mark as Resolved&quot;</strong> or <strong>&quot;Dismiss&quot;</strong> to clear the blocker.</p>
+                    <h5>Next Action</h5>
+                    <p>{isStaleHeartbeat ? "Click Clear Stale Session, then run the autonomous fleet again. If the same session comes back, the supervisor is still seeing an active heartbeat file." : "If this is a human-action item, resolve it in the Action Queue. Otherwise clear the retryable blocker and run the autonomous fleet again."}</p>
                   </div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Handoff chain */}
           <div className="chain-container">
             <h5>Handoff Execution Chain</h5>
             <div className="chain-flow">
               {state.handoff_chain.map((agentId, index) => {
-                const meta = AGENT_META[agentId] || { name: agentId, icon: "🤖" };
+                const meta = AGENT_META[agentId] || { name: agentId, icon: "?" };
                 return (
                   <div key={index} className="chain-node">
                     <span className="node-icon">{meta.icon}</span>
                     <span className="node-name">{meta.name}</span>
-                    <span className="node-arrow">→</span>
+                    <span className="node-arrow">-&gt;</span>
                   </div>
                 );
               })}
@@ -219,23 +224,22 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
                 <div className="chain-node active" style={{ borderColor: currentAgent?.color }}>
                   <span className="node-icon">{currentAgent?.icon}</span>
                   <span className="node-name" style={{ color: currentAgent?.color }}>{currentAgent?.name}</span>
-                  {state.next_agent_id && <span className="node-arrow">→</span>}
+                  {state.next_agent_id && <span className="node-arrow">-&gt;</span>}
                 </div>
               )}
               {state.next_agent_id && (
                 <div className="chain-node next">
-                  <span className="node-icon">⏳</span>
+                  <span className="node-icon">...</span>
                   <span className="node-name">Next: {(AGENT_META[state.next_agent_id] || { name: state.next_agent_id }).name}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Thoughts monologue */}
           <div className="thoughts-container">
-            <h5>Agent Internal Thoughts (Monologue)</h5>
+            <h5>Agent Internal Thoughts</h5>
             {state.monologue.length === 0 ? (
-              <p className="no-thoughts">Analyzing context, awaiting first generation...</p>
+              <p className="no-thoughts">No agent thoughts have been recorded for this state.</p>
             ) : (
               <div className="monologue-list">
                 {state.monologue.map((item, idx) => {
@@ -245,25 +249,25 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
                       <div className="monologue-summary" onClick={() => setExpandedIndex(isExpanded ? null : idx)}>
                         <div className="thought-header">
                           <span className="thought-time">{new Date(item.timestamp).toLocaleTimeString()}</span>
-                          <span className="thought-action">Thought #{idx + 1} {isExpanded ? "▲" : "▼"}</span>
+                          <span className="thought-action">Thought #{idx + 1} {isExpanded ? "collapse" : "expand"}</span>
                         </div>
                         <p className="thought-snippet">{cleanPrompt(item.prompt)}</p>
                       </div>
-                      
+
                       {isExpanded && (
                         <div className="monologue-detail animate-fade-in">
                           {item.system_instruction && (
                             <div className="thought-block system">
-                              <strong>System Directive:</strong>
+                              <strong>System Directive</strong>
                               <pre>{item.system_instruction}</pre>
                             </div>
                           )}
                           <div className="thought-block prompt">
-                            <strong>Self Prompt:</strong>
+                            <strong>Self Prompt</strong>
                             <pre>{item.prompt}</pre>
                           </div>
                           <div className="thought-block response">
-                            <strong>Reasoned Action / Strategy:</strong>
+                            <strong>Reasoned Action / Strategy</strong>
                             <pre>{item.response}</pre>
                           </div>
                         </div>
@@ -284,14 +288,14 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           padding: 1.5rem;
           background: rgba(15, 15, 15, 0.7);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 16px;
+          border-radius: 12px;
         }
 
         .unblock-guide {
           padding: 1.5rem;
           background: rgba(239, 68, 68, 0.05);
           border: 1px solid rgba(239, 68, 68, 0.2);
-          border-radius: 12px;
+          border-radius: 8px;
           margin-bottom: 0.5rem;
         }
 
@@ -303,7 +307,15 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
         }
 
         .guide-icon {
-          font-size: 1.4rem;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: rgba(239, 68, 68, 0.2);
+          color: #fca5a5;
+          font-weight: 800;
         }
 
         .guide-header h4 {
@@ -341,7 +353,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           font-size: 0.8rem;
           color: #ef4444;
           white-space: pre-wrap;
-          word-break: break-all;
+          word-break: break-word;
         }
 
         .error-pre.summary {
@@ -399,10 +411,9 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           color: #fca5a5;
         }
 
-        @media (max-width: 768px) {
-          .guide-steps {
-            grid-template-columns: 1fr;
-          }
+        .retry-success {
+          width: 100%;
+          color: #86efac;
         }
 
         .step-card {
@@ -503,6 +514,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           color: #9ca3af;
         }
 
+        .last-cleared {
+          margin-top: 0.75rem;
+          color: #d1d5db;
+          font-size: 0.85rem;
+        }
+
         .active-layout {
           display: flex;
           flex-direction: column;
@@ -516,7 +533,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           padding: 1.2rem;
           background: rgba(255, 255, 255, 0.02);
           border: 1px solid;
-          border-radius: 12px;
+          border-radius: 8px;
         }
 
         .agent-avatar {
@@ -525,11 +542,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           justify-content: center;
           width: 50px;
           height: 50px;
-          border-radius: 12px;
+          border-radius: 8px;
         }
 
         .avatar-icon {
-          font-size: 1.8rem;
+          font-size: 1.2rem;
+          font-weight: 800;
         }
 
         .agent-info-text h4 {
@@ -571,7 +589,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           gap: 0.5rem;
           padding: 1rem;
           background: rgba(0, 0, 0, 0.2);
-          border-radius: 10px;
+          border-radius: 8px;
         }
 
         .chain-node {
@@ -604,7 +622,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
         .thoughts-container {
           background: rgba(0, 0, 0, 0.2);
           padding: 1.2rem;
-          border-radius: 12px;
+          border-radius: 8px;
         }
 
         .no-thoughts {
@@ -684,7 +702,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           font-size: 0.8rem;
           color: #38bdf8;
           white-space: pre-wrap;
-          word-break: break-all;
+          word-break: break-word;
           max-height: 250px;
           overflow-y: auto;
         }
@@ -697,15 +715,6 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           color: #fb923c;
         }
 
-        .animate-pulse {
-          animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: .4; }
-        }
-
         .animate-fade-in {
           animation: fadeIn 0.3s ease-out;
         }
@@ -713,6 +722,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(-5px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 768px) {
+          .guide-steps {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </div>

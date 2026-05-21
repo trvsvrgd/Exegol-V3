@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import sqlite3
+import hashlib
 from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 
@@ -257,6 +258,110 @@ class BacklogManager:
         self._sync_to_json()
         return True
 
+    def dedupe_auto_failures(self) -> Dict[str, Any]:
+        """Archive repeated active backlog rows that describe the same work.
+
+        The fleet can generate many time-stamped failure IDs for one underlying
+        issue. Keep the oldest active task as the canonical row, merge duplicate
+        IDs into it, and archive the repeated rows so the board stays actionable.
+        """
+        active = self.load_backlog()
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for task in active:
+            key = self._dedupe_key(task)
+            if key:
+                groups.setdefault(key, []).append(task)
+
+        duplicate_groups = {
+            key: tasks for key, tasks in groups.items()
+            if len(tasks) > 1
+        }
+        if not duplicate_groups:
+            return {
+                "removed_duplicates": 0,
+                "duplicate_groups": 0,
+                "canonical_task_ids": [],
+                "archived_task_ids": [],
+            }
+
+        now_str = datetime.datetime.now().isoformat()
+        canonical_task_ids: List[str] = []
+        archived_task_ids: List[str] = []
+
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            for tasks in duplicate_groups.values():
+                ordered = sorted(tasks, key=lambda task: (
+                    task.get("created_at") or "",
+                    task.get("rank") if task.get("rank") is not None else 999999,
+                    task.get("id") or "",
+                ))
+                canonical = ordered[0]
+                duplicates = ordered[1:]
+                canonical_id = canonical.get("id")
+                if not canonical_id:
+                    continue
+
+                merged_ids = list(dict.fromkeys(
+                    list(canonical.get("merged_duplicate_ids", []))
+                    + [task.get("id") for task in duplicates if task.get("id")]
+                ))
+                canonical["merged_duplicate_ids"] = merged_ids
+                canonical["duplicate_count"] = len(merged_ids)
+                canonical["updated_at"] = now_str
+                canonical_task_ids.append(canonical_id)
+
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = ?, priority = ?, type = ?, source_agent = ?,
+                        rationale = ?, created_at = ?, rank = ?, data = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        canonical.get("status"),
+                        canonical.get("priority"),
+                        canonical.get("type"),
+                        canonical.get("source_agent"),
+                        canonical.get("rationale"),
+                        canonical.get("created_at"),
+                        canonical.get("rank"),
+                        json.dumps(canonical),
+                        canonical_id,
+                    ),
+                )
+
+                for duplicate in duplicates:
+                    duplicate_id = duplicate.get("id")
+                    if not duplicate_id:
+                        continue
+                    duplicate["archived_at"] = now_str
+                    duplicate["archive_reason"] = f"Duplicate of {canonical_id}"
+                    duplicate["canonical_task_id"] = canonical_id
+                    archived_task_ids.append(duplicate_id)
+                    conn.execute(
+                        """
+                        UPDATE tasks
+                        SET archived_at = ?, status = ?, data = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            now_str,
+                            duplicate.get("status"),
+                            json.dumps(duplicate),
+                            duplicate_id,
+                        ),
+                    )
+            conn.commit()
+
+        self._sync_to_json()
+        return {
+            "removed_duplicates": len(archived_task_ids),
+            "duplicate_groups": len(duplicate_groups),
+            "canonical_task_ids": canonical_task_ids,
+            "archived_task_ids": archived_task_ids,
+        }
+
     def archive_completed_tasks(self) -> int:
         """Moves all completed tasks to archive by setting archived_at."""
         now_str = datetime.datetime.now().isoformat()
@@ -279,6 +384,25 @@ class BacklogManager:
             
         self._sync_to_json()
         return len(rows)
+
+    def _dedupe_key(self, task: Dict[str, Any]) -> Optional[str]:
+        summary = " ".join(str(task.get("summary") or "").lower().split())
+        if not summary:
+            return None
+
+        task_id = str(task.get("id") or "")
+        source = str(task.get("source") or task.get("source_agent") or "").lower()
+        duplicate_prone = (
+            task_id.startswith("auto_fail_")
+            or task_id.startswith("failure_")
+            or source in {"watcher_wedge", "supervisor", "agentic_coding", "ui"}
+            or summary.startswith(("fix:", "critical:", "resolve ", "notice:"))
+        )
+        if not duplicate_prone:
+            return None
+
+        digest = hashlib.sha1(summary.encode("utf-8")).hexdigest()
+        return digest
 
     def _sync_to_json(self):
         """Synchronizes the database state to the legacy JSON files."""

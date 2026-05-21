@@ -154,6 +154,59 @@ def test_retry_blocked_repo_clears_state_block_when_config_is_idle(orchestrator)
     assert updated_state["retry_available"] is False
 
 
+def test_retry_blocked_repo_clears_stale_heartbeat_file(orchestrator):
+    orch, repo_path, _priority_file = orchestrator
+    state_file = repo_path / ".exegol" / "fleet_state.json"
+    heartbeat_dir = repo_path / ".exegol" / "heartbeats"
+    heartbeat_dir.mkdir(parents=True, exist_ok=True)
+    heartbeat_file = heartbeat_dir / "stale123.json"
+    heartbeat_file.write_text(
+        json.dumps(
+            {
+                "session_id": "stale123",
+                "agent_id": "watcher_wedge",
+                "status": "active",
+                "last_pulse": "2026-05-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_heartbeat = heartbeat_dir / "stale456.json"
+    second_heartbeat.write_text(
+        json.dumps(
+            {
+                "session_id": "stale456",
+                "agent_id": "vibe_vader",
+                "status": "zombie",
+                "last_pulse": "2026-05-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_file.write_text(
+        json.dumps(
+            {
+                "active_repo": str(repo_path),
+                "active_agent": "watcher_wedge",
+                "session_id": "stale123",
+                "status": "blocked",
+                "errors": ["Supervisor detected stale heartbeat."],
+                "output_summary": "Supervisor detected stale heartbeat.",
+                "blocker_type": "stale_heartbeat",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert orch.retry_blocked_repo(str(repo_path)) is True
+
+    heartbeat = json.loads(heartbeat_file.read_text(encoding="utf-8"))
+    second = json.loads(second_heartbeat.read_text(encoding="utf-8"))
+    assert heartbeat["status"] == "cleared"
+    assert second["status"] == "cleared"
+    assert heartbeat["clear_reason"] == "Cleared from Workbench retry control."
+
+
 def test_trigger_go_rejects_overlap(orchestrator, monkeypatch):
     orch, _repo_path, _priority_file = orchestrator
     monkeypatch.setattr(orch, "process_repo", lambda _repo_info: pytest.fail("overlap should not process repos"))

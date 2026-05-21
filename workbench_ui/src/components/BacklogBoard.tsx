@@ -18,6 +18,8 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
     const [backlog, setBacklog] = useState<Task[]>([]);
     const [loading, setLoading] = useState(true);
     const [hideDone, setHideDone] = useState(true);
+    const [grooming, setGrooming] = useState(false);
+    const [groomMessage, setGroomMessage] = useState<string | null>(null);
 
     const fetchBacklog = useCallback(async () => {
         try {
@@ -43,6 +45,25 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
             fetchBacklog();
         } catch (err) {
             console.error(err);
+        }
+    };
+
+    const handleGroom = async () => {
+        setGrooming(true);
+        setGroomMessage(null);
+        try {
+            const result = await apiPost<{
+                archived_completed: number;
+                removed_duplicates: number;
+                remaining_active: number;
+            }>('/backlog/groom', { repo_path: repoPath });
+            setGroomMessage(`Archived ${result.archived_completed} completed and ${result.removed_duplicates} duplicate tasks. ${result.remaining_active} active remain.`);
+            await fetchBacklog();
+        } catch (err) {
+            console.error(err);
+            setGroomMessage("Backlog cleanup failed. Check backend logs.");
+        } finally {
+            setGrooming(false);
         }
     };
 
@@ -91,9 +112,13 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
                         <input type="checkbox" checked={hideDone} onChange={() => setHideDone(!hideDone)} />
                         Hide Completed
                     </label>
+                    <button className="groom-button" disabled={grooming} onClick={handleGroom}>
+                        {grooming ? "Cleaning..." : "Clean Up"}
+                    </button>
                     <span className="count-badge">{filtered.length} Tasks</span>
                 </div>
             </div>
+            {groomMessage && <div className="groom-message">{groomMessage}</div>}
 
             <div className="task-list">
                 {filtered.map((task, index) => (
@@ -150,6 +175,29 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
                     padding: 2px 8px;
                     border-radius: 4px;
                     font-size: 0.75rem;
+                }
+                .groom-button {
+                    background: rgba(255, 255, 255, 0.06);
+                    border: 1px solid rgba(255, 255, 255, 0.12);
+                    border-radius: 6px;
+                    color: #d1d5db;
+                    cursor: pointer;
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    padding: 0.35rem 0.55rem;
+                }
+                .groom-button:disabled {
+                    cursor: wait;
+                    opacity: 0.6;
+                }
+                .groom-message {
+                    margin-bottom: 1rem;
+                    padding: 0.7rem 0.8rem;
+                    border: 1px solid rgba(34, 197, 94, 0.25);
+                    border-radius: 6px;
+                    color: #86efac;
+                    background: rgba(34, 197, 94, 0.08);
+                    font-size: 0.82rem;
                 }
                 .task-list {
                     display: flex;

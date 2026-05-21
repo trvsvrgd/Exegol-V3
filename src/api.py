@@ -404,8 +404,18 @@ def get_repos():
     root_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
     if sync_discovered_repositories(orchestrator.priority_config, root_path):
         orchestrator.save_config()
+    repositories = []
+    for repo in orchestrator.priority_config.get("repositories", []):
+        hydrated = dict(repo)
+        repo_path = hydrated.get("repo_path", "")
+        fleet_state = StateManager(repo_path).read_fleet_state() if repo_path else {}
+        if fleet_state.get("status") == "blocked":
+            hydrated["agent_status"] = "blocked"
+            hydrated["status_detail"] = fleet_state.get("output_summary", "Fleet state is blocked.")
+            hydrated["blocker_type"] = fleet_state.get("blocker_type")
+        repositories.append(hydrated)
     return sorted(
-        orchestrator.priority_config.get("repositories", []),
+        repositories,
         key=lambda repo: (repo.get("priority", 999), os.path.basename(repo.get("repo_path", "")).lower()),
     )
 
@@ -534,6 +544,22 @@ def reorder_backlog(req: Dict[str, Any]):
     if not BacklogManager(repo_path).save_backlog_order(new_order_ids):
         raise HTTPException(status_code=400, detail="No task_ids provided.")
     return {"status": "success"}
+
+@app.post("/backlog/groom")
+def groom_backlog(req: Dict[str, Any]):
+    repo_path = req.get("repo_path")
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Missing repo_path")
+
+    manager = BacklogManager(repo_path)
+    archived_completed = manager.archive_completed_tasks()
+    dedupe = manager.dedupe_auto_failures()
+    return {
+        "status": "success",
+        "archived_completed": archived_completed,
+        **dedupe,
+        "remaining_active": len(manager.load_backlog()),
+    }
 
 # --- Epic 3: Agent Settings & Model Routing ---
 

@@ -14,6 +14,8 @@ interface Repo {
   model_routing_preference: string;
   priority: number;
   agent_status: string;
+  status_detail?: string;
+  blocker_type?: string;
 }
 
 interface AutonomousStatus {
@@ -38,6 +40,7 @@ export default function Home() {
   const [cycleRunning, setCycleRunning] = useState<boolean>(false);
   const [controlBusy, setControlBusy] = useState<boolean>(false);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [controlMessage, setControlMessage] = useState<string | null>(null);
   const [supervisorHealth, setSupervisorHealth] = useState<SupervisorHealth | null>(null);
 
   useEffect(() => {
@@ -72,11 +75,13 @@ export default function Home() {
   const setAutonomousFleet = async (enabled: boolean) => {
     setControlBusy(true);
     setControlError(null);
+    setControlMessage(null);
     try {
       const endpoint = enabled ? "/fleet/start-autonomous" : "/fleet/stop-autonomous";
       const data = await apiPost<AutonomousStatus & {status: string}>(endpoint, {});
       setAutonomousMode(data.continuous_mode);
       setCycleRunning(data.cycle_running);
+      setControlMessage(enabled ? "Autonomous fleet loop started." : "Autonomous fleet loop stopped.");
     } catch (e) {
       console.error("Failed to toggle autonomous mode", e);
       setControlError("Fleet control request failed. Check backend logs.");
@@ -85,19 +90,18 @@ export default function Home() {
     }
   };
 
-  const runGoOnce = async () => {
+  const runAutonomousFleet = async () => {
+    if (!activeRepo) return;
     setControlBusy(true);
     setControlError(null);
+    setControlMessage(null);
     try {
-      const data = await apiPost<AutonomousStatus & {status: string}>("/fleet/go", {});
-      setAutonomousMode(data.continuous_mode);
-      setCycleRunning(data.cycle_running);
-      if (data.status !== "success") {
-        setControlError("Go did not start because another fleet cycle is active or the run failed.");
-      }
+      await apiPost<{status: string; session_id: string}>("/autonomous/start", { repo_path: activeRepo });
+      setCycleRunning(true);
+      setControlMessage("Fleet run queued for the selected repository.");
     } catch (e) {
-      console.error("Failed to trigger Go", e);
-      setControlError("Go request failed. Check backend logs.");
+      console.error("Failed to run autonomous fleet", e);
+      setControlError("Fleet run request failed. Check backend logs.");
     } finally {
       setControlBusy(false);
     }
@@ -133,24 +137,18 @@ export default function Home() {
         <div className="fleet-controls" style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
           <button
             className="fleet-toggle-btn"
-            onClick={runGoOnce}
-            disabled={controlBusy || cycleRunning}
-            title={cycleRunning ? "A fleet cycle is already running." : "Run one autonomous fleet cycle."}
+            onClick={autonomousMode ? () => setAutonomousFleet(false) : runAutonomousFleet}
+            disabled={controlBusy || (!autonomousMode && (cycleRunning || !activeRepo))}
+            title={autonomousMode ? "Stop the autonomous fleet loop." : cycleRunning ? "A fleet cycle is already running." : "Run the autonomous fleet for the selected repository."}
           >
-            {cycleRunning ? "Go Running" : "Go"}
-          </button>
-          <button 
-            className={`fleet-toggle-btn ${autonomousMode ? 'active' : ''}`}
-            onClick={() => setAutonomousFleet(!autonomousMode)}
-            disabled={controlBusy}
-          >
-            {autonomousMode ? 'Stop Autonomous Fleet' : 'Start Autonomous Fleet'}
+            {cycleRunning ? "Fleet Running" : autonomousMode ? "Stop Autonomous Fleet" : "Run Autonomous Fleet"}
           </button>
         </div>
         {controlError && <div className="error-banner control-error">{controlError}</div>}
+        {controlMessage && <div className="success-banner control-error">{controlMessage}</div>}
         {supervisorHealth?.status === "degraded" && (
           <div className="error-banner control-error">
-            Supervisor degraded:
+            Needs attention:
             {" "}
             {[
               ...supervisorHealth.degraded_services,
@@ -195,7 +193,8 @@ export default function Home() {
             </div>
             <div className="stat-card">
               <span className="stat-label">Agent Status</span>
-              <strong className="stat-value status-active">{activeRepoMeta.agent_status || "Online"}</strong>
+              <strong className={`stat-value ${activeRepoMeta.agent_status === "blocked" ? "status-blocked-text" : "status-active"}`}>{activeRepoMeta.agent_status || "Online"}</strong>
+              {activeRepoMeta.status_detail && <span className="stat-detail">{activeRepoMeta.status_detail}</span>}
             </div>
           </div>
         ) : (
@@ -419,6 +418,17 @@ export default function Home() {
           text-shadow: 0 0 10px rgba(74, 222, 128, 0.3);
         }
 
+        .status-blocked-text {
+          color: #fca5a5;
+          text-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+        }
+
+        .stat-detail {
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+          line-height: 1.35;
+        }
+
         .agent-engagement-section {
           display: flex;
           flex-direction: column;
@@ -522,6 +532,16 @@ export default function Home() {
           background: rgba(239, 68, 68, 0.1);
           border: 1px solid rgba(239, 68, 68, 0.3);
           color: #fca5a5;
+          padding: 1rem;
+          border-radius: 12px;
+          text-align: center;
+          margin-bottom: 2rem;
+        }
+
+        .success-banner {
+          background: rgba(34, 197, 94, 0.1);
+          border: 1px solid rgba(34, 197, 94, 0.3);
+          color: #86efac;
           padding: 1rem;
           border-radius: 12px;
           text-align: center;
