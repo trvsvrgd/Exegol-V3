@@ -692,6 +692,16 @@ class ExegolOrchestrator:
         if not goal:
             return False
 
+        status = objective.get("status", "idle")
+        if status == "paused":
+            self._write_fleet_state(
+                repo_path=repo_path,
+                status="paused",
+                active_agent=None,
+                output_summary="Objective execution is paused.",
+            )
+            return True
+
         phase = objective.get("phase", "idle")
         if phase in {"done", "failed_budget", "blocked_human"}:
             self._write_fleet_state(
@@ -727,6 +737,7 @@ class ExegolOrchestrator:
             repo_info.get("model_routing_preference", "ollama"),
             max_steps,
             agent_id,
+            allow_chaining=False,
         )
         self._record_objective_result(manager, phase, agent_id, result)
         return True
@@ -901,7 +912,8 @@ class ExegolOrchestrator:
 
     def wake_and_execute_agent(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
                                 agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
-                                loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
+                                loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = "",
+                                allow_chaining: bool = True):
         if agent_id is None:
             agent_id = "product_poe"
             
@@ -910,12 +922,16 @@ class ExegolOrchestrator:
         try:
             result = self._wake_and_execute_agent_inner(
                 repo_info, routing, max_steps, agent_id, snapshot_hash, regression_context,
-                loop_depth, chain_history, scheduled_prompt
+                loop_depth, chain_history, scheduled_prompt, allow_chaining
             )
         finally:
             self.release_execution_lock()
             
         if result and getattr(result, "next_agent_id", None) and result.outcome == "success":
+            if not allow_chaining:
+                print(f"[Orchestrator] Chaining disabled. Returning current agent result without handoff to {result.next_agent_id}")
+                return result
+
             print(f"[Orchestrator] Autonomous handoff requested: {agent_id} -> {result.next_agent_id}")
             registry_entry = AGENT_REGISTRY.get(result.next_agent_id)
             if registry_entry:
@@ -934,7 +950,8 @@ class ExegolOrchestrator:
                     snapshot_hash=getattr(result, "snapshot_hash", ""),
                     regression_context=getattr(result, "regression_context", ""),
                     loop_depth=current_depth,
-                    chain_history=current_history
+                    chain_history=current_history,
+                    allow_chaining=allow_chaining
                 )
             else:
                 print(f"[Orchestrator] Error: Requested next agent '{result.next_agent_id}' not found in registry.")
@@ -943,7 +960,8 @@ class ExegolOrchestrator:
 
     def _wake_and_execute_agent_inner(self, repo_info: Dict[str, Any], routing: str, max_steps: int,
                                 agent_id: str = None, snapshot_hash: str = "", regression_context: str = "",
-                                loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = ""):
+                                loop_depth: int = 0, chain_history: List[str] = None, scheduled_prompt: str = "",
+                                allow_chaining: bool = True):
         """Dispatch an agent through SessionManager for a fully isolated session."""
         if agent_id is None:
             agent_id = "product_poe"

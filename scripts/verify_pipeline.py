@@ -52,23 +52,36 @@ LLMClient.parse_json_response = MagicMock(return_value=[{"type": "write", "path"
 
 # --- EXECUTION ---
 
+import hmac
+import hashlib
+
+def sign_handoff(handoff):
+    secret = os.getenv("EXEGOL_HMAC_SECRET", "dev-secret-keep-it-safe")
+    data   = f"{handoff.repo_path}|{handoff.agent_id}|{handoff.session_id}|{handoff.timestamp}"
+    sig    = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()
+    object.__setattr__(handoff, "signature", sig)
+
 def run_verification():
     sm = SessionManager(log_every_session=True)
+    sm._default_cooldown = 0.0
     
     print("\n--- Phase 1: ProductPoe selects task ---")
     handoff_poe = HandoffContext(repo_path=REPO_PATH, agent_id="product_poe", task_id="verify", model_routing="ollama", max_steps=10)
+    sign_handoff(handoff_poe)
     res_poe = sm.spawn_agent_session("product_poe", AGENT_REGISTRY["product_poe"]["module"], AGENT_REGISTRY["product_poe"]["class"], handoff_poe)
     print(f"Poe Result: {res_poe.output_summary}")
     print(f"Next Agent: {res_poe.next_agent_id}")
     
     print("\n--- Phase 2: DeveloperDex implements task and captures snapshot ---")
     handoff_dex = HandoffContext(repo_path=REPO_PATH, agent_id="developer_dex", task_id="verify_task_001", model_routing="ollama", max_steps=20)
+    sign_handoff(handoff_dex)
     res_dex = sm.spawn_agent_session("developer_dex", AGENT_REGISTRY["developer_dex"]["module"], AGENT_REGISTRY["developer_dex"]["class"], handoff_dex)
     print(f"Dex Result: {res_dex.output_summary}")
     print(f"Snapshot Hash: {res_dex.snapshot_hash}")
     
     print("\n--- Phase 3: QualityQuigon validates snapshot (Baseline Capture) ---")
     handoff_quigon = HandoffContext(repo_path=REPO_PATH, agent_id="quality_quigon", task_id="verify_task_001", model_routing="ollama", max_steps=15, snapshot_hash=res_dex.snapshot_hash)
+    sign_handoff(handoff_quigon)
     res_quigon = sm.spawn_agent_session("quality_quigon", AGENT_REGISTRY["quality_quigon"]["module"], AGENT_REGISTRY["quality_quigon"]["class"], handoff_quigon)
     print(f"Quigon Result: {res_quigon.output_summary}")
 
@@ -86,7 +99,7 @@ def run_verification():
     res_quigon_2 = sm.spawn_agent_session("quality_quigon", AGENT_REGISTRY["quality_quigon"]["module"], AGENT_REGISTRY["quality_quigon"]["class"], handoff_quigon)
     print(f"Quigon Result 2: {res_quigon_2.output_summary}")
     print(f"Next Agent: {res_quigon_2.next_agent_id}")
-
+ 
     print("\n--- Phase 5: QualityQuigon detects mismatch (Self-Healing Loop) ---")
     # Mock compare_snapshots to return mismatch
     snapshot_tester.compare_snapshots = MagicMock(return_value={
@@ -100,10 +113,10 @@ def run_verification():
     print(f"Quigon Result 3: {res_quigon_3.output_summary}")
     print(f"Next Agent (Should be developer_dex): {res_quigon_3.next_agent_id}")
     print(f"Regression Context: {res_quigon_3.regression_context}")
-
+ 
     assert res_quigon_3.next_agent_id == "developer_dex"
-    assert "Mismatch detected" in res_quigon_3.regression_context
-
+    assert "mismatch detected" in res_quigon_3.regression_context
+ 
     # Cleanup the test file created by Dex
     test_file = os.path.join(REPO_PATH, "verify_test.txt")
     if os.path.exists(test_file):

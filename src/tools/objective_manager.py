@@ -48,10 +48,10 @@ PHASE_STATUS = {
 ALLOWED_TRANSITIONS = {
     "idle": {"planning", "blocked_human", "blocked_environment"},
     "planning": {"implementing", "blocked_human", "blocked_environment", "failed_budget", "idle"},
-    "implementing": {"validating", "retrying", "remediating", "blocked_human", "blocked_environment", "failed_budget"},
-    "validating": {"done", "implementing", "planning", "retrying", "blocked_human", "blocked_environment", "failed_budget"},
-    "retrying": {"implementing", "validating", "remediating", "blocked_human", "blocked_environment", "failed_budget"},
-    "remediating": {"retrying", "implementing", "validating", "blocked_human", "blocked_environment", "failed_budget"},
+    "implementing": {"validating", "retrying", "remediating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "validating": {"done", "implementing", "planning", "retrying", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "retrying": {"implementing", "validating", "remediating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "remediating": {"retrying", "implementing", "validating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
     "blocked_human": {"planning", "implementing", "validating", "idle", "failed_budget"},
     "blocked_environment": {"remediating", "retrying", "idle", "failed_budget"},
     "done": {"planning", "idle"},
@@ -127,7 +127,10 @@ class ObjectiveManager:
         self._validate_transition(current_phase, phase, blocked_reason)
         expected_status = PHASE_STATUS[phase]
         if status is not None and status != expected_status:
-            raise ValueError(f"Objective phase '{phase}' requires status '{expected_status}', got '{status}'")
+            if status == "paused" and expected_status == "running":
+                expected_status = "paused"
+            else:
+                raise ValueError(f"Objective phase '{phase}' requires status '{expected_status}', got '{status}'")
         objective["phase"] = phase
         objective["status"] = expected_status
         if active_task_id is not None:
@@ -149,6 +152,30 @@ class ObjectiveManager:
         objective = self.load()
         current_phase = objective.get("phase", "idle")
         return phase in ALLOWED_TRANSITIONS.get(current_phase, set())
+
+    def pause(self) -> Dict[str, Any]:
+        objective = self.load()
+        status = objective.get("status", "idle")
+        if status == "running":
+            objective["status"] = "paused"
+            objective["updated_at"] = self._now()
+            self.save(objective, event_type="objective_paused")
+            return objective
+        else:
+            raise ValueError(f"Cannot pause objective: current status is '{status}', expected 'running'")
+
+    def resume(self) -> Dict[str, Any]:
+        objective = self.load()
+        status = objective.get("status", "idle")
+        if status == "paused":
+            phase = objective.get("phase", "idle")
+            expected_status = PHASE_STATUS.get(phase, "running")
+            objective["status"] = expected_status
+            objective["updated_at"] = self._now()
+            self.save(objective, event_type="objective_resumed")
+            return objective
+        else:
+            raise ValueError(f"Cannot resume objective: current status is '{status}', expected 'paused'")
 
     def save(self, objective: Dict[str, Any], event_type: str = "objective_saved") -> None:
         normalized = self._normalize(objective)
@@ -178,7 +205,12 @@ class ObjectiveManager:
     def _normalize(self, objective: Dict[str, Any]) -> Dict[str, Any]:
         now = self._now()
         phase = objective.get("phase") if objective.get("phase") in VALID_PHASES else "idle"
-        status = PHASE_STATUS.get(phase, "idle")
+        expected_status = PHASE_STATUS.get(phase, "idle")
+        status = objective.get("status")
+        if status == "paused" and expected_status == "running":
+            pass
+        else:
+            status = expected_status
         blocked_reason = objective.get("blocked_reason") if phase in BLOCKED_PHASES else None
         return {
             "schema_version": int(objective.get("schema_version", 1) or 1),

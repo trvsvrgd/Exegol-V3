@@ -1,6 +1,6 @@
 import os
 import json
-from tools.snapshot_tester import capture_snapshot, compare_snapshots
+from tools import snapshot_tester
 
 def run_regression_eval(agent_output: dict, snapshot_name: str):
     """Orchestrates a snapshot comparison for a given agent output.
@@ -10,11 +10,11 @@ def run_regression_eval(agent_output: dict, snapshot_name: str):
     """
     print(f"[Eval] Running snapshot regression for: {snapshot_name}")
     
-    result = compare_snapshots(agent_output, snapshot_name)
+    result = snapshot_tester.compare_snapshots(agent_output, snapshot_name)
     
     if result["result"] == "missing":
         print(f"[Eval] No baseline found for {snapshot_name}. Capturing first snapshot.")
-        h = capture_snapshot(agent_output, snapshot_name)
+        h = snapshot_tester.capture_snapshot(agent_output, snapshot_name)
         return {"status": "baseline_captured", "hash": h}
     
     if result["result"] == "match":

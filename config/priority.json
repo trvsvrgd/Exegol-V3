@@ -62,6 +62,15 @@
       "max_steps_policy": 6,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\OpenShell",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 50,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
     }
   ],
   "global_settings": {

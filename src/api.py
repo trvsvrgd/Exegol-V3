@@ -128,6 +128,23 @@ _continuous_fleet_thread = None
 _continuous_repo_path: Optional[str] = None
 _continuous_lock = threading.Lock()
 
+# --- Active Objective Loops Registry ---
+_active_objective_loops: Dict[str, Dict[str, Any]] = {}
+_objective_loops_lock = threading.Lock()
+
+def _objective_loop_for_repo(repo_path: str, stop_event: threading.Event):
+    while not stop_event.is_set():
+        print(f"[API] Running objective loop cycle for {repo_path}...")
+        try:
+            orchestrator.run_fleet_cycle(repo_path=repo_path)
+        except Exception as e:
+            print(f"[API] Error in objective loop for {repo_path}: {e}")
+        
+        for _ in range(10):
+            if stop_event.is_set():
+                break
+            time.sleep(1)
+
 def _continuous_fleet_loop():
     global _continuous_mode
     while True:
@@ -400,6 +417,9 @@ class ObjectiveTransitionRequest(BaseModel):
     last_agent_id: Optional[str] = None
     last_result: Optional[Dict[str, Any]] = None
     blocked_reason: Optional[str] = None
+
+class ObjectiveControlRequest(BaseModel):
+    repo_path: str
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -798,6 +818,118 @@ def transition_objective(req: ObjectiveTransitionRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+@app.post("/objective/start")
+def start_objective_loop(req: ObjectiveControlRequest):
+    repo_path = os.path.abspath(req.repo_path)
+    manager = ObjectiveManager(repo_path)
+    objective = manager.load()
+    if not str(objective.get("goal") or "").strip():
+        raise HTTPException(status_code=400, detail="Cannot start: no objective goal is set.")
+
+    with _objective_loops_lock:
+        if repo_path in _active_objective_loops:
+            event = _active_objective_loops[repo_path]["event"]
+            thread = _active_objective_loops[repo_path]["thread"]
+            if thread.is_alive():
+                if objective.get("status") == "paused":
+                    manager.resume()
+                return {"status": "success", "detail": "Loop already running.", "objective": manager.load()}
+
+        stop_event = threading.Event()
+        if objective.get("status") == "paused":
+            manager.resume()
+        
+        thread = threading.Thread(
+            target=_objective_loop_for_repo,
+            args=(repo_path, stop_event),
+            daemon=True
+        )
+        _active_objective_loops[repo_path] = {
+            "event": stop_event,
+            "thread": thread,
+            "started_at": datetime.datetime.now().isoformat()
+        }
+        thread.start()
+
+    return {"status": "success", "detail": "Loop started.", "objective": manager.load()}
+
+@app.post("/objective/pause")
+def pause_objective(req: ObjectiveControlRequest):
+    repo_path = os.path.abspath(req.repo_path)
+    manager = ObjectiveManager(repo_path)
+    try:
+        objective = manager.pause()
+        return {"status": "success", "detail": "Objective paused.", "objective": objective}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/objective/resume")
+def resume_objective(req: ObjectiveControlRequest):
+    repo_path = os.path.abspath(req.repo_path)
+    manager = ObjectiveManager(repo_path)
+    try:
+        manager.resume()
+        with _objective_loops_lock:
+            thread_running = False
+            if repo_path in _active_objective_loops:
+                if _active_objective_loops[repo_path]["thread"].is_alive():
+                    thread_running = True
+            if not thread_running:
+                stop_event = threading.Event()
+                thread = threading.Thread(
+                    target=_objective_loop_for_repo,
+                    args=(repo_path, stop_event),
+                    daemon=True
+                )
+                _active_objective_loops[repo_path] = {
+                    "event": stop_event,
+                    "thread": thread,
+                    "started_at": datetime.datetime.now().isoformat()
+                }
+                thread.start()
+        return {"status": "success", "detail": "Objective resumed.", "objective": manager.load()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/objective/stop")
+def stop_objective_loop(req: ObjectiveControlRequest):
+    repo_path = os.path.abspath(req.repo_path)
+    manager = ObjectiveManager(repo_path)
+    objective = manager.load()
+    phase = objective.get("phase", "idle")
+    if phase != "idle":
+        try:
+            manager.transition("idle")
+        except Exception as e:
+            print(f"[API] Failed to transition to idle: {e}")
+
+    with _objective_loops_lock:
+        if repo_path in _active_objective_loops:
+            _active_objective_loops[repo_path]["event"].set()
+            _active_objective_loops.pop(repo_path)
+            return {"status": "success", "detail": "Loop stopped and objective reset to idle."}
+        
+    return {"status": "success", "detail": "Loop was not running, objective reset to idle."}
+
+@app.get("/objective/status")
+def get_objective_status(repo_path: str):
+    repo_path = os.path.abspath(repo_path)
+    manager = ObjectiveManager(repo_path)
+    objective = manager.load()
+    
+    thread_alive = False
+    started_at = None
+    with _objective_loops_lock:
+        if repo_path in _active_objective_loops:
+            thread_alive = _active_objective_loops[repo_path]["thread"].is_alive()
+            started_at = _active_objective_loops[repo_path]["started_at"]
+            
+    return {
+        "objective": objective,
+        "loop_running": thread_alive,
+        "loop_started_at": started_at
+    }
 
 @app.get("/fleet/tools")
 def get_fleet_tools(repo_path: str):
