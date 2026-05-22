@@ -655,6 +655,26 @@ def update_thrawn_objective(req: ThrawnObjectiveRequest):
 def answer_thrawn_question(req: ThrawnAnswerRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     mgr.answer_question(req.question, req.answer)
+    try:
+        from tools.hitl_manager import HITLManager
+        hitl_mgr = HITLManager(req.repo_path)
+        pending = hitl_mgr.get_pending()
+        for task in pending:
+            context = task.get("context", "")
+            task_title = task.get("task", "")
+            is_match = False
+            if req.question in context:
+                is_match = True
+            elif task_title.startswith("Thrawn: ") and req.question.startswith(task_title[8:].rstrip(".")):
+                is_match = True
+            if is_match:
+                hitl_mgr.resolve_task(
+                    item_id=task.get("id"),
+                    status="done",
+                    notes=f"Answered via Workbench: {req.answer[:100]}"
+                )
+    except Exception as e:
+        print(f"[API] Failed to auto-resolve HITL task: {e}")
     return {"status": "success"}
 
 @app.post("/thrawn/ask")

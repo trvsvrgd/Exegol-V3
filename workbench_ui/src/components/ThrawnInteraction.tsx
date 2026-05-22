@@ -24,6 +24,8 @@ export default function ThrawnInteraction({ repoPath }: Props) {
   const [objective, setObjective] = useState("");
   const [newQuestion, setNewQuestion] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
 
   const fetchIntel = useCallback(async () => {
     try {
@@ -110,6 +112,13 @@ export default function ThrawnInteraction({ repoPath }: Props) {
         <p className="thrawn-motto">&quot;To defeat an enemy, you must know them.&quot;</p>
       </div>
 
+      <div className="guidance-box">
+        <span className="guidance-icon">💡</span>
+        <div className="guidance-text">
+          <strong>Strategic Guidance:</strong> Thrawn updates the repository&apos;s trajectory based on the Primary Objective, Architecture Patterns, and Answers. Resolving questions here automatically closes the corresponding tasks in the Control Tower and Slack. To cycle new questions and analyze updates, click <strong>Trigger Strategic Review</strong> below.
+        </div>
+      </div>
+
       <div className="thrawn-section">
         <h3>Primary Objective</h3>
         <textarea 
@@ -159,30 +168,82 @@ export default function ThrawnInteraction({ repoPath }: Props) {
       <div className="thrawn-section">
         <h3>Open Clarification Questions</h3>
         <div className="questions-list">
-          {intel?.questions.map((q, idx) => (
-            <div key={idx} className="question-item">
-              <p className="q-text">{q.question}</p>
-              {q.answer ? (
-                <div className="a-bubble">
-                  <span className="a-label">Answered:</span> {q.answer}
+          {intel?.questions.map((q, idx) => {
+            const isEditing = editingQuestion === q.question;
+            const isAnswered = q.answer !== null;
+
+            if (isAnswered && !isEditing) {
+              return (
+                <div key={idx} className="question-item">
+                  <p className="q-text">{q.question}</p>
+                  <div className="a-bubble-row">
+                    <div className="a-bubble">
+                      <span className="a-label">Answered:</span> {q.answer}
+                    </div>
+                    <button 
+                      className="btn-small btn-edit" 
+                      onClick={() => {
+                        setAnswers(prev => ({ ...prev, [q.question]: q.answer || "" }));
+                        setEditingQuestion(q.question);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
                 </div>
-              ) : (
+              );
+            }
+
+            return (
+              <div key={idx} className="question-item">
+                <p className="q-text">{q.question}</p>
                 <div className="a-input-row">
                   <input 
                     type="text" 
                     placeholder="Your answer..." 
                     className="thrawn-input-small"
+                    value={answers[q.question] || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAnswers(prev => ({ ...prev, [q.question]: val }));
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
-                        handleAnswerQuestion(q.question, (e.target as HTMLInputElement).value);
-                        (e.target as HTMLInputElement).value = "";
+                        const answerVal = answers[q.question] || "";
+                        if (answerVal.trim()) {
+                          void handleAnswerQuestion(q.question, answerVal);
+                          setEditingQuestion(null);
+                        }
                       }
                     }}
                   />
+                  <button 
+                    className="btn-small btn-submit"
+                    onClick={() => {
+                      const answerVal = answers[q.question] || "";
+                      if (answerVal.trim()) {
+                        void handleAnswerQuestion(q.question, answerVal);
+                        setEditingQuestion(null);
+                      }
+                    }}
+                    disabled={!(answers[q.question] || "").trim()}
+                  >
+                    {isEditing ? "Save" : "Submit"}
+                  </button>
+                  {isEditing && (
+                    <button 
+                      className="btn-small btn-cancel"
+                      onClick={() => {
+                        setEditingQuestion(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
           {intel?.questions.length === 0 && <p className="no-items">No open questions. Fleet is clear.</p>}
         </div>
       </div>
@@ -268,6 +329,27 @@ export default function ThrawnInteraction({ repoPath }: Props) {
           color: #888;
           margin-top: 0.3rem;
         }
+        .guidance-box {
+          background: rgba(74, 144, 226, 0.08);
+          border: 1px solid rgba(74, 144, 226, 0.2);
+          border-radius: 8px;
+          padding: 0.9rem;
+          margin-bottom: 1.5rem;
+          font-size: 0.85rem;
+          line-height: 1.4;
+          color: #ccd6f6;
+          display: flex;
+          gap: 0.6rem;
+          align-items: flex-start;
+        }
+        .guidance-icon {
+          font-size: 1.1rem;
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+        .guidance-text strong {
+          color: #4a90e2;
+        }
         .thrawn-section {
           margin-bottom: 1.5rem;
         }
@@ -318,7 +400,14 @@ export default function ThrawnInteraction({ repoPath }: Props) {
           margin: 0 0 0.5rem 0;
           color: #eee;
         }
+        .a-bubble-row {
+          display: flex;
+          gap: 0.5rem;
+          align-items: center;
+          justify-content: space-between;
+        }
         .a-bubble {
+          flex: 1;
           font-size: 0.85rem;
           color: #4a90e2;
           background: rgba(74, 144, 226, 0.1);
@@ -328,6 +417,40 @@ export default function ThrawnInteraction({ repoPath }: Props) {
         .a-label {
           font-weight: bold;
           margin-right: 0.4rem;
+        }
+        .btn-edit {
+          background: rgba(255, 255, 255, 0.08) !important;
+          color: #ccc !important;
+          border: 1px solid rgba(255, 255, 255, 0.15) !important;
+          transition: all 0.2s ease;
+        }
+        .btn-edit:hover {
+          background: rgba(255, 255, 255, 0.15) !important;
+          color: #fff !important;
+        }
+        .btn-submit {
+          background: rgba(74, 144, 226, 0.15) !important;
+          color: #4a90e2 !important;
+          border: 1px solid rgba(74, 144, 226, 0.25) !important;
+          font-weight: 600;
+          transition: all 0.2s ease;
+        }
+        .btn-submit:hover:not(:disabled) {
+          background: rgba(74, 144, 226, 0.25) !important;
+          color: #5da2f3 !important;
+        }
+        .btn-submit:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .btn-cancel {
+          background: rgba(235, 87, 87, 0.1) !important;
+          color: #eb5757 !important;
+          border: 1px solid rgba(235, 87, 87, 0.2) !important;
+          transition: all 0.2s ease;
+        }
+        .btn-cancel:hover {
+          background: rgba(235, 87, 87, 0.2) !important;
         }
         .arch-list {
           display: flex;

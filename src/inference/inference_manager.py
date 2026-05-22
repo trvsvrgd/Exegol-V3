@@ -18,12 +18,18 @@ class InferenceManager:
         
         if routing_str == "ollama":
             return OllamaClient(model=model)
-        elif routing_str == "gemini":
-            return GeminiClient(model=model)
-        elif routing_str in ("anthropic", "claude"):
-            return AnthropicClient(model=model)
-        elif routing_str == "vllm":
-            return VLLMClient(model=model)
+        elif routing_str == "gemini" or routing_str.startswith("gemini-") or routing_str.startswith("gemini/"):
+            # If the provider string specifies a model, use it as the model name if no model is explicitly passed
+            chosen_model = model or (provider if routing_str != "gemini" else None)
+            return GeminiClient(model=chosen_model)
+        elif (routing_str in ("anthropic", "claude") or 
+              routing_str.startswith("anthropic-") or routing_str.startswith("claude-") or
+              routing_str.startswith("anthropic/") or routing_str.startswith("claude/")):
+            chosen_model = model or (provider if routing_str not in ("anthropic", "claude") else None)
+            return AnthropicClient(model=chosen_model)
+        elif routing_str == "vllm" or routing_str.startswith("vllm-") or routing_str.startswith("vllm/"):
+            chosen_model = model or (provider if routing_str != "vllm" else None)
+            return VLLMClient(model=chosen_model)
         elif routing_str == "llama.cpp":
             return LlamaCppClient(model=model)
         else:
