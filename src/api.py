@@ -8,6 +8,7 @@ import threading
 import time
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -23,10 +24,20 @@ from tools.egress_filter import EgressFilter
 from tools.fleet_logger import read_interaction_logs
 from tools.tool_registry import ToolRegistry
 from tools.hitl_manager import HITLManager
-from tools.supervisor_health import build_supervisor_health
+from tools.operations import get_backend_process_state, is_retry_allowed
+from tools.supervisor_health import build_supervisor_health, reconcile_stale_heartbeats, scan_heartbeats
 from tools.backlog_manager import BacklogManager
 from tools.objective_manager import ObjectiveManager
 from tools.repo_discovery import sync_discovered_repositories
+
+ROOT_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+
+
+def load_runtime_environment(root_path: str = ROOT_DIR) -> None:
+    load_dotenv(os.path.join(root_path, ".env"))
+
+
+load_runtime_environment()
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -89,6 +100,11 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 class RepoRequest(BaseModel):
     repo_path: str
+
+
+class BlockerActionRequest(BaseModel):
+    repo_path: str
+    blocker_id: str
 
 
 def _execute_agent_sync(session_id: str, repo_path: str, agent_id: str, model: str):
@@ -155,10 +171,17 @@ def _continuous_fleet_loop():
 
         if repo_path:
             print(f"[API] Running continuous fleet cycle for {repo_path}...")
-            orchestrator.run_fleet_cycle(repo_path=repo_path)
+            orchestrator.run_fleet_cycle(
+                repo_path=repo_path,
+                include_due_scheduled=True,
+                trigger_source="manual_run",
+            )
         else:
             print("[API] Running continuous fleet cycle...")
-            orchestrator.run_fleet_cycle()
+            orchestrator.run_fleet_cycle(
+                include_due_scheduled=True,
+                trigger_source="manual_run",
+            )
 
         for _ in range(10):
             with _continuous_lock:
@@ -173,6 +196,75 @@ def _autonomous_status() -> Dict[str, Any]:
         "cycle_running": orchestrator.is_running_fleet,
         "repo_path": _continuous_repo_path,
     }
+
+
+def _same_repo_path(left: Optional[str], right: Optional[str]) -> bool:
+    if not left or not right:
+        return False
+    return os.path.abspath(left) == os.path.abspath(right)
+
+
+def _repo_config_for_path(repo_path: str) -> Dict[str, Any]:
+    normalized = os.path.abspath(repo_path)
+    orchestrator.load_config()
+    for repo in orchestrator.priority_config.get("repositories", []):
+        configured = repo.get("repo_path")
+        if configured and os.path.abspath(configured) == normalized:
+            return dict(repo)
+    return {}
+
+
+def _autonomous_context_for_repo(repo_path: str) -> Dict[str, Any]:
+    status = _autonomous_status()
+    selected = _same_repo_path(status.get("repo_path"), repo_path)
+    if not status.get("continuous_mode"):
+        loop_status = "stopped"
+    elif status.get("cycle_running") and selected:
+        loop_status = "running_selected_repo"
+    elif status.get("cycle_running"):
+        loop_status = "running_other_repo"
+    elif selected:
+        loop_status = "waiting_between_cycles"
+    else:
+        loop_status = "enabled_for_other_repo"
+
+    return {
+        **status,
+        "selected_repo": selected,
+        "loop_status": loop_status,
+    }
+
+
+def _empty_fleet_state(repo_path: str, status: str = "idle") -> Dict[str, Any]:
+    return {
+        "active_repo": repo_path,
+        "active_agent": None,
+        "session_id": "",
+        "status": status,
+        "handoff_chain": [],
+        "next_agent_id": "",
+        "monologue": [],
+        "errors": [],
+        "output_summary": "",
+    }
+
+
+def _recent_failure_context(repo_path: str) -> Dict[str, Any]:
+    try:
+        logs = read_interaction_logs([repo_path], days=30)
+        logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        failed_logs = [l for l in logs if l.get("outcome") == "failure" or l.get("errors")]
+        if failed_logs:
+            last_fail = failed_logs[0]
+            return {
+                "active_agent": last_fail.get("agent_id"),
+                "session_id": last_fail.get("session_id", ""),
+                "errors": last_fail.get("errors", []),
+                "output_summary": last_fail.get("task_summary", ""),
+            }
+    except Exception as e:
+        print(f"[API] Error reading interaction logs for blocked state: {e}")
+    return {}
 
 @app.post("/fleet/start-autonomous")
 def start_autonomous_fleet(req: Optional[RepoRequest] = None):
@@ -226,9 +318,111 @@ def get_supervisor_health():
         frontend_url=os.getenv("EXEGOL_FRONTEND_URL", "http://127.0.0.1:3000"),
     )
 
+@app.get("/fleet/operations")
+def get_fleet_operations(repo_path: str):
+    repo_path = os.path.abspath(repo_path)
+    sm = StateManager(repo_path)
+    supervisor_state = sm.read_json(".exegol/supervisor_state.json") or {}
+    fleet_state = sm.read_fleet_state()
+    scheduler_state = sm.read_json(".exegol/scheduler_state.json") or {}
+    queue = HITLManager(repo_path).get_queue()
+    backlog = BacklogManager(repo_path).load_backlog()
+
+    pending_queue = [item for item in queue if item.get("status") != "done"]
+    latest_blocker = next(
+        (
+            item
+            for item in pending_queue
+            if item.get("category") == "blocker" or item.get("blocker_type")
+        ),
+        None,
+    )
+    active_backlog = [
+        item
+        for item in backlog
+        if item.get("status") not in {"done", "completed", "archived", "dismissed"}
+    ]
+    recent_logs = read_interaction_logs([repo_path], days=30)
+    recent_logs.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    recent_failures = [
+        {
+            "timestamp": item.get("timestamp"),
+            "agent_id": item.get("agent_id"),
+            "outcome": item.get("outcome"),
+            "errors": item.get("errors") or [],
+        }
+        for item in recent_logs
+        if item.get("outcome") == "failure" or item.get("errors")
+    ][:5]
+
+    components = supervisor_state.get("components") or {}
+    autonomous_status = _autonomous_status()
+    autonomous_loop = {
+        "status": "running"
+        if autonomous_status.get("continuous_mode") or autonomous_status.get("cycle_running")
+        else "idle"
+    }
+    scheduler = {
+        "status": scheduler_state.get("status", components.get("scheduler", {}).get("status", "unknown")),
+        "enabled": scheduler_state.get("enabled", not bool(os.getenv("EXEGOL_DISABLE_SCHEDULER"))),
+        "heartbeat": scheduler_state.get("heartbeat") or scheduler_state.get("updated_at"),
+    }
+    due_scheduled_jobs = orchestrator.plan_due_scheduled_jobs(trigger_source="manual_run")
+    status = "degraded" if latest_blocker or supervisor_state.get("status") == "degraded" else "healthy"
+
+    return {
+        "status": status,
+        "backend": get_backend_process_state(),
+        "components": {
+            "docker": components.get("docker", {"status": "unknown"}),
+            "frontend": components.get("frontend", {"status": "unknown"}),
+            "scheduler": components.get("scheduler", scheduler),
+        },
+        "scheduler": scheduler,
+        "due_scheduled_jobs": [
+            {
+                "id": job.get("id"),
+                "agent_id": job.get("agent_id"),
+                "summary": job.get("summary"),
+                "reason": job.get("due_reason"),
+                "run_order": job.get("run_order", job.get("_index")),
+            }
+            for job in due_scheduled_jobs
+        ],
+        "due_scheduled_count": len(due_scheduled_jobs),
+        "autonomous_loop": autonomous_loop,
+        "active_agent": fleet_state.get("active_agent"),
+        "queue_length": len(active_backlog),
+        "latest_blocker": latest_blocker,
+        "latest_blocker_type": latest_blocker.get("blocker_type") if latest_blocker else None,
+        "recent_failures": recent_failures,
+        "health_report": supervisor_state or {"status": status, "components": components},
+    }
+
+@app.post("/blockers/clear")
+def clear_blocker(req: BlockerActionRequest):
+    manager = HITLManager(req.repo_path)
+    if manager.resolve_task(req.blocker_id, status="done", notes="Cleared from Operations dashboard."):
+        return {"status": "success", "blocker_id": req.blocker_id}
+    raise HTTPException(status_code=404, detail="Blocker not found")
+
+@app.post("/blockers/retry-go")
+def retry_blocker(req: BlockerActionRequest):
+    manager = HITLManager(req.repo_path)
+    queue = manager.get_queue()
+    blocker = next((item for item in queue if item.get("id") == req.blocker_id), None)
+    if blocker is None:
+        raise HTTPException(status_code=404, detail="Blocker not found")
+    if not is_retry_allowed([blocker]):
+        raise HTTPException(status_code=409, detail="Blocker requires manual action before retry.")
+
+    manager.resolve_task(req.blocker_id, status="done", notes="Cleared for retry from Operations dashboard.")
+    retried = orchestrator.retry_blocked_repo(req.repo_path)
+    return {"status": "success", "blocker_id": req.blocker_id, "retried": retried}
+
 @app.post("/fleet/go")
 def run_fleet_once():
-    started = orchestrator.trigger_go()
+    started = orchestrator.run_fleet_cycle(include_due_scheduled=True, trigger_source="manual_run")
     if not started:
         return {"status": "busy_or_failed", **_autonomous_status()}
     return {"status": "success", **_autonomous_status()}
@@ -248,7 +442,11 @@ def start_autonomous(req: RepoRequest):
     def _run_cycle():
         _running_tasks[session_id]["status"] = "running"
         try:
-            orchestrator.run_fleet_cycle(repo_path=req.repo_path)
+            orchestrator.run_fleet_cycle(
+                repo_path=req.repo_path,
+                include_due_scheduled=True,
+                trigger_source="manual_run",
+            )
             _running_tasks[session_id].update({
                 "status": "done",
                 "result": {"outcome": "success", "output_summary": "Fleet cycle completed."},
@@ -278,71 +476,44 @@ def retry_blocked_repo(req: Dict[str, Any]):
 @app.get("/fleet/active-state")
 def get_fleet_active_state(repo_path: str):
     """Returns the real-time active state of the fleet for a repository."""
-    state_file = os.path.join(repo_path, ".exegol", "fleet_state.json")
-    
-    # Retrieve repository status from priority_config
-    repo_status = "idle"
-    for r in orchestrator.priority_config.get("repositories", []):
-        if r.get("repo_path") == repo_path:
-            repo_status = r.get("agent_status", "idle")
-            break
+    repo_path = os.path.abspath(repo_path)
+    repo_config = _repo_config_for_path(repo_path)
+    repo_status = repo_config.get("agent_status", "idle")
+    autonomous_context = _autonomous_context_for_repo(repo_path)
 
-    if not os.path.exists(state_file):
-        errors = []
-        output_summary = ""
-        active_agent = None
-        session_id = ""
-        
-        if repo_status == "blocked":
-            # Retrieve last failed interaction log to get the traceback
-            try:
-                logs = read_interaction_logs([repo_path], days=30)
-                logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-                failed_logs = [l for l in logs if l.get("outcome") == "failure" or l.get("errors")]
-                if failed_logs:
-                    last_fail = failed_logs[0]
-                    active_agent = last_fail.get("agent_id")
-                    session_id = last_fail.get("session_id", "")
-                    errors = last_fail.get("errors", [])
-                    output_summary = last_fail.get("task_summary", "")
-            except Exception as e:
-                print(f"[API] Error reading interaction logs for blocked state: {e}")
-                
-        return {
-            "active_repo": repo_path,
-            "active_agent": active_agent,
-            "session_id": session_id,
-            "status": repo_status,
-            "handoff_chain": [],
-            "next_agent_id": "",
-            "monologue": [],
-            "errors": errors,
-            "output_summary": output_summary
-        }
-        
     try:
-        with open(state_file, "r", encoding="utf-8") as f:
-            state_data = json.load(f)
-            
-        # Ensure priority.json blocked state is respected
-        if repo_status == "blocked":
-            state_data["status"] = "blocked"
-            if not state_data.get("errors"):
-                try:
-                    logs = read_interaction_logs([repo_path], days=30)
-                    logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-                    failed_logs = [l for l in logs if l.get("outcome") == "failure" or l.get("errors")]
-                    if failed_logs:
-                        last_fail = failed_logs[0]
-                        if not state_data.get("active_agent"):
-                            state_data["active_agent"] = last_fail.get("agent_id")
-                        if not state_data.get("session_id"):
-                            state_data["session_id"] = last_fail.get("session_id", "")
-                        state_data["errors"] = last_fail.get("errors", [])
-                        state_data["output_summary"] = last_fail.get("task_summary", "")
-                except Exception as e:
-                    print(f"[API] Error reading interaction logs for blocked state: {e}")
-                    
+        sm = StateManager(repo_path)
+        state_data = sm.read_fleet_state() or _empty_fleet_state(repo_path, repo_status)
+        heartbeat_health = scan_heartbeats(repo_path)
+        stale_state = reconcile_stale_heartbeats(repo_path, heartbeat_health)
+        if stale_state:
+            state_data = stale_state
+
+        if repo_status == "blocked" and state_data.get("status") != "blocked":
+            state_data = {**_empty_fleet_state(repo_path, "blocked"), **state_data, "status": "blocked"}
+
+        if state_data.get("status") == "blocked":
+            failure_context = _recent_failure_context(repo_path)
+            if failure_context:
+                if not state_data.get("active_agent"):
+                    state_data["active_agent"] = failure_context.get("active_agent")
+                if not state_data.get("session_id"):
+                    state_data["session_id"] = failure_context.get("session_id", "")
+                if not state_data.get("errors"):
+                    state_data["errors"] = failure_context.get("errors", [])
+                if not state_data.get("output_summary"):
+                    state_data["output_summary"] = failure_context.get("output_summary", "")
+        elif autonomous_context.get("loop_status") == "running_selected_repo":
+            state_data["status"] = "running"
+            if not state_data.get("active_agent"):
+                state_data["active_agent"] = "orchestrator"
+            if not state_data.get("output_summary"):
+                state_data["output_summary"] = "Fleet cycle is evaluating this repository."
+
+        state_data["repo_status"] = repo_status
+        state_data["status_detail"] = repo_config.get("status_detail")
+        state_data["autonomous"] = autonomous_context
+        state_data["heartbeat_health"] = heartbeat_health
         return state_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read fleet state: {e}")
@@ -717,7 +888,8 @@ def add_thrawn_architecture(req: ThrawnArchitectureRequest):
 def get_fleet_metrics(repo_path: str):
     from tools.metrics_manager import SuccessMetricsManager
     mgr = SuccessMetricsManager(repo_path)
-    return mgr.calculate_metrics()
+    enable_live_judge = os.getenv("EXEGOL_METRICS_ENABLE_LIVE_JUDGE", "").lower() in {"1", "true", "yes"}
+    return mgr.calculate_metrics(enable_live_judge=enable_live_judge)
 
 @app.get("/costs")
 def get_costs(repo_path: str, days: int = 30):

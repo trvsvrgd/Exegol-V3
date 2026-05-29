@@ -111,7 +111,11 @@ class ProductPoeAgent:
         response = self.llm_client.generate(prompt, system_instruction=self.system_prompt, json_format=True)
         data = self.llm_client.parse_json_response(response)
         
-        salvageable_ids = data.get("salvageable_ids", []) if data else []
+        if not isinstance(data, dict):
+            print(f"[{self.name}] HITL salvage response was malformed; leaving queue unchanged.")
+            return
+
+        salvageable_ids = data.get("salvageable_ids", [])
         
         if not salvageable_ids:
             print(f"[{self.name}] Confirmed there are no pending HITL tasks that can be rerouted to Dex.")

@@ -5,6 +5,10 @@ import { apiGet } from "../api-client";
 
 const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
 
+interface Repo {
+  repo_path: string;
+}
+
 interface ToolEntry {
   id: string;
   description: string;
@@ -16,24 +20,46 @@ interface ToolEntry {
 
 export default function ToolRegistryPage() {
   const [tools, setTools] = useState<ToolEntry[]>([]);
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeRepo, setActiveRepo] = useState(REPO_PATH);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
 
-  const fetchTools = () => {
-    apiGet<ToolEntry[]>(`/fleet/tools?repo_path=${encodeURIComponent(REPO_PATH)}`)
+  useEffect(() => {
+    apiGet<Repo[]>("/repos")
+      .then(data => {
+        setRepos(data);
+        const matchingRepo = data.find(repo => normalizePath(repo.repo_path) === normalizePath(activeRepo));
+        if (matchingRepo && matchingRepo.repo_path !== activeRepo) {
+          setActiveRepo(matchingRepo.repo_path);
+        } else if (!activeRepo && data[0]) {
+          setActiveRepo(data[0].repo_path);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to fetch repositories:", err);
+        if (!activeRepo) {
+          setError("Unable to load repositories. Check that the backend is running on localhost:8000.");
+          setLoading(false);
+        }
+      });
+  }, [activeRepo]);
+
+  useEffect(() => {
+    if (!activeRepo) return;
+
+    apiGet<ToolEntry[]>(`/fleet/tools?repo_path=${encodeURIComponent(activeRepo)}`)
       .then(data => {
         setTools(data);
-        setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch tool registry:", err);
-        setLoading(false);
-      });
-  };
-
-  useEffect(() => {
-    fetchTools();
-  }, []);
+        setTools([]);
+        setError("Unable to load tool registry. Check that the backend is running and the selected repository is reachable.");
+      })
+      .finally(() => setLoading(false));
+  }, [activeRepo]);
 
   const filteredTools = tools.filter(tool => 
     tool.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -51,13 +77,29 @@ export default function ToolRegistryPage() {
     }
   };
 
+  const hasActiveRepoOption = repos.some(repo => normalizePath(repo.repo_path) === normalizePath(activeRepo));
+
   if (loading) return <div className="loading">Syncing Tool Registry...</div>;
 
   return (
     <div className="tools-page">
       <header className="tools-header">
-        <h1 className="title-glow">Global Tool Registry</h1>
-        <p className="subtitle">Observability into agent capabilities, risk exposure, and usage frequency.</p>
+        <div>
+          <h1 className="title-glow">Global Tool Registry</h1>
+          <p className="subtitle">Observability into agent capabilities, risk exposure, and usage frequency.</p>
+        </div>
+        <select value={activeRepo} onChange={event => {
+          setLoading(true);
+          setError(null);
+          setActiveRepo(event.target.value);
+        }}>
+          {activeRepo && !hasActiveRepoOption ? (
+            <option value={activeRepo}>{activeRepo}</option>
+          ) : null}
+          {repos.map(repo => (
+            <option key={repo.repo_path} value={repo.repo_path}>{repo.repo_path}</option>
+          ))}
+        </select>
       </header>
 
       <section className="search-bar">
@@ -70,8 +112,14 @@ export default function ToolRegistryPage() {
         />
       </section>
 
-      <section className="tools-grid">
-        {filteredTools.map(tool => (
+      {error ? <div className="state-message error-message">{error}</div> : null}
+      {!error && filteredTools.length === 0 ? (
+        <div className="state-message">No tools match the current filter.</div>
+      ) : null}
+
+      {!error && filteredTools.length > 0 ? (
+        <section className="tools-grid">
+          {filteredTools.map(tool => (
           <div key={tool.id} className="tool-card glass">
             <div className="tool-header">
               <div className="tool-id">
@@ -103,8 +151,9 @@ export default function ToolRegistryPage() {
               </div>
             </div>
           </div>
-        ))}
-      </section>
+          ))}
+        </section>
+      ) : null}
 
       <style jsx>{`
         .tools-page {
@@ -115,12 +164,25 @@ export default function ToolRegistryPage() {
         }
         .tools-header {
           margin-bottom: 3rem;
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 1rem;
         }
         .subtitle {
           color: #888;
           opacity: 0.7;
           margin-top: 0.5rem;
           font-size: 1.1rem;
+        }
+        select {
+          max-width: 520px;
+          width: 100%;
+          background: rgba(0, 0, 0, 0.35);
+          border: 1px solid rgba(255, 255, 255, 0.16);
+          color: white;
+          border-radius: 8px;
+          padding: 0.75rem;
         }
         .search-bar {
           margin-bottom: 3rem;
@@ -145,6 +207,17 @@ export default function ToolRegistryPage() {
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
           gap: 2rem;
+        }
+        .state-message {
+          padding: 1.25rem 1.5rem;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          background: rgba(255, 255, 255, 0.03);
+          color: #aaa;
+        }
+        .error-message {
+          color: #fca5a5;
+          border-color: rgba(252, 165, 165, 0.3);
         }
         .tool-card {
           padding: 2rem;
@@ -253,7 +326,22 @@ export default function ToolRegistryPage() {
           50% { opacity: 1; }
           100% { opacity: 0.4; }
         }
+        @media (max-width: 760px) {
+          .tools-page {
+            padding: 1.5rem;
+          }
+          .tools-header {
+            flex-direction: column;
+          }
+          .tools-grid {
+            grid-template-columns: 1fr;
+          }
+        }
       `}</style>
     </div>
   );
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").toLowerCase();
 }

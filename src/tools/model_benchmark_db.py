@@ -1,5 +1,5 @@
 """
-model_benchmark_db.py — Model Benchmark Database
+model_benchmark_db.py - Model Benchmark Database
 ==================================================
 SQLite-backed database of AI model benchmarks across multiple factors.
 Scores are normalized 0-100. Updated weekly by ModelRouterMothmaAgent.
@@ -305,7 +305,11 @@ def compare_models(repo_path: str, model_names: List[str]) -> Dict[str, Any]:
 
     comparison = {"models": models, "factor_winners": {}}
     for f in factors:
-        scored = [(m["model_name"], m[f]) for m in models if m[f] > 0]
+        scored = [
+            (m["model_name"], _numeric_score(m.get(f)))
+            for m in models
+            if _numeric_score(m.get(f)) > 0
+        ]
         if scored:
             winner = max(scored, key=lambda x: x[1])
             comparison["factor_winners"][f] = {"winner": winner[0], "score": winner[1]}
@@ -329,11 +333,21 @@ def recommend_for_role(repo_path: str, role: str) -> List[Dict]:
     all_models = get_all_models(repo_path)
     scored = []
     for m in all_models:
-        total = sum(m.get(k, 0) * w for k, w in weights.items())
+        total = sum(_numeric_score(m.get(k)) * w for k, w in weights.items())
         scored.append({**m, "weighted_score": round(total, 1)})
 
     scored.sort(key=lambda x: x["weighted_score"], reverse=True)
     return scored[:5]
+
+
+def _numeric_score(value: Any) -> float:
+    """Normalize nullable or malformed benchmark values before score math."""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def search_models(repo_path: str, query: str) -> List[Dict]:

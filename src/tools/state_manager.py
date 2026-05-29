@@ -111,6 +111,8 @@ class StateManager:
 
     def write_fleet_state(self, state: Dict[str, Any]) -> None:
         """Atomically write the live fleet state used by backend and Workbench UI."""
+        state = dict(state)
+        state.setdefault("schema_version", 1)
         self.write_json(".exegol/fleet_state.json", state)
 
     def update_fleet_state(self, updates: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

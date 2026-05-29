@@ -6,6 +6,19 @@ from inference.llm_client import GeminiClient, AnthropicClient, OllamaClient
 from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.hitl_manager import HITLManager
 from tools.state_manager import StateManager
+from tools.backlog_manager import BacklogManager
+from agents.product_poe_agent import ProductPoeAgent
+
+
+class MalformedSalvageClient:
+    def generate_system_prompt(self, agent):
+        return "system"
+
+    def generate(self, prompt, system_instruction=None, json_format=False):
+        return "[]"
+
+    def parse_json_response(self, response):
+        return []
 
 def test_inference_manager_routing():
     # Test that model strings are routed to the correct client classes
@@ -87,3 +100,20 @@ def test_hitl_auto_resolution(tmp_path):
     all_tasks = hitl_mgr.get_queue()
     assert len(all_tasks) == 1
     assert all_tasks[0]["status"] == "done"
+
+
+def test_product_poe_ignores_malformed_salvage_response(tmp_path):
+    sm = StateManager(str(tmp_path))
+    sm.add_hitl_task(
+        summary="Resolve implementation detail",
+        category="limitation",
+        context="Developer-solvable task.",
+        task_id="hitl_malformed",
+    )
+
+    agent = ProductPoeAgent(MalformedSalvageClient())
+    agent._salvage_hitl_tasks(str(tmp_path), BacklogManager(str(tmp_path)))
+
+    queue = HITLManager(str(tmp_path)).get_queue()
+    assert queue[0]["status"] == "pending"
+    assert not (tmp_path / ".exegol" / "backlog.json").exists()

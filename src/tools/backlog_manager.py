@@ -258,6 +258,58 @@ class BacklogManager:
         self._sync_to_json()
         return True
 
+    def archive_task(
+        self,
+        task_id: str,
+        reason: str,
+        final_status: str = "archived",
+        updates: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Archive one task with a durable reason while keeping JSON mirrors synced."""
+        now_str = datetime.datetime.now().isoformat()
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            task = json.loads(row["data"])
+            if updates:
+                task.update(updates)
+            task["status"] = final_status
+            task["archived_at"] = now_str
+            task["archive_reason"] = reason
+            task["updated_at"] = now_str
+
+            conn.execute(
+                """
+                UPDATE tasks
+                SET summary = ?, priority = ?, type = ?, status = ?,
+                    source_agent = ?, rationale = ?, created_at = ?,
+                    archived_at = ?, rank = ?, data = ?
+                WHERE id = ?
+                """,
+                (
+                    task.get("summary"),
+                    task.get("priority"),
+                    task.get("type"),
+                    task.get("status"),
+                    task.get("source_agent"),
+                    task.get("rationale"),
+                    task.get("created_at"),
+                    task.get("archived_at"),
+                    task.get("rank"),
+                    json.dumps(task),
+                    task_id,
+                ),
+            )
+            conn.commit()
+
+        self._sync_to_json()
+        return True
+
     def dedupe_auto_failures(self) -> Dict[str, Any]:
         """Archive repeated active backlog rows that describe the same work.
 

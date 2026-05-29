@@ -30,6 +30,7 @@ class ProdSupervisor:
         restart_scheduler: Optional[Callable[[], bool]] = None,
         now_fn: Optional[Callable[[], datetime.datetime]] = None,
         heartbeat_ttl_seconds: int = 120,
+        persist_blockers: bool = True,
     ):
         self.repo_path = os.path.abspath(repo_path)
         self.sm = StateManager(self.repo_path)
@@ -43,6 +44,7 @@ class ProdSupervisor:
         self.restart_scheduler = restart_scheduler
         self.now_fn = now_fn or datetime.datetime.now
         self.heartbeat_ttl_seconds = heartbeat_ttl_seconds
+        self.persist_blockers = persist_blockers
         self.events_file = ".exegol/supervisor_events.json"
         self.state_file = ".exegol/supervisor_state.json"
         self.fleet_state_file = ".exegol/fleet_state.json"
@@ -169,10 +171,11 @@ class ProdSupervisor:
 
     def _check_scheduler_heartbeat(self) -> List[Dict[str, Any]]:
         state = self.sm.read_json(".exegol/scheduler_state.json")
-        if not state or state.get("disabled"):
+        if not state or state.get("status") == "disabled" or state.get("enabled") is False:
             return []
         try:
-            heartbeat = datetime.datetime.fromisoformat(state.get("heartbeat", ""))
+            heartbeat_value = state.get("heartbeat") or state.get("updated_at", "")
+            heartbeat = datetime.datetime.fromisoformat(heartbeat_value)
         except ValueError:
             return [{
                 "component": "scheduler",
@@ -213,7 +216,7 @@ class ProdSupervisor:
             outcome = "recovered" if restarted else "blocked"
             self._record_event(component, outcome, {"finding": finding, "detail": detail})
             if not restarted:
-                blocker_id = self._upsert_blocker(finding, detail)
+                blocker_id = self._upsert_blocker(finding, detail) if self.persist_blockers else None
             else:
                 blocker_id = None
             return {
@@ -225,7 +228,7 @@ class ProdSupervisor:
             }
 
         reason = "auto restart not configured" if component in AUTO_RESTARTABLE else "manual remediation required"
-        blocker_id = self._upsert_blocker(finding, reason)
+        blocker_id = self._upsert_blocker(finding, reason) if self.persist_blockers else None
         self._record_event(component, "blocked", {"finding": finding, "detail": reason})
         return {
             "component": component,
@@ -262,6 +265,11 @@ class ProdSupervisor:
             for item in remediations
             if item.get("outcome") == "blocked" and item.get("component")
         }
+        active_blocker_ids = {
+            item.get("blocker_id")
+            for item in remediations
+            if item.get("outcome") == "blocked" and item.get("blocker_id")
+        }
         queue = self.hitl.get_queue()
         changed = False
         now = self._now()
@@ -273,7 +281,9 @@ class ProdSupervisor:
                 continue
 
             component = item.get("supervisor_component") or self._component_from_task(item.get("task", ""))
-            if component in active_blocked_components:
+            if item.get("id") in active_blocker_ids:
+                continue
+            if not item.get("id") and component in active_blocked_components:
                 continue
 
             item["status"] = "done"

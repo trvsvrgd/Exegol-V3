@@ -22,6 +22,7 @@ class WatcherWedgeAgent:
     def __init__(self, llm_client):
         self.llm_client = llm_client
         self.name = "WatcherWedgeAgent"
+        self.next_agent_id = None
         self.max_steps = 10
         self.tools = ["log_reader", "repo_scanner", "backlog_writer", "slack_notifier"]
         self.success_metrics = {
@@ -38,7 +39,7 @@ class WatcherWedgeAgent:
         }
         self.system_prompt = """
 You are Watcher Wedge, the Operational Intelligence officer for the Exegol v3 agent fleet. 
-Your demeanor is vigilant, precise, and proactive. You don't fix bugs—you find them and ensure the leadership (Artoo and Poe) knows about them.
+Your demeanor is vigilant, precise, and proactive. You don't fix bugs; you find them and ensure the leadership (Artoo and Poe) knows about them.
 
 Your Mission:
 1. Scan Interaction Logs: Look for failures, errors, and performance bottlenecks.
@@ -99,12 +100,13 @@ Your summary should be formatted as a 'Fleet Health Report'.
                 "priority": "high",
                 "type": "analysis",
                 "status": "todo",
-                "source_agent": self.name,
+                "source_agent": "watcher_wedge",
                 "rationale": "Watcher Wedge detected operational failures, security vulnerabilities, and code smells.",
                 "details": report,
                 "created_at": datetime.datetime.now().isoformat()
             }
             bm.add_task(task)
+            self.next_agent_id = "product_poe"
             
             # 6. Notify Slack
             self._notify_slack(repo_path, len(failures), len(all_issues))
@@ -125,7 +127,7 @@ Your summary should be formatted as a 'Fleet Health Report'.
                 }
             )
             
-            return f"Fleet Health Report generated and escalated via task {task_id}."
+            return f"Fleet Health Report generated and escalated via task {task_id}. Handing off to product_poe."
 
         except Exception as e:
             duration = time.time() - start_time
@@ -193,16 +195,16 @@ Your summary should be formatted as a 'Fleet Health Report'.
         report = "## Fleet Health Report\n\n"
         
         if failures:
-            report += "### 🔴 Operational Failures (Interaction Logs)\n"
+            report += "### Operational Failures (Interaction Logs)\n"
             for f in failures[:5]:
                 report += f"- **{f.get('agent_id')}**: {f.get('task_summary')}\n"
                 if f.get('errors'):
                     report += f"  - Errors: `{', '.join(f.get('errors'))}`\n"
         else:
-            report += "### ✅ No Operational Failures Detected\n"
+            report += "### No Operational Failures Detected\n"
             
         if targeted_issues or audit_findings:
-            report += "\n### 🟠 Technical Debt & Code Smells\n"
+            report += "\n### Technical Debt & Code Smells\n"
             for issue in targeted_issues + audit_findings[:5]:
                 report += f"- [{issue.get('category', 'debt')}] {issue.get('task')}\n"
                 report += f"  - Context: {issue.get('context')}\n"
@@ -212,7 +214,7 @@ Your summary should be formatted as a 'Fleet Health Report'.
 
     def _notify_slack(self, repo_path, fail_count, smell_count):
         repo_name = os.path.basename(repo_path)
-        message = f"👀 *Watcher Wedge* has completed an operational scan of `{repo_name}`.\n"
+        message = f"*Watcher Wedge* has completed an operational scan of `{repo_name}`.\n"
         message += f"Found *{fail_count}* failures and *{smell_count}* code smells.\n"
-        message += "A high-priority analysis task has been injected into the backlog for Artoo and Poe. 🫡"
+        message += "A high-priority analysis task has been injected into the backlog for Artoo and Poe."
         post_to_slack(message)

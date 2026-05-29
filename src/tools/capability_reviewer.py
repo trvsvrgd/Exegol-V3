@@ -20,6 +20,16 @@ def map_requirement_to_capability(
     2. Keyword scan across capability name + description.
     3. Optional LLM semantic match (if llm_client is provided).
     """
+    if not isinstance(requirement, dict):
+        return {
+            "matched": False,
+            "capability": None,
+            "match_type": "invalid_requirement",
+            "confidence": 0.0,
+            "reasoning": "Requirement was not a JSON object."
+        }
+
+    capabilities = [cap for cap in capabilities if isinstance(cap, dict)]
     req_desc = requirement.get("description", "")
     req_summary = requirement.get("summary", "")
     target_id = requirement.get("required_capability_id")
@@ -74,7 +84,7 @@ def map_requirement_to_capability(
         try:
             response = llm_client.generate(prompt, json_format=True)
             result = llm_client.parse_json_response(response)
-            if result.get("matched") and result.get("capability_id"):
+            if isinstance(result, dict) and result.get("matched") and result.get("capability_id"):
                 for cap in capabilities:
                     if cap.get("id") == result["capability_id"]:
                         return {

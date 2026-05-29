@@ -5,7 +5,7 @@
       "priority": 1,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 100,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -14,7 +14,7 @@
       "priority": 8,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 4,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -23,7 +23,7 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 7,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -32,7 +32,7 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 5,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -41,7 +41,7 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 3,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -50,7 +50,7 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 2,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -59,7 +59,7 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 6,
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     },
@@ -68,7 +68,16 @@
       "priority": 10,
       "model_routing_preference": "ollama",
       "agent_status": "idle",
-      "max_steps_policy": 50,
+      "max_steps_policy": 30,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\retirement-calculator",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
     }

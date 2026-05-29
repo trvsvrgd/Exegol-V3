@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import threading
+import time
 from typing import Optional, Dict, Any, Callable
 from slack_sdk import WebClient
 from slack_bolt import App
@@ -139,7 +140,6 @@ class SlackManager:
                     repo_path = os.environ.get("EXEGOL_REPO_PATH", ".")
                     from tools.backlog_manager import BacklogManager
                     import datetime
-                    import time
                     
                     bm = BacklogManager(repo_path)
                     

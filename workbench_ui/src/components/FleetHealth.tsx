@@ -35,10 +35,11 @@ export default function FleetHealth({ onSelect, activePath }: FleetHealthProps) 
   const fetchHealth = useCallback(async () => {
     try {
       const data = await apiGet<HealthMetric[]>("/fleet/health");
-      setMetrics(data);
+      setMetrics(Array.isArray(data) ? data : []);
       setLoading(false);
     } catch (err) {
       console.error("Failed to fetch fleet health:", err);
+      setMetrics([]);
       setLoading(false);
     }
   }, []);

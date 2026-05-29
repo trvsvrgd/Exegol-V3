@@ -24,6 +24,16 @@ interface FleetState {
   failure_logged_at?: string;
   blocker_type?: string;
   last_cleared_errors?: string[];
+  repo_status?: string;
+  status_detail?: string;
+  autonomous?: {
+    continuous_mode: boolean;
+    thread_alive: boolean;
+    cycle_running: boolean;
+    repo_path?: string | null;
+    selected_repo: boolean;
+    loop_status: "stopped" | "running_selected_repo" | "running_other_repo" | "waiting_between_cycles" | "enabled_for_other_repo";
+  };
 }
 
 interface ActiveFleetConsoleProps {
@@ -50,8 +60,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
 
   const refreshState = useCallback(async () => {
-    const data = await apiGet<FleetState>(`/fleet/active-state?repo_path=${encodeURIComponent(repoPath)}`);
-    setState(data);
+    try {
+      const data = await apiGet<FleetState>(`/fleet/active-state?repo_path=${encodeURIComponent(repoPath)}`);
+      setState(data);
+    } catch (err) {
+      console.error("Failed to fetch active state:", err);
+    }
   }, [repoPath]);
 
   useEffect(() => {
@@ -89,11 +103,34 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
     role: "Specialist Agent"
   } : null;
 
+  const loopStatus = state.autonomous?.loop_status ?? (autonomousMode ? "waiting_between_cycles" : "stopped");
+  const displayStatus = state.status === "idle" && loopStatus === "waiting_between_cycles"
+    ? "standby"
+    : state.status;
+  const loopContext = (() => {
+    switch (loopStatus) {
+      case "running_selected_repo":
+        return "Autonomous loop is running a cycle for this repository.";
+      case "running_other_repo":
+        return "Autonomous loop is running a cycle for another repository.";
+      case "waiting_between_cycles":
+        return "Autonomous loop is on for this repository and waiting for the next cycle.";
+      case "enabled_for_other_repo":
+        return "Autonomous loop is on for another repository.";
+      default:
+        return "Autonomous loop is stopped.";
+    }
+  })();
+  const idleSummary = loopStatus === "waiting_between_cycles"
+    ? "No agent is executing right now. The next autonomous cycle will start automatically for the selected repository."
+    : "The fleet is idle. Running the autonomous fleet starts work for the selected repository.";
+
   const getStatusBadgeClass = () => {
-    switch (state.status) {
+    switch (displayStatus) {
       case "running": return "status-running";
       case "blocked": return "status-blocked";
       case "done": return "status-done";
+      case "standby": return "status-standby";
       default: return "status-idle";
     }
   };
@@ -111,20 +148,21 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
     <div className="fleet-console glass">
       <div className="console-header">
         <div className="title-area">
-          <span className="console-indicator"></span>
+          <span className={`console-indicator ${displayStatus}`}></span>
           <h3>Live Fleet Telemetry</h3>
         </div>
         <span className={`status-badge ${getStatusBadgeClass()}`}>
-          {state.status.toUpperCase()}
+          {displayStatus.toUpperCase()}
         </span>
+      </div>
+      <div className="loop-context">
+        <span>{loopContext}</span>
+        {state.status_detail && <span>{state.status_detail}</span>}
       </div>
 
       {state.status === "idle" && (
         <div className="idle-state">
-          <p>
-            The fleet is idle. Running the autonomous fleet starts work for the selected repository.
-            {autonomousMode && " Autonomous mode is enabled and waiting for the next cycle."}
-          </p>
+          <p>{idleSummary}</p>
           {state.last_cleared_errors && state.last_cleared_errors.length > 0 && (
             <p className="last-cleared">Last cleared blocker: {state.last_cleared_errors[0]}</p>
           )}
@@ -210,7 +248,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           <div className="chain-container">
             <h5>Handoff Execution Chain</h5>
             <div className="chain-flow">
-              {state.handoff_chain.map((agentId, index) => {
+              {(state.handoff_chain || []).map((agentId, index) => {
                 const meta = AGENT_META[agentId] || { name: agentId, icon: "?" };
                 return (
                   <div key={index} className="chain-node">
@@ -238,11 +276,11 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
 
           <div className="thoughts-container">
             <h5>Agent Internal Thoughts</h5>
-            {state.monologue.length === 0 ? (
+            {(!state.monologue || state.monologue.length === 0) ? (
               <p className="no-thoughts">No agent thoughts have been recorded for this state.</p>
             ) : (
               <div className="monologue-list">
-                {state.monologue.map((item, idx) => {
+                {(state.monologue || []).map((item, idx) => {
                   const isExpanded = expandedIndex === idx;
                   return (
                     <div key={idx} className="monologue-item">
@@ -472,8 +510,28 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           width: 10px;
           height: 10px;
           border-radius: 50%;
+          background: #6b7280;
+          box-shadow: 0 0 10px #6b7280;
+        }
+
+        .console-indicator.running {
           background: #22c55e;
           box-shadow: 0 0 10px #22c55e;
+        }
+
+        .console-indicator.standby {
+          background: #f59e0b;
+          box-shadow: 0 0 10px #f59e0b;
+        }
+
+        .console-indicator.blocked {
+          background: #ef4444;
+          box-shadow: 0 0 10px #ef4444;
+        }
+
+        .console-indicator.done {
+          background: #3b82f6;
+          box-shadow: 0 0 10px #3b82f6;
         }
 
         .status-badge {
@@ -502,10 +560,26 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           color: #93c5fd;
         }
 
+        .status-standby {
+          background: rgba(245, 158, 11, 0.16);
+          border: 1px solid #f59e0b;
+          color: #fcd34d;
+        }
+
         .status-idle {
           background: rgba(107, 114, 128, 0.2);
           border: 1px solid #6b7280;
           color: #d1d5db;
+        }
+
+        .loop-context {
+          display: flex;
+          flex-direction: column;
+          gap: 0.35rem;
+          margin: -0.35rem 0 1.2rem;
+          color: #cbd5e1;
+          font-size: 0.9rem;
+          line-height: 1.4;
         }
 
         .idle-state {

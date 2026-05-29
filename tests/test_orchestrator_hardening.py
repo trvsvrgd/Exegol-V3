@@ -75,13 +75,59 @@ def test_run_fleet_cycle_resets_running_flag_after_exception(orchestrator, monke
 
     config = json.loads(priority_file.read_text(encoding="utf-8"))
     assert config["repositories"][0]["agent_status"] == "blocked"
-    config["repositories"][0]["agent_status"] = "idle"
-    priority_file.write_text(json.dumps(config), encoding="utf-8")
-    orch.load_config()
 
+    assert orch.retry_blocked_repo(str(repo_path)) is True
     monkeypatch.setattr(orch, "process_repo", lambda _repo_info: None)
     assert orch.run_fleet_cycle() is True
     assert orch.is_running_fleet is False
+
+
+def test_run_fleet_cycle_runs_due_scheduled_before_repo_dispatch(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    events = []
+
+    monkeypatch.setattr(
+        orch,
+        "run_due_scheduled_agents",
+        lambda **kwargs: events.append(("due", kwargs["repo_path"], kwargs["trigger_source"])) or {"triggered_count": 1},
+    )
+    monkeypatch.setattr(orch, "check_compliance_monitoring", lambda: events.append(("compliance",)))
+    monkeypatch.setattr(orch, "process_repo", lambda _repo_info: events.append(("process",)))
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path), include_due_scheduled=True, trigger_source="manual_run") is True
+    assert events[:3] == [
+        ("due", str(repo_path), "manual_run"),
+        ("compliance",),
+        ("process",),
+    ]
+
+
+def test_run_fleet_cycle_skips_persisted_blocked_state(orchestrator, monkeypatch):
+    orch, repo_path, priority_file = orchestrator
+    state_file = repo_path / ".exegol" / "fleet_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "active_repo": str(repo_path),
+                "active_agent": "developer_dex",
+                "session_id": "stale123",
+                "status": "blocked",
+                "errors": ["Supervisor detected stale heartbeat."],
+                "output_summary": "Supervisor detected stale heartbeat.",
+                "blocker_type": "stale_heartbeat",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "check_compliance_monitoring", lambda: None)
+    monkeypatch.setattr(orch, "process_repo", lambda _repo_info: pytest.fail("blocked repo should not run"))
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is False
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    config = json.loads(priority_file.read_text(encoding="utf-8"))
+    assert state["status"] == "blocked"
+    assert state["blocker_type"] == "stale_heartbeat"
+    assert config["repositories"][0]["agent_status"] == "blocked"
 
 
 def test_run_fleet_cycle_rejects_overlapping_cycle(orchestrator, monkeypatch):

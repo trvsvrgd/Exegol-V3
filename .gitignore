@@ -57,6 +57,7 @@ logs/
 
 # Testing and Local Cache
 .pytest_cache/
+.pytest_tmp/
 .exegol/
 
 # Sensitive files

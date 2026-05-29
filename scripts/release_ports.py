@@ -5,16 +5,10 @@ import sys
 from typing import Iterable, Set
 
 
-def pids_for_ports(ports: Iterable[int]) -> Set[int]:
+def parse_netstat_listeners(output: str, ports: Iterable[int]) -> Set[int]:
     wanted = {str(port) for port in ports}
-    result = subprocess.run(
-        ["netstat", "-aon"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-    )
     pids: Set[int] = set()
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         parts = line.split()
         if len(parts) < 5:
             continue
@@ -29,6 +23,16 @@ def pids_for_ports(ports: Iterable[int]) -> Set[int]:
             except ValueError:
                 continue
     return pids
+
+
+def pids_for_ports(ports: Iterable[int]) -> Set[int]:
+    result = subprocess.run(
+        ["netstat", "-aon"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    return parse_netstat_listeners(result.stdout, ports)
 
 
 def kill_pid(pid: int) -> bool:

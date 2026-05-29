@@ -51,7 +51,7 @@ def test_handoff_signature_honors_env_secret(monkeypatch):
 def test_autonomous_start_runs_selected_repo(monkeypatch, tmp_path):
     calls = []
 
-    def fake_run_fleet_cycle(repo_path=None):
+    def fake_run_fleet_cycle(repo_path=None, include_due_scheduled=False, trigger_source="manual_run"):
         calls.append(repo_path)
 
     monkeypatch.setattr(api, "_executor", ImmediateExecutor())

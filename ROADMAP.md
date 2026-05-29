@@ -14,6 +14,77 @@ Production readiness is not defined as "the UI launches" or "agents exist." Prod
 - Failures are remediated or surfaced as precise blockers without corrupting the objective state.
 - The loop stops only when success criteria are met, the budget is exhausted, or a real human decision is required.
 
+## Production Readiness Execution Roadmap
+
+This is the production hardening order. A task is not complete until it is backed by deterministic tests and, where applicable, live local smoke evidence from the backend and Workbench UI.
+
+### P0: App Starts, Loads, And Stops Reliably
+
+- [x] Keep startup checks repo-local and Windows-safe through `scripts/verify_startup.py`.
+- [x] Release stale backend/frontend ports before launch and during shutdown.
+- [x] Start the Workbench frontend in production mode instead of relying on the development server.
+- [x] Bind local runtime checks to `127.0.0.1` to avoid localhost/IPv6 ambiguity.
+- [x] Make `production_readiness_check.py` verify that the frontend routes actually load, not just that the frontend can build.
+- [ ] Add one canonical smoke command that starts backend plus frontend, checks key API/UI routes, and tears them down cleanly.
+- [ ] Prove `Start_Exegol.bat` and `Stop_Exegol.bat` can run repeatedly without leaving live listeners on ports `8000` or `3000`.
+
+### P0: Truthful State And Blockers
+
+- [x] Clear stale blocked fleet state during startup preflight.
+- [x] Clear stale scheduler heartbeats during startup preflight.
+- [x] Archive resolved duplicate/stale backlog failures through `BacklogManager`.
+- [x] Prevent resolved crash summaries from remaining visible as live fleet failures.
+- [ ] Make every state surface agree: `.exegol/fleet_state.json`, `.exegol/supervisor_state.json`, `.exegol/user_action_required.json`, backlog, and UI operations panels.
+- [ ] Separate environment-blocked checks from code regressions in every readiness output.
+
+### P0: Autonomous Loop Progresses
+
+- [x] Persist objective state in `.exegol/objective.json`.
+- [x] Add deterministic objective phase transitions for plan, implement, validate, and done.
+- [x] Dispatch objective phases to Product Poe, Developer Dex, and Quality Qui-Gon deterministically.
+- [x] Fix autonomous handoff RBAC for agents that intentionally trigger follow-on agents.
+- [ ] Make `Run Autonomous Fleet` start or resume the objective loop rather than merely run one isolated cycle.
+- [ ] Add pause, resume, stop, duplicate-start attach, and loop-status behavior for the selected repo.
+- [ ] Prove multiple full loops can complete without corrupting objective or fleet state.
+
+### P0: Crash Containment And Self-Recovery
+
+- [x] Keep Slack notification failures from crashing local fleet work when Slack is disabled or unreachable.
+- [x] Keep startup from firing an unbounded missed-job storm.
+- [ ] Add bounded retry behavior for provider/model failures and malformed agent output.
+- [ ] Ensure supervisor remediation updates blockers and fleet state consistently after backend, frontend, scheduler, Docker, or stale-session failures.
+- [ ] Run failure-injection tests for provider timeout, malformed LLM output, Docker unavailable, stale heartbeat, and duplicate starts.
+
+### P1: External Services And Secrets
+
+- [ ] Rotate the exposed Google OAuth credential outside the repo and update local credentials after rotation.
+- [ ] Verify Slack bot/app tokens against the real production HITL path.
+- [ ] Add explicit environment diagnostics for Slack, Docker, local model provider, and browser/UAT capability.
+- [ ] Keep credential files ignored and keep secret findings from printing raw secret values in reports.
+
+### P1: Security And Runtime Guardrails
+
+- [ ] Add outbound URL allowlisting for runtime HTTP probes and web-capable tools.
+- [ ] Add prompt-injection handling for scheduled/user prompts before they enter agent execution.
+- [ ] Keep destructive filesystem/system permissions behind explicit HITL approval.
+- [ ] Add per-agent rate limits, cost ceilings, and loop-budget enforcement.
+- [ ] Add tests that RBAC grants are minimal for handoff, filesystem, and destructive permissions.
+
+### P1: Observability And Operator Control
+
+- [ ] Show objective, current phase, active agent, last result, next action, loop count, and blocker reason in the Workbench.
+- [ ] Record every objective transition, retry, blocker, remediation, and validation result in `.exegol/objective_events.jsonl`.
+- [ ] Add a concise operations timeline that distinguishes current failures from archived history.
+- [ ] Add downloadable or copyable readiness reports for local support handoff.
+
+### P2: Release Discipline
+
+- [ ] Keep one documented deterministic local test command passing.
+- [ ] Keep frontend lint/build clean.
+- [ ] Keep backend compile and targeted readiness tests clean.
+- [ ] Keep the working tree understandable by separating generated runtime state from source changes.
+- [ ] Document the production runbook: install, launch, stop, verify, recover, rotate secrets, and collect evidence.
+
 ## Priority 0: Objective Loop Reliability
 
 These items supersede broad roadmap work, agent expansion, reporting polish, Slack enhancements, growth/finance automation, and UI-only improvements unless those items directly unblock the objective loop.

@@ -20,6 +20,8 @@ interface OperationsState {
   backend: { status: string; pid?: number };
   components: Record<string, { status: string; detail?: string; blocker_type?: string }>;
   scheduler: { status: string; enabled: boolean; heartbeat?: string | null };
+  due_scheduled_count?: number;
+  due_scheduled_jobs?: Array<{ id?: string; agent_id?: string; summary?: string; reason?: string; run_order?: number }>;
   autonomous_loop: { status: string };
   active_agent?: string | null;
   queue_length: number;
@@ -81,10 +83,10 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
 
   const componentEntries = Object.entries({
     backend: ops.backend,
-    docker: ops.components.docker,
+    docker: ops.components?.docker,
     scheduler: ops.scheduler,
     autonomous_loop: ops.autonomous_loop,
-    frontend: ops.components.frontend,
+    frontend: ops.components?.frontend,
   }).filter(([, value]) => Boolean(value));
 
   return (
@@ -116,6 +118,10 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
           <span className="tile-label">Queue</span>
           <strong>{ops.queue_length}</strong>
         </div>
+        <div className="ops-tile">
+          <span className="tile-label">Due Timed Agents</span>
+          <strong>{ops.due_scheduled_count ?? 0}</strong>
+        </div>
       </div>
 
       <div className="blocker-row">
@@ -132,12 +138,24 @@ export default function OperationsPanel({ repoPath }: OperationsPanelProps) {
       </div>
 
       <div className="failure-timeline">
+        {(ops.due_scheduled_jobs?.length ?? 0) > 0 && (
+          <>
+            <h3>Due Timed Agents</h3>
+            {ops.due_scheduled_jobs?.slice(0, 6).map((job) => (
+              <div key={job.id || `${job.agent_id}-${job.summary}`} className="failure-item">
+                <span>{job.agent_id || "unknown"}</span>
+                <strong>{job.summary || job.id || "Scheduled task"}</strong>
+                <small>{job.reason || "Due now"}</small>
+              </div>
+            ))}
+          </>
+        )}
         <h3>Recent Failures</h3>
-        {ops.recent_failures.length === 0 ? (
+        {(!ops.recent_failures || ops.recent_failures.length === 0) ? (
           <p>No recent failures.</p>
         ) : (
           ops.recent_failures.map((failure, index) => (
-            <div key={`${failure.timestamp}-${index}`} className="failure-item">
+            <div key={`${failure.timestamp || index}-${index}`} className="failure-item">
               <span>{failure.timestamp || "unknown time"}</span>
               <strong>{failure.agent_id || "unknown"} - {failure.outcome}</strong>
               <small>{failure.errors?.join("; ") || "No error detail"}</small>

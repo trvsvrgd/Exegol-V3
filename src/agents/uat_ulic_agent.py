@@ -71,8 +71,8 @@ to satisfy documentation requirements.
         if human_obs:
             results.extend(human_obs)
         
-        # If no human observations, we rely on autonomous detection (currently 2 for demo purposes)
-        bugs_found = len(human_obs) if human_obs else 2
+        # Only create backlog work when there is concrete evidence to act on.
+        bugs_found = len(human_obs)
         self.success_metrics["ui_bugs_detected"]["current"] = str(bugs_found)
         
         if bugs_found > 0:
@@ -91,6 +91,8 @@ to satisfy documentation requirements.
                     "source_agent": self.name,
                     "created_at": datetime.datetime.now().isoformat()
                 })
+        else:
+            results.append("No actionable UI anomalies detected.")
 
         # 2. Video Loop Generation
         print(f"[{self.name}] Generating video loop for README representation...")

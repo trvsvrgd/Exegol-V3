@@ -6,7 +6,9 @@
       "summary": "Daily Vibe Audit & Task Cleanup",
       "frequency": "daily",
       "at": "09:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 10,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "daily_intent_review",
@@ -14,14 +16,18 @@
       "summary": "Daily Intent Review & Question Cleanup",
       "frequency": "daily",
       "at": "10:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 20,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "hourly_thrawn_engagement",
       "agent_id": "thoughtful_thrawn",
       "summary": "Hourly Thrawn Engagement Check",
       "frequency": "every_1_hour",
-      "enabled": true
+      "enabled": true,
+      "run_order": 30,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_ops_optimizer",
@@ -29,7 +35,9 @@
       "summary": "Weekly Prompt & Interaction Optimization",
       "frequency": "sunday",
       "at": "18:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 40,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_intel_sync",
@@ -37,7 +45,9 @@
       "summary": "Weekly Drive & Inbox Intelligence Sync",
       "frequency": "monday",
       "at": "08:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 50,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_market_eval",
@@ -45,7 +55,9 @@
       "summary": "Weekly AI Market & Arxiv Evaluation",
       "frequency": "sunday",
       "at": "10:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 60,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_fleet_report",
@@ -53,7 +65,9 @@
       "summary": "Weekly Fleet Performance Summary",
       "frequency": "friday",
       "at": "16:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 70,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_staff_review",
@@ -61,7 +75,9 @@
       "summary": "Weekly Agent Performance & ROI Review",
       "frequency": "friday",
       "at": "17:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 80,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_compliance_audit",
@@ -69,7 +85,9 @@
       "summary": "Weekly Policy & Capability Compliance Audit",
       "frequency": "tuesday",
       "at": "09:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 90,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_security_scan",
@@ -77,7 +95,9 @@
       "summary": "Weekly Zero-Day & Infrastructure Security Scan",
       "frequency": "wednesday",
       "at": "10:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 100,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_tech_docs",
@@ -85,7 +105,9 @@
       "summary": "Weekly Documentation & README Awesome-ification",
       "frequency": "thursday",
       "at": "11:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 110,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "weekly_model_routing",
@@ -93,39 +115,51 @@
       "summary": "Weekly Model Performance & Cost Routing Review",
       "frequency": "saturday",
       "at": "10:00",
-      "enabled": true
+      "enabled": true,
+      "run_order": 120,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "hourly_ops_intel",
       "agent_id": "watcher_wedge",
       "summary": "Hourly Operational Intelligence Scan",
       "frequency": "every_1_hour",
-      "enabled": true
+      "enabled": true,
+      "run_order": 130,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "monthly_strategy_pivot",
       "agent_id": "strategist_sloane",
       "summary": "Monthly Strategic Roadmap & Pivot Analysis",
       "frequency": "monthly",
-      "enabled": true
+      "enabled": true,
+      "run_order": 140,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "monthly_growth_audit",
       "agent_id": "growth_galen",
       "summary": "Monthly Ecosystem Growth & Capability Audit",
       "frequency": "monthly",
-      "enabled": true
+      "enabled": true,
+      "run_order": 150,
+      "catch_up_on_manual_run": true
     },
     {
       "id": "monthly_finance_report",
       "agent_id": "finance_fennec",
       "summary": "Monthly Fleet Financial & Cost Analysis",
       "frequency": "monthly",
-      "enabled": true
+      "enabled": true,
+      "run_order": 160,
+      "catch_up_on_manual_run": true
     }
   ],
   "global_settings": {
     "enable_scheduler": true,
-    "check_interval_seconds": 60
+    "check_interval_seconds": 60,
+    "max_missed_jobs_on_startup": 0,
+    "max_due_jobs_on_run_fleet": 16
   }
 }

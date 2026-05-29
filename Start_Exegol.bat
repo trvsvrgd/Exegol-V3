@@ -21,6 +21,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo Releasing stale launcher ports...
+".venv\Scripts\python.exe" scripts\release_ports.py --ports 8000 3000
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to release stale launcher ports.
+    pause
+    exit /b 1
+)
+
 :: 1. Verify Docker
 echo [1/4] Verifying Docker Status...
 ".venv\Scripts\python.exe" scripts\verify_docker.py
@@ -38,7 +46,7 @@ if not exist "src\api.py" (
     pause
     exit /b 1
 )
-start /min "Exegol Backend" cmd /k "set ""EXEGOL_REPO_PATH=%~dp0"" && set ""EXEGOL_DISABLE_SCHEDULER=true"" && call .venv\Scripts\activate && cd /d ""%~dp0src"" && python api.py"
+start /min "Exegol Backend" cmd /k "set ""EXEGOL_REPO_PATH=%~dp0"" && call .venv\Scripts\activate && cd /d ""%~dp0src"" && python api.py"
 
 echo Waiting for backend health check...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(45); do { try { $r=Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8000/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $deadline); exit 1"
@@ -69,7 +77,29 @@ if not exist "node_modules\" (
         exit /b 1
     )
 )
-start /min "Exegol Frontend" cmd /k "npm run dev -- --hostname 127.0.0.1 --port 3000"
+echo Verifying frontend install and clearing generated Next.js cache...
+if exist "..\.venv\Scripts\python.exe" (
+    "..\.venv\Scripts\python.exe" ..\scripts\workbench_frontend_preflight.py --mode production --repair-cache
+) else (
+    python ..\scripts\workbench_frontend_preflight.py --mode production --repair-cache
+)
+if %errorlevel% neq 0 (
+    popd
+    echo [ERROR] Frontend preflight failed.
+    call Stop_Exegol.bat
+    pause
+    exit /b 1
+)
+echo Building production frontend...
+call npm run build
+if %errorlevel% neq 0 (
+    popd
+    echo [ERROR] Frontend production build failed.
+    call Stop_Exegol.bat
+    pause
+    exit /b 1
+)
+start /min "Exegol Frontend" cmd /k "npm run start -- --hostname 127.0.0.1 --port 3000"
 popd
 
 echo Waiting for frontend UI...

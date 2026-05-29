@@ -25,3 +25,13 @@ def test_write_json_redacts_secret_values(tmp_path):
     data = json.loads((tmp_path / ".exegol" / "fleet_state.json").read_text(encoding="utf-8"))
     assert data["token"] == "[REDACTED]"
     assert data["safe"] == "ok"
+
+
+def test_write_fleet_state_preserves_schema_version(tmp_path):
+    sm = StateManager(str(tmp_path))
+
+    sm.write_fleet_state({"status": "running"})
+
+    data = json.loads((tmp_path / ".exegol" / "fleet_state.json").read_text(encoding="utf-8"))
+    assert data["schema_version"] == 1
+    assert data["status"] == "running"

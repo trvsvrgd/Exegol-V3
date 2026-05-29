@@ -7,7 +7,7 @@ import schedule
 import hmac
 import hashlib
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Load environment variables before any other imports
@@ -15,7 +15,7 @@ load_dotenv()
 
 from typing import Dict, Any, List, Optional
 from agents.registry import AGENT_REGISTRY
-from handoff import HandoffContext
+from handoff import HandoffContext, SessionResult
 from session_manager import SessionManager
 from tools.slack_tool import slack_manager
 from tools.fleet_logger import log_interaction
@@ -24,6 +24,16 @@ from tools.objective_manager import ObjectiveManager
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
+
+WEEKDAY_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
 
 class ExegolOrchestrator:
     def __init__(self):
@@ -69,8 +79,9 @@ class ExegolOrchestrator:
             self._setup_cadence_engine()
 
     def get_agent_priority(self, agent_id):
+        order = getattr(self, "agent_priority_order", [])
         try:
-            return self.agent_priority_order.index(agent_id)
+            return order.index(agent_id)
         except ValueError:
             return 999
 
@@ -209,9 +220,10 @@ class ExegolOrchestrator:
         return bool(restarted and restarted.is_alive())
 
     def _load_job_history(self) -> Dict[str, str]:
-        if os.path.exists(HISTORY_FILE_PATH):
+        history_path = getattr(self, "job_history_path", HISTORY_FILE_PATH)
+        if os.path.exists(history_path):
             try:
-                with open(HISTORY_FILE_PATH, "r", encoding="utf-8") as f:
+                with open(history_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except:
                 return {}
@@ -219,114 +231,341 @@ class ExegolOrchestrator:
 
     def _save_job_history(self):
         try:
-            with open(HISTORY_FILE_PATH, "w", encoding="utf-8") as f:
+            history_path = getattr(self, "job_history_path", HISTORY_FILE_PATH)
+            with open(history_path, "w", encoding="utf-8") as f:
                 json.dump(self.job_history, f, indent=4)
         except Exception as e:
             print(f"[Scheduler] Failed to save job history: {e}")
 
+    def _load_cadence_config(self) -> Dict[str, Any]:
+        cadence_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "fleet_cadence.json")
+        if not os.path.exists(cadence_path):
+            return {}
+        try:
+            with open(cadence_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            print(f"[Scheduler] Failed to load cadence config: {exc}")
+            return {}
+
+    @staticmethod
+    def _parse_history_timestamp(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_at_time(at_time: Optional[str]) -> tuple[int, int]:
+        if not at_time:
+            return 0, 0
+        try:
+            hh, mm = map(int, str(at_time).split(":", 1))
+            return hh, mm
+        except (TypeError, ValueError):
+            return 0, 0
+
+    @staticmethod
+    def _interval_delta(frequency: str) -> Optional[timedelta]:
+        if not frequency.startswith("every_"):
+            return None
+        parts = frequency.split("_")
+        if len(parts) < 3:
+            return None
+        try:
+            value = int(parts[1])
+        except ValueError:
+            return None
+        unit = parts[2]
+        if "minute" in unit:
+            return timedelta(minutes=value)
+        if "hour" in unit:
+            return timedelta(hours=value)
+        if "day" in unit:
+            return timedelta(days=value)
+        if "week" in unit:
+            return timedelta(weeks=value)
+        return None
+
+    def _daily_boundary(self, now: datetime, at_time: Optional[str]) -> datetime:
+        hh, mm = self._parse_at_time(at_time)
+        boundary = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if boundary > now:
+            boundary -= timedelta(days=1)
+        return boundary
+
+    def _latest_weekday_boundary(self, now: datetime, weekday_name: str, at_time: Optional[str]) -> datetime:
+        hh, mm = self._parse_at_time(at_time)
+        weekday_index = WEEKDAY_INDEX[weekday_name]
+        days_since = (now.weekday() - weekday_index) % 7
+        boundary = (now - timedelta(days=days_since)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if boundary > now:
+            boundary -= timedelta(days=7)
+        return boundary
+
+    def _latest_monthly_boundary(self, now: datetime, at_time: Optional[str]) -> datetime:
+        hh, mm = self._parse_at_time(at_time)
+        boundary = now.replace(day=1, hour=hh, minute=mm, second=0, microsecond=0)
+        if boundary <= now:
+            return boundary
+        previous_month = now.month - 1 or 12
+        previous_year = now.year - 1 if now.month == 1 else now.year
+        return boundary.replace(year=previous_year, month=previous_month)
+
+    def _scheduled_due_reason(
+        self,
+        job: Dict[str, Any],
+        last_run: Optional[datetime],
+        now: datetime,
+        trigger_source: str,
+    ) -> Optional[str]:
+        frequency = str(job.get("frequency", ""))
+        at_time = job.get("at")
+
+        if last_run is None:
+            if trigger_source == "startup":
+                return None
+            return "No recorded run history"
+
+        if frequency == "daily":
+            boundary = self._daily_boundary(now, at_time)
+            if now >= boundary and last_run < boundary:
+                return f"Missed daily run due {boundary.isoformat()}"
+            return None
+
+        if frequency in WEEKDAY_INDEX:
+            boundary = self._latest_weekday_boundary(now, frequency, at_time)
+            if last_run < boundary:
+                return f"Missed {frequency} {at_time or 'weekly'} run"
+            return None
+
+        if frequency == "monthly":
+            boundary = self._latest_monthly_boundary(now, at_time)
+            if last_run < boundary:
+                return f"Missed monthly run due {boundary.isoformat()}"
+            return None
+
+        delta = self._interval_delta(frequency)
+        if delta and (now - last_run) >= delta:
+            return f"Missed interval run (last run: {last_run.isoformat()})"
+
+        return None
+
+    def plan_due_scheduled_jobs(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        now: Optional[datetime] = None,
+        trigger_source: str = "manual_run",
+        initialize_missing: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return enabled cadence jobs that are due or missed, ordered for execution."""
+        config = config if config is not None else self._load_cadence_config()
+        now = now or datetime.now()
+        due_jobs: List[Dict[str, Any]] = []
+
+        for index, job in enumerate(config.get("schedules", [])):
+            if not job.get("enabled", True):
+                continue
+            if trigger_source == "manual_run" and not job.get("catch_up_on_manual_run", True):
+                continue
+
+            job_id = job.get("id")
+            if not job_id:
+                continue
+
+            last_run_raw = self.job_history.get(job_id)
+            last_run = self._parse_history_timestamp(last_run_raw)
+            if not last_run_raw and initialize_missing:
+                self.job_history[job_id] = now.isoformat()
+                continue
+
+            reason = self._scheduled_due_reason(job, last_run, now, trigger_source)
+            if not reason:
+                continue
+
+            planned = dict(job)
+            planned["_index"] = index
+            planned["due_reason"] = reason
+            planned["last_run"] = last_run_raw
+            due_jobs.append(planned)
+
+        def sort_key(job: Dict[str, Any]) -> tuple[int, int, int]:
+            try:
+                run_order = int(job.get("run_order", job.get("_index", 999)))
+            except (TypeError, ValueError):
+                run_order = int(job.get("_index", 999))
+            return (run_order, self.get_agent_priority(job.get("agent_id", "")), int(job.get("_index", 999)))
+
+        return sorted(due_jobs, key=sort_key)
+
     def _check_for_missed_jobs(self, config):
         """Checks if any jobs should have run while the fleet was down."""
-        from datetime import timedelta
         now = datetime.now()
         max_missed = int(config.get("global_settings", {}).get("max_missed_jobs_on_startup", 3))
         triggered_missed = 0
-        
-        for job in config.get("schedules", []):
-            if not job.get("enabled", True): continue
-            job_id = job.get("id")
-            if not job_id: continue
-            
-            last_run_str = self.job_history.get(job_id)
-            if not last_run_str:
-                # First time seeing this job, don't consider it missed
-                # but record now as the start point.
-                self.job_history[job_id] = now.isoformat()
-                continue
-            
-            last_run = datetime.fromisoformat(last_run_str)
-            freq = job.get("frequency")
-            at_time = job.get("at")
-            
-            # Simplified missed detection
-            missed = False
-            reason = ""
-            
-            if freq == "daily" and at_time:
-                hh, mm = map(int, at_time.split(":"))
-                scheduled_today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-                if now > scheduled_today and last_run < scheduled_today:
-                    missed = True
-                    reason = f"Missed today's {at_time} run"
-            elif freq.startswith("every_"):
-                parts = freq.split("_")
-                val = int(parts[1])
-                unit = parts[2]
-                delta = None
-                if "minute" in unit: delta = timedelta(minutes=val)
-                elif "hour" in unit: delta = timedelta(hours=val)
-                elif "day" in unit: delta = timedelta(days=val)
-                
-                if delta and (now - last_run) > delta:
-                    missed = True
-                    reason = f"Missed interval run (last run: {last_run_str})"
-            
-            # ... Add weekly/monthly logic if needed ...
 
-            if missed:
-                if triggered_missed >= max_missed:
-                    self._record_scheduler_event("missed_job_skipped", job_id, f"startup cap reached: {max_missed}")
-                    continue
-                print(f"[Scheduler] Detected missed job: {job.get('summary')} ({job_id}). {reason}.")
-                triggered_missed += 1
-                self._record_scheduler_event("missed_job_triggered", job_id, reason)
-                if os.getenv("EXEGOL_DEFER_MISSED_JOBS") == "1":
-                    self._record_scheduler_event("missed_job_deferred", job_id, "deferred during backend startup")
-                    continue
-                self._scheduled_trigger(job.get("agent_id"), f"[MISSED] {job.get('summary')}", job_id)
+        due_jobs = self.plan_due_scheduled_jobs(
+            config=config,
+            now=now,
+            trigger_source="startup",
+            initialize_missing=True,
+        )
+
+        for job in due_jobs:
+            job_id = job.get("id")
+            reason = job.get("due_reason", "missed scheduled run")
+            if triggered_missed >= max_missed:
+                self._record_scheduler_event("missed_job_skipped", job_id, f"startup cap reached: {max_missed}")
+                continue
+            print(f"[Scheduler] Detected missed job: {job.get('summary')} ({job_id}). {reason}.")
+            triggered_missed += 1
+            self._record_scheduler_event("missed_job_triggered", job_id, reason)
+            if os.getenv("EXEGOL_DEFER_MISSED_JOBS") == "1":
+                self._record_scheduler_event("missed_job_deferred", job_id, "deferred during backend startup")
+                continue
+            self._scheduled_trigger(job.get("agent_id"), f"[MISSED] {job.get('summary')}", job_id)
 
         self._save_job_history()
 
     def _scheduled_trigger(self, agent_id: str, summary: str, job_id: str = None):
         """Bridge between schedule library and the orchestration loop."""
+        def run_task():
+            self._run_scheduled_task(agent_id=agent_id, summary=summary, job_id=job_id)
+
+        threading.Thread(target=run_task, daemon=True).start()
+
+    def _run_scheduled_task(
+        self,
+        agent_id: str,
+        summary: str,
+        job_id: str = None,
+        target: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         print(f"\n[Scheduler] Triggering scheduled task: {summary} ({agent_id})")
-        target = self.active_target or self.get_highest_priority_task()
+        target = target or self.active_target or self.get_highest_priority_task()
         if not target:
             print("[Scheduler] No target repository found for scheduled task.")
-            return
+            return {"status": "skipped", "reason": "no target repository", "job_id": job_id}
 
         routing = target.get("model_routing_preference", "ollama")
         entry = AGENT_REGISTRY.get(agent_id)
         if not entry:
             print(f"[Scheduler] Error: Scheduled agent '{agent_id}' not found in registry.")
-            return
+            return {"status": "skipped", "reason": "unknown agent", "job_id": job_id, "agent_id": agent_id}
 
-        slack_manager.post_message(f"⏰ *Scheduled Task*: {summary}. Waking `{agent_id}`...")
-        
-        def run_task():
-            self.wake_and_execute_agent(
+        try:
+            slack_manager.post_message(f"Scheduled Task: {summary}. Waking `{agent_id}`...")
+        except Exception as exc:
+            self._record_scheduler_event("slack_notify_failed", job_id or agent_id, f"{type(exc).__name__}: {exc}")
+
+        status = "completed"
+        result_summary: Dict[str, Any] = {}
+        try:
+            result = self.wake_and_execute_agent(
                 repo_info=target,
                 routing=routing,
                 max_steps=20,
                 agent_id=agent_id,
                 scheduled_prompt=summary
             )
-            # Update history AFTER successful (or at least attempted) execution
+            result_summary = {
+                "outcome": getattr(result, "outcome", None),
+                "session_id": getattr(result, "session_id", None),
+                "next_agent_id": getattr(result, "next_agent_id", ""),
+            }
+        except Exception as exc:
+            status = "failed"
+            result_summary = {"error": f"{type(exc).__name__}: {exc}"}
+            self._record_scheduler_event("job_failed", job_id or agent_id, result_summary["error"])
+        finally:
             if job_id:
                 self.job_history[job_id] = datetime.now().isoformat()
                 self._save_job_history()
-                self._record_scheduler_event("job_completed", job_id, summary)
+                event_type = "job_completed" if status == "completed" else "job_attempted_with_failure"
+                self._record_scheduler_event(event_type, job_id, summary)
 
-        threading.Thread(target=run_task, daemon=True).start()
+        return {
+            "status": status,
+            "job_id": job_id,
+            "agent_id": agent_id,
+            "summary": summary,
+            "result": result_summary,
+        }
+
+    def run_due_scheduled_agents(
+        self,
+        repo_path: Optional[str] = None,
+        trigger_source: str = "manual_run",
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Run due cadence jobs before a manual/autonomous fleet cycle."""
+        config = self._load_cadence_config()
+        if not config or not config.get("global_settings", {}).get("enable_scheduler", True):
+            return {"status": "disabled", "due_count": 0, "triggered_count": 0, "jobs": []}
+
+        due_jobs = self.plan_due_scheduled_jobs(
+            config=config,
+            now=now,
+            trigger_source=trigger_source,
+            initialize_missing=False,
+        )
+        settings = config.get("global_settings", {})
+        max_jobs_raw = settings.get("max_due_jobs_on_run_fleet", len(due_jobs))
+        try:
+            max_jobs = int(max_jobs_raw)
+        except (TypeError, ValueError):
+            max_jobs = len(due_jobs)
+
+        target = self._repo_info_for_path(repo_path) if repo_path else (self.active_target or self.get_highest_priority_task())
+        results: List[Dict[str, Any]] = []
+        for index, job in enumerate(due_jobs):
+            job_id = job.get("id")
+            if max_jobs >= 0 and index >= max_jobs:
+                self._record_scheduler_event(
+                    "manual_due_job_skipped",
+                    job_id,
+                    f"manual run cap reached: {max_jobs}",
+                )
+                results.append({
+                    "status": "skipped",
+                    "job_id": job_id,
+                    "agent_id": job.get("agent_id"),
+                    "reason": f"manual run cap reached: {max_jobs}",
+                })
+                continue
+
+            reason = job.get("due_reason", "scheduled job due")
+            self._record_scheduler_event("manual_due_job_triggered", job_id, reason)
+            result = self._run_scheduled_task(
+                agent_id=job.get("agent_id"),
+                summary=f"[DUE] {job.get('summary')}",
+                job_id=job_id,
+                target=target,
+            )
+            result["due_reason"] = reason
+            results.append(result)
+
+        return {
+            "status": "success",
+            "due_count": len(due_jobs),
+            "triggered_count": len([item for item in results if item.get("status") != "skipped"]),
+            "jobs": results,
+        }
 
     def _write_scheduler_state(self, status: str, detail: str = "", registered_jobs: Optional[int] = None):
         target = self.active_target or {"repo_path": os.path.dirname(os.path.dirname(__file__))}
         repo_path = target.get("repo_path") or os.path.dirname(os.path.dirname(__file__))
+        now = datetime.now().isoformat()
         state = {
             "schema_version": 1,
             "status": status,
             "detail": detail,
             "registered_jobs": registered_jobs,
-            "updated_at": datetime.now().isoformat(),
+            "enabled": status != "disabled",
+            "heartbeat": now if status == "healthy" else None,
+            "updated_at": now,
         }
         StateManager(repo_path).write_json(getattr(self, "scheduler_state_file", ".exegol/scheduler_state.json"), state)
 
@@ -370,6 +609,40 @@ class ExegolOrchestrator:
             except Exception as e:
                 print(f"[Status Update] Failed to update priority.json: {e}")
 
+    def cache_session_context(self, repo_path: str, result: SessionResult):
+        """Caches the session context for a repository when it yields control."""
+        if not repo_path:
+            return
+        try:
+            cache_data = {
+                "agent_id": result.agent_id,
+                "session_id": result.session_id,
+                "outcome": result.outcome,
+                "snapshot_hash": result.snapshot_hash,
+                "regression_context": result.regression_context,
+                "next_agent_id": result.next_agent_id,
+                "status_update": result.status_update,
+                "timestamp": datetime.now().isoformat()
+            }
+            sm = StateManager(repo_path)
+            sm.write_json(".exegol/session_cache.json", cache_data)
+            print(f"[Orchestrator] Cached session context for {repo_path} to session_cache.json")
+        except Exception as e:
+            print(f"[Orchestrator] Failed to cache session context for {repo_path}: {e}")
+
+    def load_cached_session_context(self, repo_path: str) -> Dict[str, Any]:
+        """Loads the cached session context for a repository if it exists."""
+        if not repo_path:
+            return {}
+        try:
+            sm = StateManager(repo_path)
+            cache = sm.read_json(".exegol/session_cache.json")
+            if isinstance(cache, dict):
+                return cache
+        except Exception as e:
+            print(f"[Orchestrator] Failed to load cached session context for {repo_path}: {e}")
+        return {}
+
     def _write_fleet_state(self, repo_path: str, status: str, active_agent: str = None,
                            session_id: str = "", handoff_chain: List[str] = None,
                            next_agent_id: str = "", errors: List[str] = None,
@@ -381,6 +654,9 @@ class ExegolOrchestrator:
         try:
             sm = StateManager(repo_path)
             existing = sm.read_fleet_state()
+            if existing.get("status") == "blocked" and status != "blocked":
+                print(f"[Status Update] Preserving blocked fleet state for {repo_path}; clear the blocker before retrying.")
+                return
 
             state_data = {
                 "active_repo": repo_path,
@@ -399,6 +675,24 @@ class ExegolOrchestrator:
             sm.write_fleet_state(state_data)
         except Exception as e:
             print(f"[Status Update] Failed to write fleet_state.json: {e}")
+
+    def _blocked_fleet_state(self, repo_path: str) -> Dict[str, Any]:
+        if not repo_path:
+            return {}
+        try:
+            state = StateManager(repo_path).read_fleet_state()
+        except Exception as e:
+            print(f"[Status Update] Failed to read fleet_state.json for block check: {e}")
+            return {}
+        return state if state.get("status") == "blocked" else {}
+
+    def _skip_blocked_repo(self, repo_path: str) -> bool:
+        state = self._blocked_fleet_state(repo_path)
+        if not state:
+            return False
+        print(f"[Orchestrator] Repository {repo_path} is blocked: {state.get('output_summary', 'Fleet state is blocked.')}")
+        self.update_repo_status(repo_path, "blocked")
+        return True
 
     def _record_repo_failure(self, repo_info: Dict[str, Any], message: str,
                              errors: List[str] = None, handoff_chain: List[str] = None):
@@ -579,7 +873,12 @@ class ExegolOrchestrator:
         
         print("Event listeners started. Watching priority.json and .exegol directories for updates.")
 
-    def run_fleet_cycle(self, repo_path: Optional[str] = None):
+    def run_fleet_cycle(
+        self,
+        repo_path: Optional[str] = None,
+        include_due_scheduled: bool = False,
+        trigger_source: str = "manual_run",
+    ):
         """Runs one full cycle through the fleet, or a selected repo when provided."""
         if not hasattr(self, "_fleet_cycle_lock"):
             self._fleet_cycle_lock = threading.Lock()
@@ -591,6 +890,14 @@ class ExegolOrchestrator:
         self.is_running_fleet = True
         all_success = True
         try:
+            if include_due_scheduled:
+                due_result = self.run_due_scheduled_agents(
+                    repo_path=repo_path,
+                    trigger_source=trigger_source,
+                )
+                if due_result.get("triggered_count", 0):
+                    print(f"[Scheduler] Ran {due_result['triggered_count']} due scheduled job(s) before fleet dispatch.")
+
             # Periodic Audits
             self.check_compliance_monitoring()
 
@@ -605,6 +912,9 @@ class ExegolOrchestrator:
                 if not self.is_running_fleet:
                     break
                 repo_path = repo_info.get("repo_path", "")
+                if self._skip_blocked_repo(repo_path):
+                    all_success = False
+                    continue
                 self._write_fleet_state(
                     repo_path=repo_path,
                     status="running",
@@ -613,6 +923,14 @@ class ExegolOrchestrator:
                 )
                 try:
                     self.process_repo(repo_info)
+
+                    # Check if the repository status has become 'idle' or 'blocked'
+                    self.load_config()
+                    updated_repo = self._repo_info_for_path(repo_path)
+                    status = updated_repo.get("agent_status", "idle")
+                    if status in ["idle", "blocked"]:
+                        print(f"[Orchestrator] Repository {repo_path} status became '{status}'. Yielding control to next priority repo.")
+                        continue
                 except Exception as e:
                     all_success = False
                     message = f"Fleet cycle failed while processing repository: {type(e).__name__}: {e}"
@@ -651,6 +969,8 @@ class ExegolOrchestrator:
         """Decides which agent to wake for a given repo based on its current state."""
         repo_path = repo_info.get("repo_path")
         print(f"\nChecking repo: {repo_path}")
+        if self._skip_blocked_repo(repo_path):
+            return
         
         # Check if .exegol exists, otherwise trigger Thrawn (onboarding)
         exegol_dir = os.path.join(repo_path, ".exegol")
@@ -887,8 +1207,10 @@ class ExegolOrchestrator:
             if not target_repo:
                 print("No actionable repositories found.")
                 return False
-            
+
             repo_path = target_repo.get("repo_path", "")
+            if self._skip_blocked_repo(repo_path):
+                return False
             self._write_fleet_state(
                 repo_path=repo_path,
                 status="running",
@@ -916,7 +1238,16 @@ class ExegolOrchestrator:
                                 allow_chaining: bool = True):
         if agent_id is None:
             agent_id = "product_poe"
-            
+
+        path = repo_info.get("repo_path")
+        if not snapshot_hash or not regression_context:
+            cache = self.load_cached_session_context(path)
+            if cache:
+                if not snapshot_hash:
+                    snapshot_hash = cache.get("snapshot_hash", "")
+                if not regression_context:
+                    regression_context = cache.get("regression_context", "")
+
         self.acquire_execution_lock(agent_id)
         result = None
         try:
@@ -927,6 +1258,26 @@ class ExegolOrchestrator:
         finally:
             self.release_execution_lock()
             
+        if result:
+            status = getattr(result, "status_update", "")
+            if not status:
+                if result.outcome == "failure":
+                    status = "blocked"
+                elif not getattr(result, "next_agent_id", ""):
+                    status = "idle"
+
+            # Cache the current session context
+            self.cache_session_context(path, result)
+
+            # Update repo status in priority.json if status is set
+            if status:
+                self.update_repo_status(path, status)
+
+            # Yield control immediately if status becomes idle or blocked (do not chain further)
+            if status in ["idle", "blocked"]:
+                print(f"[Orchestrator] Agent status became '{status}'. Yielding control for {path}.")
+                return result
+
         if result and getattr(result, "next_agent_id", None) and result.outcome == "success":
             if not allow_chaining:
                 print(f"[Orchestrator] Chaining disabled. Returning current agent result without handoff to {result.next_agent_id}")
@@ -1056,12 +1407,16 @@ class ExegolOrchestrator:
             print(f"Unknown agent: {agent_id}")
             return
 
+        # Standardize execution limits to a uniform repository limit (configured to 30) rather than repository-specific
+        standardized_limit = repo_info.get("max_steps_policy", 30)
+        actual_max_steps = min(standardized_limit, registry_entry.get("max_steps", 50))
+
         handoff = HandoffContext(
             repo_path=repo_info.get("repo_path", ""),
             agent_id=agent_id,
             task_id="fleet_cycle" if self.is_running_fleet else "manual_go",
             model_routing=routing,
-            max_steps=min(max_steps, registry_entry.get("max_steps", 50)),
+            max_steps=actual_max_steps,
             snapshot_hash=snapshot_hash,
             regression_context=regression_context,
             loop_depth=current_depth,
@@ -1079,13 +1434,6 @@ class ExegolOrchestrator:
             handoff=signed_handoff,
         )
         
-        if result:
-            path = repo_info.get("repo_path")
-            if result.outcome == "failure":
-                self.update_repo_status(path, "blocked")
-            elif getattr(result, "status_update", ""):
-                self.update_repo_status(path, result.status_update)
-
         return result
 
     def _sign_handoff(self, handoff: HandoffContext) -> HandoffContext:

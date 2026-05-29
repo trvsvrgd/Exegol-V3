@@ -87,6 +87,33 @@ def test_backlog_dedupe_auto_failures_archives_repeated_rows(tmp_path):
     assert archived["canonical_task_id"] == "auto_fail_DeveloperDexAgent_1"
 
 
+def test_archive_task_archives_arbitrary_row_with_reason(tmp_path):
+    bm = BacklogManager(str(tmp_path))
+    assert bm.add_task({
+        "id": "stale_generated_report",
+        "summary": "Generated report with no actionable evidence",
+        "priority": "high",
+        "status": "todo",
+        "created_at": "2026-05-01T00:00:00",
+    })
+
+    archived = bm.archive_task(
+        "stale_generated_report",
+        reason="Stale generated backlog row after verification",
+        final_status="done",
+        updates={"resolution": "No actionable evidence remained."},
+    )
+
+    assert archived is True
+    assert bm.load_backlog() == []
+    archive = bm.load_archive()
+    assert len(archive) == 1
+    assert archive[0]["id"] == "stale_generated_report"
+    assert archive[0]["status"] == "done"
+    assert archive[0]["archive_reason"] == "Stale generated backlog row after verification"
+    assert archive[0]["resolution"] == "No actionable evidence remained."
+
+
 if __name__ == "__main__":
     try:
         test_backlog_archiving()

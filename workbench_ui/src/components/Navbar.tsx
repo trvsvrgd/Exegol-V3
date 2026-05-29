@@ -9,7 +9,6 @@ export default function Navbar() {
   const navLinks = [
     { href: '/', label: 'Dashboard' },
     { href: '/operations', label: 'Operations' },
-    { href: '/fleet', label: 'Fleet Dashboard' },
     { href: '/settings', label: 'Agent Settings' },
     { href: '/costs', label: 'Cost Management' },
     { href: '/status', label: 'Fleet Status' },

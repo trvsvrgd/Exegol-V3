@@ -7,7 +7,7 @@ import QuickAddTask from "../components/QuickAddTask";
 import ThrawnInteraction from "../components/ThrawnInteraction";
 import ActiveFleetConsole from "../components/ActiveFleetConsole";
 
-import { apiGet, apiPost } from "../app/api-client";
+import { apiGet, apiPost, getLocalActiveRepo, setLocalActiveRepo } from "../app/api-client";
 
 interface Repo {
   repo_path: string;
@@ -34,7 +34,7 @@ interface SupervisorHealth {
 
 export default function Home() {
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [activeRepo, setActiveRepo] = useState<string | null>(null);
+  const [activeRepo, setActiveRepo] = useState<string | null>(() => getLocalActiveRepo() || null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<'poe' | 'thrawn' | 'vader'>('poe');
   const [autonomousMode, setAutonomousMode] = useState<boolean>(false);
@@ -58,6 +58,12 @@ export default function Home() {
     const interval = setInterval(fetchAutonomousStatus, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!controlMessage) return;
+    const timeout = window.setTimeout(() => setControlMessage(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [controlMessage]);
 
   useEffect(() => {
     async function fetchSupervisorHealth() {
@@ -114,8 +120,16 @@ export default function Home() {
     try {
       const data = await apiGet<Repo[]>("/repos");
       setRepos(data);
-      if (data.length > 0 && !activeRepo) {
-        setActiveRepo(data[0].repo_path);
+      if (data.length > 0) {
+        const savedRepo = getLocalActiveRepo();
+        if (savedRepo && data.some((r) => r.repo_path === savedRepo)) {
+          if (activeRepo !== savedRepo) {
+            setActiveRepo(savedRepo);
+          }
+        } else if (!activeRepo) {
+          setActiveRepo(data[0].repo_path);
+          setLocalActiveRepo(data[0].repo_path);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch repos:", err);
@@ -127,10 +141,23 @@ export default function Home() {
     const timeout = window.setTimeout(() => {
       void fetchRepos();
     }, 0);
-    return () => window.clearTimeout(timeout);
+    const interval = window.setInterval(() => {
+      void fetchRepos();
+    }, 5000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
   }, [fetchRepos]);
 
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
+  const attentionItems = supervisorHealth?.status === "degraded"
+    ? [
+        ...supervisorHealth.degraded_services,
+        ...supervisorHealth.degraded_repositories.map((repo) => repo.split(/[/\\]/).filter(Boolean).slice(-1)[0]),
+      ]
+    : [];
+  const activeBlockerDetail = activeRepoMeta?.agent_status === "blocked" ? activeRepoMeta.status_detail : null;
 
   return (
     <div className="container dashboard-container">
@@ -144,19 +171,17 @@ export default function Home() {
             disabled={controlBusy || (!autonomousMode && (cycleRunning || !activeRepo))}
             title={autonomousMode ? "Stop the autonomous fleet loop." : cycleRunning ? "A fleet cycle is already running." : "Run the autonomous fleet for the selected repository."}
           >
-            {cycleRunning ? "Fleet Running" : autonomousMode ? "Stop Autonomous Fleet" : "Run Autonomous Fleet"}
+            {autonomousMode ? "Stop Autonomous Fleet" : cycleRunning ? "Fleet Cycle Running" : "Run Autonomous Fleet"}
           </button>
         </div>
         {controlError && <div className="error-banner control-error">{controlError}</div>}
-        {controlMessage && <div className="success-banner control-error">{controlMessage}</div>}
+        {controlMessage && supervisorHealth?.status !== "degraded" && <div className="success-banner control-error">{controlMessage}</div>}
         {supervisorHealth?.status === "degraded" && (
           <div className="error-banner control-error">
             Needs attention:
             {" "}
-            {[
-              ...supervisorHealth.degraded_services,
-              ...supervisorHealth.degraded_repositories.map((repo) => repo.split(/[/\\]/).filter(Boolean).slice(-1)[0]),
-            ].join(", ")}
+            {attentionItems.join(", ")}
+            {activeBlockerDetail ? ` - ${activeBlockerDetail}` : ""}
           </div>
         )}
       </header>
@@ -174,7 +199,10 @@ export default function Home() {
                 <button
                   key={repo.repo_path}
                   className={`repo-pill ${repo.repo_path === activeRepo ? "active" : ""}`}
-                  onClick={() => setActiveRepo(repo.repo_path)}
+                  onClick={() => {
+                    setActiveRepo(repo.repo_path);
+                    setLocalActiveRepo(repo.repo_path);
+                  }}
                   title={repo.repo_path}
                 >
                   {label}

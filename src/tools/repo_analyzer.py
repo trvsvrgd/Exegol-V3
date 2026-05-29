@@ -25,6 +25,19 @@ _FALSE_POSITIVE_PHRASES = (
     "mock mode",
     "os.getenv",
     "os.environ",
+    "from_authorized_user_file",
+    "credentials=creds",
+    "api_key=self.api_key",
+    "api_key=api_key",
+    "api_key = os.getenv",
+    "headers={\"authorization\"",
+    "headers={\"x-api-key\"",
+    "provided_key != api_key",
+    "if api_key:",
+    "if not api_key",
+    "pending/todo",
+    "exclude 'pending' placeholder answers",
+    "save the refreshed credentials",
     "unhandled fetch calls and hardcoded",  # watcher wedge docstring
 )
 
@@ -35,7 +48,24 @@ _SELF_REFERENTIAL_FILES = {
     "security_sabine_agent.py",
     "watcher_wedge_agent.py",
     "input_sanitizer.py",
+    "linter.py",
+    "risk_scorer.py",
+    "safety_gate.py",
+    "secret_manager.py",
 }
+
+_LEGITIMATE_SECRET_PLUMBING = (
+    "os.getenv(",
+    "os.environ",
+    "api_key=self.api_key",
+    "api_key=api_key",
+    "key\": api_key",
+    "headers={\"authorization\"",
+    "headers={\"x-api-key\"",
+    "from google.oauth2.credentials import credentials",
+    "from_authorized_user_file(",
+    "credentials=creds",
+)
 
 
 def _is_inside_triple_quote_block(lines: list, current_idx: int) -> bool:
@@ -113,7 +143,7 @@ def analyze_repository(repo_path: str, scan_path: str = "src") -> List[Dict]:
                     # Exception: python single-line comments (#) inside triple-quote strings are rare,
                     # so we still allow comment lines through.
                     is_comment = "#" in line or "//" in line
-                    if inside_triple_quote and not is_comment:
+                    if (inside_triple_quote or '"""' in line or "'''" in line) and not is_comment:
                         continue
                     
                     # Skip comments that look like status documentation (e.g. # choice1 | choice2 | choice3)
@@ -122,6 +152,11 @@ def analyze_repository(repo_path: str, scan_path: str = "src") -> List[Dict]:
 
                     # Skip lines that are false-positive prose (system prompts referencing mock code)
                     if any(phrase in lower_line for phrase in _FALSE_POSITIVE_PHRASES):
+                        continue
+
+                    # Legitimate secret plumbing should be reviewed by the secret manager,
+                    # not routed as a hardcoded-secret implementation bug.
+                    if any(pattern in lower_line for pattern in _LEGITIMATE_SECRET_PLUMBING):
                         continue
 
                     for key, (label, category) in patterns.items():

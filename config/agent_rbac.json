@@ -32,6 +32,16 @@
         "agent:trigger"
       ]
     },
+    "coordinator": {
+      "permissions": [
+        "filesystem:read",
+        "backlog:read",
+        "backlog:write",
+        "report:generate",
+        "slack:notify",
+        "agent:trigger"
+      ]
+    },
     "restricted": {
       "permissions": [
         "filesystem:read"
@@ -49,8 +59,18 @@
     "ProductPoeAgent": "manager",
     "report_revan": "manager",
     "ReportRevanAgent": "manager",
-    "thoughtful_thrawn": "restricted",
-    "ThoughtfulThrawnAgent": "restricted",
+    "thoughtful_thrawn": "coordinator",
+    "ThoughtfulThrawnAgent": "coordinator",
+    "intel_ima": "coordinator",
+    "IntelImaAgent": "coordinator",
+    "research_rex": "coordinator",
+    "ResearchRexAgent": "coordinator",
+    "security_sabine": "coordinator",
+    "SecuritySabineAgent": "coordinator",
+    "uat_ulic": "coordinator",
+    "UatUlicAgent": "coordinator",
+    "watcher_wedge": "coordinator",
+    "WatcherWedgeAgent": "coordinator",
     "vibe_vader": "restricted",
     "VibeVaderAgent": "restricted",
     "quality_quigon": "developer",

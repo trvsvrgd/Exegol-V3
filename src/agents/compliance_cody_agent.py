@@ -37,6 +37,38 @@ class ComplianceCodyAgent:
         self.system_prompt = self.llm_client.generate_system_prompt(self)
         self.metrics_manager = SuccessMetricsManager(os.getcwd())
 
+    @staticmethod
+    def _normalize_requirements(raw_requirements) -> list:
+        """Return only dict-shaped regulatory requirements from LLM output."""
+        if isinstance(raw_requirements, dict):
+            for key in ("requirements", "items", "results"):
+                value = raw_requirements.get(key)
+                if isinstance(value, list):
+                    raw_requirements = value
+                    break
+            else:
+                raw_requirements = [raw_requirements]
+
+        if not isinstance(raw_requirements, list):
+            return []
+
+        normalized = []
+        for index, req in enumerate(raw_requirements, start=1):
+            if not isinstance(req, dict):
+                continue
+            summary = str(req.get("summary") or req.get("id") or f"Requirement {index}").strip()
+            if not summary:
+                continue
+            normalized.append({
+                "id": str(req.get("id") or f"REG_{index:03d}"),
+                "summary": summary,
+                "description": str(req.get("description") or summary),
+                "required_capability_id": req.get("required_capability_id"),
+                "priority": str(req.get("priority") or "medium"),
+                "category": str(req.get("category") or "Regulatory"),
+            })
+        return normalized
+
     def _calculate_success_metrics(self, repo_path: str) -> dict:
         """Calculates compliance and governance metrics based on recent logs."""
         self.metrics_manager = SuccessMetricsManager(repo_path)
@@ -69,7 +101,7 @@ class ComplianceCodyAgent:
         }
 
     def execute(self, handoff):
-        """Execute with a clean HandoffContext — no prior session memory required.
+        """Execute with a clean HandoffContext - no prior session memory required.
         
         1. Reads system capabilities manifest.
         2. Performs targeted search for latest ML/LLM regulations.
@@ -82,7 +114,7 @@ class ComplianceCodyAgent:
         exegol_dir = os.path.join(repo_path, ".exegol")
         os.makedirs(exegol_dir, exist_ok=True)
 
-        print(f"[{self.name}] Session {handoff.session_id} — Initiating monthly compliance sweep...")
+        print(f"[{self.name}] Session {handoff.session_id} - Initiating monthly compliance sweep...")
 
         try:
             # 1. Load System Capabilities
@@ -118,8 +150,7 @@ class ComplianceCodyAgent:
             found_requirements = self.llm_client.parse_json_response(response)
             self._steps_used += 1
 
-            if not found_requirements:
-                found_requirements = []
+            found_requirements = self._normalize_requirements(found_requirements)
 
             bm = BacklogManager(repo_path)
             new_tasks_added = 0
@@ -136,7 +167,7 @@ class ComplianceCodyAgent:
                 timestamp = datetime.datetime.now().isoformat()
                 elog.write(f"\n--- Compliance Sweep: {timestamp} (Coverage: {gap_report['coverage_pct']}%) ---\n")
 
-                # Covered requirements → add compliance_certification tasks
+                # Covered requirements -> add compliance_certification tasks
                 for item in gap_report["covered"]:
                     req = item["requirement"]
                     task = {
@@ -154,11 +185,11 @@ class ComplianceCodyAgent:
                     if bm.add_task(task):
                         new_tasks_added += 1
 
-                # Gap items → log exceptions
+                # Gap items -> log exceptions
                 for item in gap_report["gaps"]:
                     req = item["requirement"]
                     reason = item.get("reasoning", "No matching capability found")
-                    elog.write(f"[EXCEPTION] System lacks capability for {req['id']}: {req['summary']} — {reason}\n")
+                    elog.write(f"[EXCEPTION] System lacks capability for {req['id']}: {req['summary']} - {reason}\n")
                     exceptions_logged += 1
 
             duration = time.time() - start_time

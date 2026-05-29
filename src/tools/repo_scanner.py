@@ -2,6 +2,21 @@ import os
 import re
 from typing import List, Dict
 
+EXCLUDED_DIR_NAMES = {
+    ".git",
+    ".exegol",
+    ".pytest_cache",
+    ".pytest_tmp",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    "scratch",
+    "build",
+    "dist",
+}
+
+
 def scan_for_security_vulnerabilities(repo_path: str) -> List[Dict]:
     """Scans the repository for security vulnerabilities and secrets.
     
@@ -21,10 +36,8 @@ def scan_for_security_vulnerabilities(repo_path: str) -> List[Dict]:
         (re.compile(r'(?i)requests\.(get|post|put|delete)\(.*\burl\b.*\)'), "Potential SSRF vulnerability in request handling")
     ]
 
-    for root, _, files in os.walk(repo_path):
-        # Skip common directories
-        if any(d in root for d in [".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".next", "scratch", "build", "dist"]):
-            continue
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIR_NAMES]
             
         for file in files:
             if not file.endswith(('.py', '.js', '.json', '.sh', '.bat', '.env')):

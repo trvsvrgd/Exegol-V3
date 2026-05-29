@@ -30,7 +30,7 @@ class SuccessMetricsManager:
                 print(f"[SuccessMetricsManager] Failed to load human observations: {e}")
         return {}
 
-    def calculate_metrics(self, days: int = 30) -> Dict[str, Any]:
+    def calculate_metrics(self, days: int = 30, enable_live_judge: bool = False) -> Dict[str, Any]:
         """Analyzes interaction logs to calculate advanced per-agent metrics."""
         # Baseline (Full period)
         baseline_logs = read_interaction_logs([self.repo_path], days=days)
@@ -59,7 +59,12 @@ class SuccessMetricsManager:
             # Precision = Qualitative quality score from LLM Judge
             # We fetch cached judge scores or sample recent sessions for auditing.
             agent_obs = {k: v for k, v in observations.items() if agent_id.startswith(k) or k in agent_id}
-            precision = self._calculate_real_precision(agent_id, b_stats.get("logs", []), agent_obs)
+            precision = self._calculate_real_precision(
+                agent_id,
+                b_stats.get("logs", []),
+                agent_obs,
+                enable_live_judge=enable_live_judge,
+            )
             
             # Drift = Recent Success Rate - Baseline Success Rate
             recent_success_rate = r_stats.get("success_rate", 0)
@@ -75,6 +80,7 @@ class SuccessMetricsManager:
                 "avg_duration": round(b_stats.get("avg_duration", 0), 1),
                 "avg_prompts": round(b_stats.get("avg_prompts", 0), 1),
                 "avg_tokens": round(b_stats.get("avg_tokens", 0), 0),
+                "bugs_introduced": b_stats.get("errors_count", 0),
                 "total_sessions": total_sessions,
                 "status": "improving" if drift > 0.05 else "declining" if drift < -0.05 else "stable",
                 "tools_accessible": AGENT_REGISTRY.get(agent_id, {}).get("tools", []),
@@ -87,6 +93,11 @@ class SuccessMetricsManager:
             "period_days": days,
             "fleet_aggregate": {
                 "total_sessions": len(baseline_logs),
+                "success_rate": round(
+                    sum(a["total_sessions"] * a["success_rate"] for a in agent_breakdown.values())
+                    / sum(a["total_sessions"] for a in agent_breakdown.values()),
+                    2,
+                ) if any(a["total_sessions"] for a in agent_breakdown.values()) else 0,
                 "avg_recall": round(sum(a["recall"] for a in agent_breakdown.values()) / len(agent_breakdown), 2) if agent_breakdown else 0,
                 "avg_precision": round(sum(a["precision"] for a in agent_breakdown.values()) / len(agent_breakdown), 2) if agent_breakdown else 0,
                 "overall_drift": round(sum(a["drift"] for a in agent_breakdown.values()) / len(agent_breakdown), 2) if agent_breakdown else 0
@@ -156,13 +167,17 @@ class SuccessMetricsManager:
             
         return stats
 
-    def _calculate_real_precision(self, agent_id: str, logs: List[dict], observations: Dict[str, str] = None) -> float:
+    def _calculate_real_precision(
+        self,
+        agent_id: str,
+        logs: List[dict],
+        observations: Dict[str, str] = None,
+        enable_live_judge: bool = False,
+    ) -> float:
         """Calculates a qualitative precision score by sampling sessions with LLMJudge."""
         if not logs:
             return 0.0
             
-        from tools.llm_judge import LLMJudge
-        
         # 1. Look for existing judge evaluations in the judge_dir
         scored_sessions = 0
         total_score = 0.0
@@ -205,8 +220,11 @@ class SuccessMetricsManager:
                     except:
                         pass
 
-            # 3. Last resort: Proactively audit with LLM Judge
-            if not evaluation or evaluation.get("error"):
+            # 3. Optional live audit. Disabled for API/dashboard calls so metrics
+            # stay bounded and do not block on local or remote model providers.
+            if enable_live_judge and (not evaluation or evaluation.get("error")):
+                from tools.llm_judge import LLMJudge
+
                 print(f"[SuccessMetricsManager] Auditing session {session_id} for {agent_id}...")
                 evaluation = LLMJudge.evaluate_session(log)
                 if evaluation and not evaluation.get("error"):

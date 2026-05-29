@@ -63,7 +63,7 @@ def discover_repositories(project_root: str, existing_paths: Iterable[str] = ())
                 "priority": 10,
                 "model_routing_preference": "ollama",
                 "agent_status": "idle",
-                "max_steps_policy": 50,
+                "max_steps_policy": 30,
                 "requires_slack_approval_for_deletes": True,
                 "daily_commit_routine": True,
             })

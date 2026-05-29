@@ -19,7 +19,7 @@ def test_start_autonomous_is_idempotent(monkeypatch):
 
     calls = []
 
-    def fake_run_fleet_cycle():
+    def fake_run_fleet_cycle(repo_path=None, include_due_scheduled=False, trigger_source="manual_run"):
         calls.append(time.time())
         return True
 
@@ -73,8 +73,8 @@ def test_start_autonomous_records_selected_repo(monkeypatch, tmp_path):
 def test_continuous_loop_runs_selected_repo(monkeypatch, tmp_path):
     calls = []
 
-    def fake_run_fleet_cycle(repo_path=None):
-        calls.append(repo_path)
+    def fake_run_fleet_cycle(repo_path=None, include_due_scheduled=False, trigger_source="manual_run"):
+        calls.append((repo_path, include_due_scheduled, trigger_source))
         with api._continuous_lock:
             api._continuous_mode = False
         return True
@@ -85,7 +85,30 @@ def test_continuous_loop_runs_selected_repo(monkeypatch, tmp_path):
 
     api._continuous_fleet_loop()
 
-    assert calls == [os.path.abspath(tmp_path)]
+    assert calls == [(os.path.abspath(tmp_path), True, "manual_run")]
+
+
+def test_continuous_loop_runs_multiple_cycles_until_stopped(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run_fleet_cycle(repo_path=None, include_due_scheduled=False, trigger_source="manual_run"):
+        calls.append((repo_path, include_due_scheduled, trigger_source))
+        if len(calls) == 2:
+            with api._continuous_lock:
+                api._continuous_mode = False
+        return True
+
+    monkeypatch.setattr(api.orchestrator, "run_fleet_cycle", fake_run_fleet_cycle)
+    monkeypatch.setattr(api.time, "sleep", lambda _seconds: None)
+    api._continuous_mode = True
+    api._continuous_repo_path = os.path.abspath(tmp_path)
+
+    api._continuous_fleet_loop()
+
+    assert calls == [
+        (os.path.abspath(tmp_path), True, "manual_run"),
+        (os.path.abspath(tmp_path), True, "manual_run"),
+    ]
 
 
 def test_start_autonomous_http_uses_selected_repo(monkeypatch, tmp_path):
@@ -121,3 +144,42 @@ def test_start_autonomous_http_uses_selected_repo(monkeypatch, tmp_path):
 
     api.stop_autonomous_fleet()
     api._continuous_fleet_thread = None
+
+
+def test_active_state_reconciles_stale_heartbeat(monkeypatch, tmp_path):
+    repo_path = tmp_path / "repo"
+    heartbeat_dir = repo_path / ".exegol" / "heartbeats"
+    heartbeat_dir.mkdir(parents=True)
+    heartbeat_file = heartbeat_dir / "stale123.json"
+    heartbeat_file.write_text(
+        """
+        {
+          "session_id": "stale123",
+          "agent_id": "developer_dex",
+          "status": "zombie",
+          "last_pulse": "2026-05-01T00:00:00"
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api.orchestrator, "load_config", lambda: None)
+    monkeypatch.setattr(
+        api.orchestrator,
+        "priority_config",
+        {"repositories": [{"repo_path": str(repo_path), "agent_status": "idle"}]},
+    )
+    api._continuous_mode = True
+    api._continuous_repo_path = os.path.abspath(repo_path)
+    api.orchestrator.is_running_fleet = False
+
+    try:
+        state = api.get_fleet_active_state(str(repo_path))
+    finally:
+        api._continuous_mode = False
+        api._continuous_repo_path = None
+
+    assert state["status"] == "blocked"
+    assert state["active_agent"] == "developer_dex"
+    assert state["session_id"] == "stale123"
+    assert state["blocker_type"] == "stale_heartbeat"
+    assert state["autonomous"]["loop_status"] == "waiting_between_cycles"

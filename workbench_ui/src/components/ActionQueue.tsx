@@ -21,7 +21,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
     const fetchQueue = useCallback(async () => {
         try {
             const data = await apiGet<ActionItem[]>(`/human-queue?repo_path=${encodeURIComponent(repoPath)}`);
-            setQueue(data);
+            setQueue(Array.isArray(data) ? data : []);
             setLoading(false);
         } catch (err) {
             console.error("Failed to fetch human queue:", err);
@@ -71,7 +71,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
         }
     };
 
-    const getWhyExplanation = (category: string, task: string) => {
+    const getWhyExplanation = (category: string) => {
         switch (category.toLowerCase()) {
             case 'intent':
                 return "Vibe Vader flagged this because a core project objective, structural decision, or design direction is missing or ambiguous. Clear intent is required for the fleet to proceed safely.";
@@ -145,7 +145,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
                                         <div className="audit-details">
                                             <div className="detail-section">
                                                 <strong>Why is this in the backlog?</strong>
-                                                <p>{getWhyExplanation(item.category, item.task)}</p>
+                                                <p>{getWhyExplanation(item.category)}</p>
                                             </div>
                                             <div className="detail-section">
                                                 <strong>Action Required:</strong>
@@ -159,7 +159,7 @@ export default function ActionQueue({ repoPath }: { repoPath: string }) {
                                     {isDone ? (
                                         <div className="resolved-banner">
                                             <div className="resolved-text">
-                                                <strong>✓ Resolved:</strong> {item.notes || 'Task marked complete.'}
+                                                <strong>Resolved:</strong> {item.notes || 'Task marked complete.'}
                                             </div>
                                             <button 
                                                 className="btn-reopen" 

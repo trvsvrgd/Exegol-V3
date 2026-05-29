@@ -20,11 +20,10 @@ export default function BacklogBoard({ repoPath }: { repoPath: string }) {
     const [hideDone, setHideDone] = useState(true);
     const [grooming, setGrooming] = useState(false);
     const [groomMessage, setGroomMessage] = useState<string | null>(null);
-
     const fetchBacklog = useCallback(async () => {
         try {
             const data = await apiGet<Task[]>(`/backlog?repo_path=${encodeURIComponent(repoPath)}`);
-            setBacklog(data);
+            setBacklog(Array.isArray(data) ? data : []);
             setLoading(false);
         } catch (err) {
             console.error("Backlog fetch error:", err);

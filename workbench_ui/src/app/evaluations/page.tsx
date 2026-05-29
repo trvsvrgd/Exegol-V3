@@ -1,8 +1,14 @@
 "use client";
 import { useState, useEffect } from "react";
-import { apiGet } from "../api-client";
+import Link from "next/link";
+import { apiGet, getLocalActiveRepo, setLocalActiveRepo } from "../api-client";
 
-const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
+interface Repo {
+  repo_path: string;
+  model_routing_preference: string;
+  priority: number;
+  agent_status: string;
+}
 
 interface EvalRequirement {
   id: string;
@@ -31,37 +37,115 @@ export default function EvaluationsDashboard() {
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
   const [reportData, setReportData] = useState<EvalReport | null>(null);
 
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeRepo, setActiveRepo] = useState<string>("");
+
+  // Load repositories and initial active repo
   useEffect(() => {
-    apiGet<string[]>(`/evaluations?repo_path=${encodeURIComponent(REPO_PATH)}`)
-      .then(data => {
-        setReports(data);
-        if (data.length > 0) {
-          setSelectedReport(data[0]);
+    async function loadRepos() {
+      try {
+        const repoList = await apiGet<Repo[]>("/repos");
+        setRepos(Array.isArray(repoList) ? repoList : []);
+
+        const saved = getLocalActiveRepo();
+        if (saved && repoList.some((r) => r.repo_path === saved)) {
+          setActiveRepo(saved);
+        } else if (repoList.length > 0) {
+          setActiveRepo(repoList[0].repo_path);
+          setLocalActiveRepo(repoList[0].repo_path);
+        } else {
+          if (saved) setActiveRepo(saved);
         }
-      })
-      .catch(err => console.error("Failed to fetch evaluation reports:", err));
+      } catch (err) {
+        console.error("Failed to load repositories:", err);
+        const saved = getLocalActiveRepo();
+        if (saved) setActiveRepo(saved);
+      }
+    }
+    loadRepos();
   }, []);
 
   useEffect(() => {
-    if (selectedReport) {
-      apiGet<EvalReport>(`/evaluations/${selectedReport}?repo_path=${encodeURIComponent(REPO_PATH)}`)
+    if (!activeRepo) return;
+    apiGet<string[]>(`/evaluations?repo_path=${encodeURIComponent(activeRepo)}`)
+      .then(data => {
+        const arr = Array.isArray(data) ? data : [];
+        setReports(arr);
+        if (arr.length > 0) {
+          setSelectedReport(arr[0]);
+        } else {
+          setSelectedReport(null);
+          setReportData(null);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to fetch evaluation reports:", err);
+        setReports([]);
+        setSelectedReport(null);
+        setReportData(null);
+      });
+  }, [activeRepo]);
+
+  useEffect(() => {
+    if (selectedReport && activeRepo) {
+      apiGet<EvalReport>(`/evaluations/${selectedReport}?repo_path=${encodeURIComponent(activeRepo)}`)
         .then(data => setReportData(data))
-        .catch(err => console.error("Failed to fetch report data:", err));
+        .catch(err => {
+          console.error("Failed to fetch report data:", err);
+          setReportData(null);
+        });
     }
-  }, [selectedReport]);
+  }, [selectedReport, activeRepo]);
 
   return (
     <div className="evaluations-page">
       <header className="evaluations-header">
-        <h1 className="title-glow">Evaluations & LLM-as-a-Judge Reports</h1>
-        <p className="subtitle">Review qualitative evaluations, new testing requirements, and agent drift analysis.</p>
+        <div className="header-left">
+          <h1 className="title-glow">Evaluations & LLM-as-a-Judge Reports</h1>
+          <p className="subtitle">Review qualitative evaluations, new testing requirements, and agent drift analysis.</p>
+        </div>
+        <div className="header-actions">
+          <select
+            id="repo-selector"
+            value={activeRepo}
+            onChange={(e) => {
+              const val = e.target.value;
+              setActiveRepo(val);
+              setLocalActiveRepo(val);
+            }}
+            className="period-select"
+            style={{ minWidth: "160px" }}
+            aria-label="Select active repository"
+          >
+            {repos.length > 0 ? (
+              repos.map((r) => {
+                const pathParts = r.repo_path.split(/[/\\]/).filter(Boolean);
+                const label = pathParts.slice(-1)[0];
+                return (
+                  <option key={r.repo_path} value={r.repo_path}>
+                    {label}
+                  </option>
+                );
+              })
+            ) : (
+              activeRepo && (
+                <option value={activeRepo}>
+                  {activeRepo.split(/[/\\]/).filter(Boolean).slice(-1)[0] || activeRepo}
+                </option>
+              )
+            )}
+          </select>
+          <Link href="/" className="btn-outline" id="back-to-tower">
+            ← Tower
+          </Link>
+        </div>
       </header>
 
       <div className="evaluations-layout">
         <aside className="reports-sidebar glass">
           <h2 className="sidebar-title">Recent Reports</h2>
           <div className="reports-list">
-            {reports.map((report) => (
+            {(reports || []).map((report) => (
               <div 
                 key={report} 
                 className={`report-item ${selectedReport === report ? 'active' : ''}`}
@@ -71,7 +155,7 @@ export default function EvaluationsDashboard() {
                 <div className="report-name">{report.replace('.json', '')}</div>
               </div>
             ))}
-            {reports.length === 0 && (
+            {(reports || []).length === 0 && (
               <div className="no-reports">No reports available</div>
             )}
           </div>
@@ -83,25 +167,25 @@ export default function EvaluationsDashboard() {
               <div className="stats-grid">
                 <div className="stat-card glass">
                   <span className="stat-label">Techniques Researched</span>
-                  <span className="stat-value text-blue">{reportData.techniques_researched}</span>
+                  <span className="stat-value text-blue">{reportData.techniques_researched ?? 0}</span>
                 </div>
                 <div className="stat-card glass">
                   <span className="stat-label">New Requirements</span>
-                  <span className="stat-value text-green">{reportData.new_techniques_added}</span>
+                  <span className="stat-value text-green">{reportData.new_techniques_added ?? 0}</span>
                 </div>
                 <div className="stat-card glass">
                   <span className="stat-label">Total Requirements</span>
-                  <span className="stat-value">{reportData.total_requirements}</span>
+                  <span className="stat-value">{reportData.total_requirements ?? 0}</span>
                 </div>
                 <div className="stat-card glass">
                   <span className="stat-label">Stale Flagged</span>
-                  <span className="stat-value text-red">{reportData.stale_requirements_flagged}</span>
+                  <span className="stat-value text-red">{reportData.stale_requirements_flagged ?? 0}</span>
                 </div>
               </div>
 
               <h3 className="section-heading">New Evaluation Requirements</h3>
               <div className="requirements-list">
-                {reportData.new_requirements.length > 0 ? reportData.new_requirements.map(req => (
+                {(reportData.new_requirements || []).length > 0 ? (reportData.new_requirements || []).map(req => (
                   <div key={req.id} className="requirement-card glass">
                     <div className="req-header">
                       <h4>{req.technique_name}</h4>
@@ -133,8 +217,41 @@ export default function EvaluationsDashboard() {
           color: #eaeaea;
         }
         .evaluations-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 2rem;
           margin-bottom: 2.5rem;
+          flex-wrap: wrap;
         }
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          flex-wrap: wrap;
+        }
+        .period-select {
+          background: rgba(255,255,255,0.05);
+          border: 1px solid rgba(255,255,255,0.12);
+          color: #ccc;
+          padding: 0.5rem 0.85rem;
+          border-radius: 8px;
+          font-size: 0.85rem;
+          cursor: pointer;
+          outline: none;
+        }
+        .period-select:hover { border-color: rgba(255,255,255,0.25); }
+        .btn-outline {
+          border: 1px solid rgba(255,255,255,0.15);
+          background: transparent;
+          color: #aaa;
+          padding: 0.5rem 1rem;
+          border-radius: 8px;
+          text-decoration: none;
+          font-size: 0.85rem;
+          transition: all 0.2s ease;
+        }
+        .btn-outline:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
         .subtitle {
           color: #a0a0a0;
           font-size: 1rem;

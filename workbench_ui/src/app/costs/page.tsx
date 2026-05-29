@@ -2,7 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { apiGet } from "../api-client";
+import { apiGet, getLocalActiveRepo, setLocalActiveRepo } from "../api-client";
+
+interface Repo {
+  repo_path: string;
+  model_routing_preference: string;
+  priority: number;
+  agent_status: string;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,7 +88,7 @@ function SpendBar({ value, max, color }: { value: number; max: number; color: st
 }
 
 function TrendChart({ trend }: { trend: DailyTrendPoint[] }) {
-  if (!trend || trend.length === 0) {
+  if (!Array.isArray(trend) || trend.length === 0) {
     return (
       <div style={{ padding: "2rem", textAlign: "center", color: "#555", fontSize: "0.85rem" }}>
         No spend data logged yet for this period.
@@ -133,20 +140,43 @@ export default function CostDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
 
-  // Read repo_path from localStorage (set by Control Tower page)
-  const repoPath =
-    typeof window !== "undefined"
-      ? localStorage.getItem("exegol_repo_path") ||
-        process.env.NEXT_PUBLIC_REPO_PATH ||
-        ""
-      : process.env.NEXT_PUBLIC_REPO_PATH || "";
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeRepo, setActiveRepo] = useState<string>("");
+
+  // Load repositories and initial active repo
+  useEffect(() => {
+    async function loadRepos() {
+      try {
+        const repoList = await apiGet<Repo[]>("/repos");
+        setRepos(Array.isArray(repoList) ? repoList : []);
+
+        const saved = getLocalActiveRepo();
+        if (saved && repoList.some((r) => r.repo_path === saved)) {
+          setActiveRepo(saved);
+        } else if (repoList.length > 0) {
+          setActiveRepo(repoList[0].repo_path);
+          setLocalActiveRepo(repoList[0].repo_path);
+        } else {
+          if (saved) {
+            setActiveRepo(saved);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load repositories:", err);
+        const saved = getLocalActiveRepo();
+        if (saved) setActiveRepo(saved);
+      }
+    }
+    loadRepos();
+  }, []);
 
   const fetchCosts = useCallback(async () => {
+    if (!activeRepo) return;
     setLoading(true);
     setError(null);
     try {
       const data = await apiGet<CostReport>(
-        `/costs?repo_path=${encodeURIComponent(repoPath)}&days=${days}`
+        `/costs?repo_path=${encodeURIComponent(activeRepo)}&days=${days}`
       );
       setReport(data);
     } catch (err: unknown) {
@@ -155,17 +185,18 @@ export default function CostDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [repoPath, days]);
+  }, [activeRepo, days]);
 
   useEffect(() => {
+    if (!activeRepo) return;
     const timeout = window.setTimeout(() => {
       void fetchCosts();
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [fetchCosts]);
+  }, [fetchCosts, activeRepo]);
 
-  const topAgentMax = report
-    ? Math.max(...Object.values(report.agent_costs), 0.0001)
+  const topAgentMax = report && report.agent_costs
+    ? Math.max(...Object.values(report.agent_costs || {}), 0.0001)
     : 1;
 
   return (
@@ -183,6 +214,36 @@ export default function CostDashboard() {
           </p>
         </div>
         <div className="header-actions">
+          <select
+            id="repo-selector"
+            value={activeRepo}
+            onChange={(e) => {
+              const val = e.target.value;
+              setActiveRepo(val);
+              setLocalActiveRepo(val);
+            }}
+            className="period-select"
+            style={{ minWidth: "160px" }}
+            aria-label="Select active repository"
+          >
+            {repos.length > 0 ? (
+              repos.map((r) => {
+                const pathParts = r.repo_path.split(/[/\\]/).filter(Boolean);
+                const label = pathParts.slice(-1)[0];
+                return (
+                  <option key={r.repo_path} value={r.repo_path}>
+                    {label}
+                  </option>
+                );
+              })
+            ) : (
+              activeRepo && (
+                <option value={activeRepo}>
+                  {activeRepo.split(/[/\\]/).filter(Boolean).slice(-1)[0] || activeRepo}
+                </option>
+              )
+            )}
+          </select>
           <select
             id="period-selector"
             value={days}
@@ -296,11 +357,11 @@ export default function CostDashboard() {
             {/* Provider breakdown */}
             <section className="glass-card" aria-label="Provider cost breakdown">
               <h2 className="section-title">By Provider</h2>
-              {Object.keys(report.provider_breakdown).length === 0 ? (
+              {Object.keys(report.provider_breakdown || {}).length === 0 ? (
                 <p className="empty-msg">No provider data yet.</p>
               ) : (
                 <div className="provider-list">
-                  {Object.entries(report.provider_breakdown)
+                  {Object.entries(report.provider_breakdown || {})
                     .sort(([, a], [, b]) => b - a)
                     .map(([provider, cost]) => (
                       <div key={provider} className="provider-row">
@@ -310,7 +371,7 @@ export default function CostDashboard() {
                         <span className="provider-cost">{usd(cost)}</span>
                         <SpendBar
                           value={cost}
-                          max={Math.max(...Object.values(report.provider_breakdown))}
+                          max={Math.max(...Object.values(report.provider_breakdown || {}), 0.0001)}
                           color="#4dabf7"
                         />
                       </div>
@@ -323,11 +384,11 @@ export default function CostDashboard() {
           {/* Agent cost breakdown */}
           <section className="glass-card" aria-label="Agent cost breakdown">
             <h2 className="section-title">Agent Cost Breakdown</h2>
-            {Object.keys(report.agent_costs).length === 0 ? (
+            {Object.keys(report.agent_costs || {}).length === 0 ? (
               <p className="empty-msg">No interaction logs found for this period. Run some agents first!</p>
             ) : (
               <div className="agent-grid">
-                {Object.entries(report.agent_costs)
+                {Object.entries(report.agent_costs || {})
                   .sort(([, a], [, b]) => b - a)
                   .map(([agentId, cost]) => (
                     <div key={agentId} className="agent-card glass">
@@ -336,8 +397,8 @@ export default function CostDashboard() {
                         <span className="agent-cost-badge">{usd(cost)}</span>
                       </div>
                       <div className="agent-meta">
-                        <span>📦 {report.step_breakdown[agentId] ?? 0} steps</span>
-                        <span>🔁 {report.session_breakdown[agentId] ?? 0} sessions</span>
+                        <span>📦 {report.step_breakdown?.[agentId] ?? 0} steps</span>
+                        <span>🔁 {report.session_breakdown?.[agentId] ?? 0} sessions</span>
                       </div>
                       <SpendBar value={cost} max={topAgentMax} color="#cc5de8" />
                     </div>

@@ -186,12 +186,12 @@ class EvaluatorEzraAgent:
     def execute(self, handoff):
         """Run the weekly evaluation research and requirements cycle.
 
-        Accepts a HandoffContext — no prior session memory required.
+        Accepts a HandoffContext - no prior session memory required.
         All state is read fresh from the filesystem.
         """
         start_time = time.time()
         repo_path = handoff.repo_path
-        print(f"[{self.name}] Session {handoff.session_id} — weekly eval research cycle starting.")
+        print(f"[{self.name}] Session {handoff.session_id} - weekly eval research cycle starting.")
         print(f"[{self.name}] Target repo: {repo_path}")
 
         # 1. Load existing requirements
@@ -210,7 +210,7 @@ class EvaluatorEzraAgent:
         # 4. Flag stale requirements
         stale = self._flag_stale_requirements(existing_reqs)
         if stale:
-            print(f"[{self.name}] ⚠ {len(stale)} requirements flagged as stale (>30 days, still pending).")
+            print(f"[{self.name}] WARNING: {len(stale)} requirements flagged as stale (>30 days, still pending).")
 
         # 5. Generate new requirement entries
         new_reqs = []

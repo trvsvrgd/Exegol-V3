@@ -9,6 +9,11 @@ FRONTEND_ENV = ROOT / "workbench_ui" / ".env.local"
 ROOT_ENV = ROOT / ".env"
 PRIORITY_FILE = ROOT / "config" / "priority.json"
 FLEET_STATE_FILE = ROOT / ".exegol" / "fleet_state.json"
+SCHEDULER_STATE_FILE = ROOT / ".exegol" / "scheduler_state.json"
+RESOLVED_CRASH_MARKERS = (
+    "cannot access local variable 'time'",
+    "'charmap' codec can't encode character",
+)
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -33,28 +38,34 @@ def warn(message: str) -> None:
     print(f"[StartupCheck] WARNING: {message}")
 
 
-def repair_blocked_state() -> None:
-    if not PRIORITY_FILE.exists():
-        fail(f"Missing {PRIORITY_FILE}")
+def repair_blocked_state(
+    root: Path = ROOT,
+    priority_file: Path = PRIORITY_FILE,
+    fleet_state_file: Path = FLEET_STATE_FILE,
+    scheduler_state_file: Path = SCHEDULER_STATE_FILE,
+) -> None:
+    if not priority_file.exists():
+        fail(f"Missing {priority_file}")
 
-    config = json.loads(PRIORITY_FILE.read_text(encoding="utf-8"))
+    config = json.loads(priority_file.read_text(encoding="utf-8"))
     changed = False
-    root_path = str(ROOT)
+    root_path = str(root)
 
     for repo in config.get("repositories", []):
-        if Path(repo.get("repo_path", "")).resolve() == ROOT and repo.get("agent_status") == "blocked":
+        if Path(repo.get("repo_path", "")).resolve() == root and repo.get("agent_status") == "blocked":
             print("[StartupCheck] Exegol repo was blocked; resetting to idle for startup retry.")
             repo["agent_status"] = "idle"
             changed = True
             break
 
     if changed:
-        PRIORITY_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        priority_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-    if FLEET_STATE_FILE.exists():
+    if fleet_state_file.exists():
         try:
-            state = json.loads(FLEET_STATE_FILE.read_text(encoding="utf-8"))
-            if state.get("status") == "blocked" and Path(state.get("active_repo", root_path)).resolve() == ROOT:
+            state = json.loads(fleet_state_file.read_text(encoding="utf-8"))
+            is_current_repo = Path(state.get("active_repo", root_path)).resolve() == root
+            if state.get("status") == "blocked" and is_current_repo:
                 state["last_cleared_errors"] = state.get("errors", [])
                 state["active_agent"] = None
                 state["status"] = "idle"
@@ -62,9 +73,35 @@ def repair_blocked_state() -> None:
                 state["next_agent_id"] = ""
                 state["errors"] = []
                 state["output_summary"] = "Blocked state cleared by startup preflight."
-                FLEET_STATE_FILE.write_text(json.dumps(state, indent=4), encoding="utf-8")
+                fleet_state_file.write_text(json.dumps(state, indent=4), encoding="utf-8")
+            elif is_current_repo and not state.get("errors"):
+                output_summary = str(state.get("output_summary") or "")
+                if any(marker in output_summary for marker in RESOLVED_CRASH_MARKERS):
+                    state["last_cleared_output_summary"] = output_summary
+                    state["active_agent"] = None
+                    state["status"] = "idle"
+                    state["handoff_chain"] = []
+                    state["next_agent_id"] = ""
+                    state["output_summary"] = "Stale crash summary cleared by startup preflight."
+                    fleet_state_file.write_text(json.dumps(state, indent=4), encoding="utf-8")
         except json.JSONDecodeError:
-            warn(f"Could not parse {FLEET_STATE_FILE}; leaving it unchanged.")
+            warn(f"Could not parse {fleet_state_file}; leaving it unchanged.")
+
+    if scheduler_state_file.exists():
+        try:
+            scheduler_state = json.loads(scheduler_state_file.read_text(encoding="utf-8"))
+            if scheduler_state.get("status") == "healthy" and scheduler_state.get("enabled") is True:
+                scheduler_state.update(
+                    {
+                        "status": "stopped",
+                        "detail": "Cleared stale scheduler heartbeat by startup preflight.",
+                        "enabled": False,
+                        "heartbeat": None,
+                    }
+                )
+                scheduler_state_file.write_text(json.dumps(scheduler_state, indent=4), encoding="utf-8")
+        except json.JSONDecodeError:
+            warn(f"Could not parse {scheduler_state_file}; leaving it unchanged.")
 
 
 def main() -> None:
@@ -94,6 +131,9 @@ def main() -> None:
 
     if not root_env.get("EXEGOL_HMAC_SECRET"):
         fail("EXEGOL_HMAC_SECRET is missing from .env")
+
+    if not root_env.get("SLACK_BOT_TOKEN") or not root_env.get("SLACK_APP_TOKEN"):
+        fail("SLACK_BOT_TOKEN and SLACK_APP_TOKEN are required in .env for production HITL")
 
     api_base = frontend_env.get("NEXT_PUBLIC_API_BASE_URL", "")
     if api_base not in {"http://127.0.0.1:8000", "http://localhost:8000"}:

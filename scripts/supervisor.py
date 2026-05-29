@@ -63,7 +63,7 @@ def main() -> int:
     backend_cmd = [python_exe, "api.py"]
     backend_env = os.environ.copy()
     backend_env["EXEGOL_DEFER_MISSED_JOBS"] = "1"
-    frontend_cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", "3000"]
+    frontend_cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "start", "--", "--hostname", "127.0.0.1", "--port", "3000"]
     frontend_env = os.environ.copy()
     frontend_env["PORT"] = "3000"
 
@@ -85,11 +85,11 @@ def main() -> int:
     backend_ready = frontend_ready = False
     while time.time() < deadline and not (backend_ready and frontend_ready):
         backend_ready = probe("http://localhost:8000/health", api_key)
-        frontend_ready = probe("http://localhost:3000")
+        frontend_ready = probe("http://127.0.0.1:3000")
         time.sleep(1)
 
     state = "healthy" if backend_ready and frontend_ready else "degraded"
-    print(f"[supervisor] startup {state}. API=http://localhost:8000 UI=http://localhost:3000")
+    print(f"[supervisor] startup {state}. API=http://localhost:8000 UI=http://127.0.0.1:3000")
     print(f"[supervisor] logs={logs_dir}")
 
     if not backend_ready or not frontend_ready:

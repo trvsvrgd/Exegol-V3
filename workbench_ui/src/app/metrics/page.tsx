@@ -1,11 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { apiGet } from "../api-client";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { apiGet, getLocalActiveRepo, setLocalActiveRepo } from "../api-client";
 import LogDrillDown from "../../components/LogDrillDown";
 
-
-const REPO_PATH = process.env.NEXT_PUBLIC_REPO_PATH || "";
+interface Repo {
+  repo_path: string;
+  model_routing_preference: string;
+  priority: number;
+  agent_status: string;
+}
 
 
 interface AgentMetrics {
@@ -39,9 +44,37 @@ export default function MetricsDashboard() {
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const [selectedOutcome, setSelectedOutcome] = useState<string | undefined>(undefined);
 
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeRepo, setActiveRepo] = useState<string>("");
 
-  const fetchMetrics = () => {
-    apiGet<FleetMetricsReport>(`/fleet/metrics?repo_path=${encodeURIComponent(REPO_PATH)}`)
+  // Load repositories list and active repository path from localStorage
+  useEffect(() => {
+    async function loadRepos() {
+      try {
+        const repoList = await apiGet<Repo[]>("/repos");
+        setRepos(Array.isArray(repoList) ? repoList : []);
+
+        const saved = getLocalActiveRepo();
+        if (saved && repoList.some((r) => r.repo_path === saved)) {
+          setActiveRepo(saved);
+        } else if (repoList.length > 0) {
+          setActiveRepo(repoList[0].repo_path);
+          setLocalActiveRepo(repoList[0].repo_path);
+        } else {
+          if (saved) setActiveRepo(saved);
+        }
+      } catch (err) {
+        console.error("Failed to load repositories:", err);
+        const saved = getLocalActiveRepo();
+        if (saved) setActiveRepo(saved);
+      }
+    }
+    loadRepos();
+  }, []);
+
+  const fetchMetrics = useCallback(() => {
+    if (!activeRepo) return;
+    apiGet<FleetMetricsReport>(`/fleet/metrics?repo_path=${encodeURIComponent(activeRepo)}`)
       .then(data => {
         setMetrics(data);
         setLoading(false);
@@ -50,13 +83,15 @@ export default function MetricsDashboard() {
         console.error("Failed to fetch fleet metrics:", err);
         setLoading(false);
       });
-  };
+  }, [activeRepo]);
 
   useEffect(() => {
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
-  }, []);
+    if (activeRepo) {
+      fetchMetrics();
+      const interval = setInterval(fetchMetrics, 30000); // Refresh every 30s
+      return () => clearInterval(interval);
+    }
+  }, [fetchMetrics, activeRepo]);
 
   if (loading) return <div className="loading">Initializing Advanced Metrics...</div>;
 
@@ -77,8 +112,45 @@ export default function MetricsDashboard() {
   return (
     <div className="metrics-page">
       <header className="metrics-header">
-        <h1 className="title-glow">Advanced Success Metrics</h1>
-        <p className="subtitle">Real-time telemetry for Precision, Recall, and Concept Drift across the agent fleet.</p>
+        <div className="header-left">
+          <h1 className="title-glow">Advanced Success Metrics</h1>
+          <p className="subtitle">Real-time telemetry for Precision, Recall, and Concept Drift across the agent fleet.</p>
+        </div>
+        <div className="header-actions">
+          <select
+            id="repo-selector"
+            value={activeRepo}
+            onChange={(e) => {
+              const val = e.target.value;
+              setActiveRepo(val);
+              setLocalActiveRepo(val);
+            }}
+            className="period-select"
+            style={{ minWidth: "160px" }}
+            aria-label="Select active repository"
+          >
+            {repos.length > 0 ? (
+              repos.map((r) => {
+                const pathParts = r.repo_path.split(/[/\\]/).filter(Boolean);
+                const label = pathParts.slice(-1)[0];
+                return (
+                  <option key={r.repo_path} value={r.repo_path}>
+                    {label}
+                  </option>
+                );
+              })
+            ) : (
+              activeRepo && (
+                <option value={activeRepo}>
+                  {activeRepo.split(/[/\\]/).filter(Boolean).slice(-1)[0] || activeRepo}
+                </option>
+              )
+            )}
+          </select>
+          <Link href="/" className="btn-outline" id="back-to-tower">
+            ← Tower
+          </Link>
+        </div>
       </header>
 
       {metrics && (
@@ -94,14 +166,14 @@ export default function MetricsDashboard() {
             </div>
             <div className="summary-card glass">
               <span className="label">Active Models</span>
-              <span className="value text-blue">{Object.keys(metrics.agent_breakdown).length}</span>
+              <span className="value text-blue">{Object.keys(metrics.agent_breakdown || {}).length}</span>
             </div>
           </section>
 
           <section className="agent-metrics">
             <h2 className="section-title">Agent Telemetry & Drift Analysis</h2>
             <div className="metrics-grid">
-              {Object.entries(metrics.agent_breakdown).map(([agentId, stats]) => {
+              {Object.entries(metrics.agent_breakdown || {}).map(([agentId, stats]) => {
                 const adv = getAdvancedStats(agentId, stats.success_rate);
                 const precision = stats.precision !== undefined ? (stats.precision * 100).toFixed(1) : adv.precision;
                 const recall = stats.recall !== undefined ? (stats.recall * 100).toFixed(1) : adv.recall;
@@ -181,11 +253,11 @@ export default function MetricsDashboard() {
                     <div className="stats-row secondary-stats">
                       <div className="stat">
                         <span className="stat-label">Avg Steps</span>
-                        <span className="stat-value small">{stats.avg_steps.toFixed(1)}</span>
+                        <span className="stat-value small">{stats.avg_steps?.toFixed(1) || '0.0'}</span>
                       </div>
                       <div className="stat">
                         <span className="stat-label">Avg Duration</span>
-                        <span className="stat-value small">{stats.avg_duration.toFixed(1)}s</span>
+                        <span className="stat-value small">{stats.avg_duration?.toFixed(1) || '0.0'}s</span>
                       </div>
                       <div className="stat">
                         <span className="stat-label">Avg Prompts</span>
@@ -197,7 +269,7 @@ export default function MetricsDashboard() {
                       </div>
                       <div className="stat">
                         <span className="stat-label">Bugs</span>
-                        <span className={`stat-value small ${stats.bugs_introduced > 0 ? 'text-red' : ''}`}>{stats.bugs_introduced}</span>
+                        <span className={`stat-value small ${(stats.bugs_introduced ?? 0) > 0 ? 'text-red' : ''}`}>{stats.bugs_introduced ?? 0}</span>
                       </div>
                     </div>
 
@@ -236,7 +308,7 @@ export default function MetricsDashboard() {
       <LogDrillDown 
         isOpen={drillDownOpen}
         onClose={() => setDrillDownOpen(false)}
-        repoPath={REPO_PATH}
+        repoPath={activeRepo}
         initialAgentId={selectedAgent}
         initialOutcome={selectedOutcome}
       />
@@ -249,8 +321,41 @@ export default function MetricsDashboard() {
           color: #eaeaea;
         }
         .metrics-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 2rem;
           margin-bottom: 4rem;
+          flex-wrap: wrap;
         }
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          flex-wrap: wrap;
+        }
+        .period-select {
+          background: rgba(255,255,255,0.05);
+          border: 1px solid rgba(255,255,255,0.12);
+          color: #ccc;
+          padding: 0.5rem 0.85rem;
+          border-radius: 8px;
+          font-size: 0.85rem;
+          cursor: pointer;
+          outline: none;
+        }
+        .period-select:hover { border-color: rgba(255,255,255,0.25); }
+        .btn-outline {
+          border: 1px solid rgba(255,255,255,0.15);
+          background: transparent;
+          color: #aaa;
+          padding: 0.5rem 1rem;
+          border-radius: 8px;
+          text-decoration: none;
+          font-size: 0.85rem;
+          transition: all 0.2s ease;
+        }
+        .btn-outline:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
         .subtitle {
           color: #888;
           opacity: 0.7;
