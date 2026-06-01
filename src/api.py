@@ -22,6 +22,13 @@ from tools.state_manager import StateManager
 from tools.thrawn_intel_manager import ThrawnIntelManager
 from tools.egress_filter import EgressFilter
 from tools.fleet_logger import read_interaction_logs
+from tools.metrics_manager import (
+    DEFAULT_METRICS_START_DATE,
+    SuccessMetricsManager,
+    calculate_read_days_for_start,
+    filter_logs_since,
+    parse_metrics_start_date,
+)
 from tools.tool_registry import ToolRegistry
 from tools.hitl_manager import HITLManager
 from tools.operations import get_backend_process_state, is_retry_allowed
@@ -142,6 +149,7 @@ def _execute_agent_sync(session_id: str, repo_path: str, agent_id: str, model: s
 _continuous_mode = False
 _continuous_fleet_thread = None
 _continuous_repo_path: Optional[str] = None
+_continuous_cycle_active = False
 _continuous_lock = threading.Lock()
 
 # --- Active Objective Loops Registry ---
@@ -162,26 +170,32 @@ def _objective_loop_for_repo(repo_path: str, stop_event: threading.Event):
             time.sleep(1)
 
 def _continuous_fleet_loop():
-    global _continuous_mode
+    global _continuous_mode, _continuous_cycle_active
     while True:
         with _continuous_lock:
             if not _continuous_mode:
                 break
             repo_path = _continuous_repo_path
 
-        if repo_path:
-            print(f"[API] Running continuous fleet cycle for {repo_path}...")
-            orchestrator.run_fleet_cycle(
-                repo_path=repo_path,
-                include_due_scheduled=True,
-                trigger_source="manual_run",
-            )
-        else:
-            print("[API] Running continuous fleet cycle...")
-            orchestrator.run_fleet_cycle(
-                include_due_scheduled=True,
-                trigger_source="manual_run",
-            )
+        with _continuous_lock:
+            _continuous_cycle_active = True
+        try:
+            if repo_path:
+                print(f"[API] Running continuous fleet cycle for {repo_path}...")
+                orchestrator.run_fleet_cycle(
+                    repo_path=repo_path,
+                    include_due_scheduled=True,
+                    trigger_source="manual_run",
+                )
+            else:
+                print("[API] Running continuous fleet cycle...")
+                orchestrator.run_fleet_cycle(
+                    include_due_scheduled=True,
+                    trigger_source="manual_run",
+                )
+        finally:
+            with _continuous_lock:
+                _continuous_cycle_active = False
 
         for _ in range(10):
             with _continuous_lock:
@@ -190,11 +204,18 @@ def _continuous_fleet_loop():
             time.sleep(1)
 
 def _autonomous_status() -> Dict[str, Any]:
+    with _continuous_lock:
+        continuous_mode = _continuous_mode
+        repo_path = _continuous_repo_path
+        cycle_active = _continuous_cycle_active
+        thread_alive = bool(_continuous_fleet_thread and _continuous_fleet_thread.is_alive())
+    cycle_running = bool(orchestrator.is_running_fleet or cycle_active)
     return {
-        "continuous_mode": _continuous_mode,
-        "thread_alive": bool(_continuous_fleet_thread and _continuous_fleet_thread.is_alive()),
-        "cycle_running": orchestrator.is_running_fleet,
-        "repo_path": _continuous_repo_path,
+        "continuous_mode": continuous_mode,
+        "thread_alive": thread_alive,
+        "cycle_running": cycle_running,
+        "stopping": bool(not continuous_mode and cycle_running),
+        "repo_path": repo_path,
     }
 
 
@@ -217,7 +238,9 @@ def _repo_config_for_path(repo_path: str) -> Dict[str, Any]:
 def _autonomous_context_for_repo(repo_path: str) -> Dict[str, Any]:
     status = _autonomous_status()
     selected = _same_repo_path(status.get("repo_path"), repo_path)
-    if not status.get("continuous_mode"):
+    if status.get("stopping"):
+        loop_status = "stopping"
+    elif not status.get("continuous_mode"):
         loop_status = "stopped"
     elif status.get("cycle_running") and selected:
         loop_status = "running_selected_repo"
@@ -249,6 +272,17 @@ def _empty_fleet_state(repo_path: str, status: str = "idle") -> Dict[str, Any]:
     }
 
 
+def _normalize_registry_agent_id(agent_id: Optional[str]) -> str:
+    if not agent_id:
+        return ""
+    class_to_id = {
+        entry.get("class"): registry_id
+        for registry_id, entry in AGENT_REGISTRY.items()
+        if entry.get("class")
+    }
+    return class_to_id.get(agent_id, agent_id)
+
+
 def _recent_failure_context(repo_path: str) -> Dict[str, Any]:
     try:
         logs = read_interaction_logs([repo_path], days=30)
@@ -272,6 +306,7 @@ def start_autonomous_fleet(req: Optional[RepoRequest] = None):
     with _continuous_lock:
         if req and req.repo_path:
             _continuous_repo_path = os.path.abspath(req.repo_path)
+        orchestrator.clear_fleet_stop_request()
         _continuous_mode = True
         if _continuous_fleet_thread is None or not _continuous_fleet_thread.is_alive():
             _continuous_fleet_thread = threading.Thread(target=_continuous_fleet_loop, daemon=True)
@@ -284,7 +319,7 @@ def stop_autonomous_fleet():
     with _continuous_lock:
         _continuous_mode = False
         _continuous_repo_path = None
-    orchestrator.is_running_fleet = False
+    orchestrator.request_fleet_stop("autonomous fleet stop requested from API")
     return {"status": "success", **_autonomous_status()}
 
 @app.post("/fleet/toggle-autonomous")
@@ -358,7 +393,9 @@ def get_fleet_operations(repo_path: str):
     components = supervisor_state.get("components") or {}
     autonomous_status = _autonomous_status()
     autonomous_loop = {
-        "status": "running"
+        "status": "stopping"
+        if autonomous_status.get("stopping")
+        else "running"
         if autonomous_status.get("continuous_mode") or autonomous_status.get("cycle_running")
         else "idle"
     }
@@ -885,15 +922,25 @@ def add_thrawn_architecture(req: ThrawnArchitectureRequest):
 # --- Epic 5: Fleet Health Dashboard ---
 
 @app.get("/fleet/metrics")
-def get_fleet_metrics(repo_path: str):
-    from tools.metrics_manager import SuccessMetricsManager
+def get_fleet_metrics(
+    repo_path: str,
+    days: int = 30,
+    start_date: Optional[str] = DEFAULT_METRICS_START_DATE,
+):
     mgr = SuccessMetricsManager(repo_path)
     enable_live_judge = os.getenv("EXEGOL_METRICS_ENABLE_LIVE_JUDGE", "").lower() in {"1", "true", "yes"}
-    return mgr.calculate_metrics(enable_live_judge=enable_live_judge)
+    try:
+        return mgr.calculate_metrics(
+            days=days,
+            enable_live_judge=enable_live_judge,
+            start_date=start_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/costs")
 def get_costs(repo_path: str, days: int = 30):
-    """Fetches real cost analysis via CostAnalyzer."""
+    """Fetch estimated cost analysis from local interaction logs."""
     from tools.cost_analyzer import get_cost_report
     return get_cost_report(repo_path, days=days)
 
@@ -902,14 +949,31 @@ def get_fleet_interactions(
     repo_path: str, 
     agent_id: Optional[str] = None, 
     outcome: Optional[str] = None, 
-    days: int = 30
+    days: int = 30,
+    start_date: Optional[str] = None,
 ):
     """Fetches detailed interaction logs for drill-down analysis."""
-    logs = read_interaction_logs([repo_path], days=days)
+    try:
+        period_start = parse_metrics_start_date(start_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logs = filter_logs_since(
+        read_interaction_logs(
+            [repo_path],
+            days=calculate_read_days_for_start(period_start, days),
+        ),
+        period_start,
+    )
     
     # Filtering
     if agent_id:
-        logs = [l for l in logs if l.get("agent_id") == agent_id]
+        normalized_agent_id = _normalize_registry_agent_id(agent_id)
+        logs = [
+            l
+            for l in logs
+            if _normalize_registry_agent_id(l.get("agent_id")) == normalized_agent_id
+        ]
     if outcome:
         logs = [l for l in logs if l.get("outcome") == outcome]
         

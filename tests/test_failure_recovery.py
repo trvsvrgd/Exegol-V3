@@ -78,6 +78,40 @@ def test_failure_log_updates_one_backlog_blocker(tmp_path):
     assert failure_items[0]["status"] == "todo"
 
 
+def test_failure_log_reopens_in_progress_crash_task(tmp_path):
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    errors = ["RuntimeError: boom"]
+    summary = "Agent execution failed: RuntimeError: boom"
+    expected_id = failure_backlog_task_id("developer_dex", summary, errors)
+
+    log_interaction(
+        agent_id="developer_dex",
+        outcome="failure",
+        task_summary=summary,
+        repo_path=str(repo_path),
+        errors=errors,
+        session_id="first",
+        is_final=True,
+    )
+    bm = BacklogManager(str(repo_path))
+    assert bm.update_task(expected_id, {"status": "in_progress"})
+
+    log_interaction(
+        agent_id="developer_dex",
+        outcome="failure",
+        task_summary=summary,
+        repo_path=str(repo_path),
+        errors=errors,
+        session_id="second",
+        is_final=True,
+    )
+
+    task = bm.get_task(expected_id)
+    assert task["status"] == "todo"
+    assert task["occurrences"] == 2
+
+
 def test_session_crash_records_blocked_state_and_backlog_id(tmp_path, monkeypatch):
     repo_path = tmp_path / "repo"
     (repo_path / ".exegol").mkdir(parents=True)

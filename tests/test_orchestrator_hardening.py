@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import orchestrator as orchestrator_module
 from handoff import SessionResult
 from orchestrator import ExegolOrchestrator
+from tools.backlog_manager import BacklogManager
 from tools.objective_manager import ObjectiveManager
 
 
@@ -130,6 +131,92 @@ def test_run_fleet_cycle_skips_persisted_blocked_state(orchestrator, monkeypatch
     assert config["repositories"][0]["agent_status"] == "blocked"
 
 
+def test_run_fleet_cycle_auto_dispatches_agent_crash_backlog(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    failure_task_id = "auto_fail_architect_artoo_deadbeef"
+    BacklogManager(str(repo_path)).add_task({
+        "id": failure_task_id,
+        "summary": "FIX: architect_artoo autonomous failure",
+        "priority": "high",
+        "type": "bug",
+        "status": "todo",
+        "source_agent": "FleetLogger",
+        "rationale": "Traceback from architect_artoo.",
+        "created_at": "2026-05-31T12:42:06",
+    })
+    (repo_path / ".exegol" / "fleet_state.json").write_text(
+        json.dumps(
+            {
+                "active_repo": str(repo_path),
+                "active_agent": "architect_artoo",
+                "session_id": "crash123",
+                "status": "blocked",
+                "errors": ["KeyError: slice(None, 12, None)"],
+                "output_summary": "Agent execution failed: KeyError",
+                "backlog_item_id": failure_task_id,
+                "retry_available": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    dispatched = []
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        dispatched.append((repo_info["repo_path"], agent_id))
+        return SessionResult(agent_id=agent_id, session_id="poe123", outcome="success")
+
+    monkeypatch.setattr(orch, "check_compliance_monitoring", lambda: None)
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
+    assert dispatched == [(os.path.abspath(repo_path), "product_poe")]
+
+    task = BacklogManager(str(repo_path)).get_task(failure_task_id)
+    assert task["priority"] == "critical"
+    assert task["blocker_type"] == "agent_crash"
+    assert task["auto_recovery_attempts"] == 1
+
+    state = json.loads((repo_path / ".exegol" / "fleet_state.json").read_text(encoding="utf-8"))
+    assert state["status"] != "blocked"
+
+
+def test_run_fleet_cycle_skips_agent_crash_after_recovery_budget(orchestrator, monkeypatch):
+    orch, repo_path, priority_file = orchestrator
+    failure_task_id = "auto_fail_architect_artoo_deadbeef"
+    BacklogManager(str(repo_path)).add_task({
+        "id": failure_task_id,
+        "summary": "FIX: architect_artoo autonomous failure",
+        "priority": "critical",
+        "type": "bug",
+        "status": "todo",
+        "source_agent": "FleetLogger",
+        "rationale": "Traceback from architect_artoo.",
+        "created_at": "2026-05-31T12:42:06",
+        "auto_recovery_attempts": 1,
+    })
+    (repo_path / ".exegol" / "fleet_state.json").write_text(
+        json.dumps(
+            {
+                "active_repo": str(repo_path),
+                "active_agent": "architect_artoo",
+                "session_id": "crash123",
+                "status": "blocked",
+                "errors": ["KeyError: slice(None, 12, None)"],
+                "output_summary": "Agent execution failed: KeyError",
+                "backlog_item_id": failure_task_id,
+                "retry_available": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "check_compliance_monitoring", lambda: None)
+    monkeypatch.setattr(orch, "process_repo", lambda _repo_info: pytest.fail("recovery budget should block dispatch"))
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is False
+    config = json.loads(priority_file.read_text(encoding="utf-8"))
+    assert config["repositories"][0]["agent_status"] == "blocked"
+
+
 def test_run_fleet_cycle_rejects_overlapping_cycle(orchestrator, monkeypatch):
     orch, _repo_path, _priority_file = orchestrator
     monkeypatch.setattr(orch, "process_repo", lambda _repo_info: pytest.fail("overlap should not process repos"))
@@ -140,6 +227,39 @@ def test_run_fleet_cycle_rejects_overlapping_cycle(orchestrator, monkeypatch):
         assert orch.is_running_fleet is False
     finally:
         orch._fleet_cycle_lock.release()
+
+
+def test_stop_request_suppresses_autonomous_handoff(orchestrator, monkeypatch):
+    orch, repo_path, _priority_file = orchestrator
+    calls = []
+
+    def fake_inner(repo_info, routing, max_steps, agent_id, *args, **kwargs):
+        calls.append(agent_id)
+        orch.request_fleet_stop("unit test stop")
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="poe123",
+            outcome="success",
+            next_agent_id="developer_dex",
+        )
+
+    monkeypatch.setattr(orch, "load_cached_session_context", lambda _path: {})
+    monkeypatch.setattr(orch, "cache_session_context", lambda _path, _result: None)
+    monkeypatch.setattr(orch, "_wake_and_execute_agent_inner", fake_inner)
+
+    try:
+        result = orch.wake_and_execute_agent(
+            {"repo_path": str(repo_path), "model_routing_preference": "ollama"},
+            "ollama",
+            10,
+            "product_poe",
+        )
+    finally:
+        orch.clear_fleet_stop_request()
+
+    assert calls == ["product_poe"]
+    assert result.next_agent_id == ""
+    assert result.status_update == "idle"
 
 
 def test_retry_blocked_repo_moves_config_and_state_to_idle(orchestrator):

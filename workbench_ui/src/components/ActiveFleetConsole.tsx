@@ -30,9 +30,10 @@ interface FleetState {
     continuous_mode: boolean;
     thread_alive: boolean;
     cycle_running: boolean;
+    stopping?: boolean;
     repo_path?: string | null;
     selected_repo: boolean;
-    loop_status: "stopped" | "running_selected_repo" | "running_other_repo" | "waiting_between_cycles" | "enabled_for_other_repo";
+    loop_status: "stopped" | "stopping" | "running_selected_repo" | "running_other_repo" | "waiting_between_cycles" | "enabled_for_other_repo";
   };
 }
 
@@ -40,6 +41,8 @@ interface ActiveFleetConsoleProps {
   repoPath: string;
   autonomousMode: boolean;
 }
+
+const LIVE_TELEMETRY_REFRESH_MS = 2000;
 
 const AGENT_META: Record<string, { name: string; color: string; icon: string; role: string }> = {
   product_poe: { name: "Product Poe", color: "#eab308", icon: "P", role: "Backlog & Product Design" },
@@ -68,16 +71,29 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
     }
   }, [repoPath]);
 
+  const liveTelemetryActive = autonomousMode
+    || state?.status === "running"
+    || state?.autonomous?.cycle_running === true
+    || state?.autonomous?.stopping === true;
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void refreshState();
     }, 0);
-    const interval = setInterval(refreshState, 2000);
+    if (!liveTelemetryActive) {
+      return () => {
+        window.clearTimeout(timeout);
+      };
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshState();
+    }, LIVE_TELEMETRY_REFRESH_MS);
     return () => {
       window.clearTimeout(timeout);
-      clearInterval(interval);
+      window.clearInterval(interval);
     };
-  }, [refreshState]);
+  }, [refreshState, liveTelemetryActive]);
 
   const clearBlockedState = async () => {
     setRetrying(true);
@@ -113,6 +129,8 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
         return "Autonomous loop is running a cycle for this repository.";
       case "running_other_repo":
         return "Autonomous loop is running a cycle for another repository.";
+      case "stopping":
+        return "Autonomous loop is stopping after the current cycle yields.";
       case "waiting_between_cycles":
         return "Autonomous loop is on for this repository and waiting for the next cycle.";
       case "enabled_for_other_repo":

@@ -2,6 +2,18 @@ import os
 from typing import List, Dict, Any, Optional
 from tools.backlog_manager import BacklogManager
 
+ACTIONABLE_STATUSES = {"todo", "backlogged", "pending_prioritization"}
+
+
+def _is_actionable(task: Dict[str, Any]) -> bool:
+    return task.get("status") in ACTIONABLE_STATUSES
+
+
+def _is_failure_recovery(task: Dict[str, Any]) -> bool:
+    task_id = str(task.get("id") or "")
+    return task_id.startswith("auto_fail_") or task.get("blocker_type") == "agent_crash"
+
+
 def groom_backlog(repo_path: str) -> Dict[str, Any]:
     """Standardized tool to select and prioritize the next task from the backlog.
     
@@ -18,18 +30,27 @@ def groom_backlog(repo_path: str) -> Dict[str, Any]:
     selected_task = None
     source = "none"
 
-    # 1. Backlog 'todo' or 'backlogged' (Prioritize High/Critical)
+    # 1. Crash recovery should preempt normal feature work.
     for t in backlog:
-        if t.get("status") in ["todo", "backlogged", "pending_prioritization"]:
+        if _is_actionable(t) and _is_failure_recovery(t):
+            selected_task = t
+            source = "failure_recovery"
+            break
+
+    # 2. Backlog 'todo' or 'backlogged' (Prioritize High/Critical)
+    for t in backlog:
+        if selected_task:
+            break
+        if _is_actionable(t):
             if t.get("priority") in ["critical", "high"]:
                 selected_task = t
                 source = "backlog"
                 break
 
-    # 2. Fallback to any other 'todo' backlog items
+    # 3. Fallback to any other 'todo' backlog items
     if not selected_task:
         for t in backlog:
-            if t.get("status") in ["todo", "backlogged", "pending_prioritization"]:
+            if _is_actionable(t):
                 selected_task = t
                 source = "backlog"
                 break

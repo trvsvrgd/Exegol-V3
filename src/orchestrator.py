@@ -45,6 +45,7 @@ class ExegolOrchestrator:
         )
         self.is_running_fleet = False
         self._fleet_cycle_lock = threading.Lock()
+        self._fleet_stop_requested = threading.Event()
         self._should_stop_scheduler = False
         self.job_history = self._load_job_history()
         
@@ -84,6 +85,29 @@ class ExegolOrchestrator:
             return order.index(agent_id)
         except ValueError:
             return 999
+
+    def _fleet_stop_event(self) -> threading.Event:
+        """Return a lazily-created cooperative stop event for fleet cycles."""
+        event = getattr(self, "_fleet_stop_requested", None)
+        if event is None:
+            event = threading.Event()
+            self._fleet_stop_requested = event
+        return event
+
+    def request_fleet_stop(self, reason: str = "manual stop requested") -> bool:
+        """Request the active fleet cycle to stop before any further dispatch."""
+        event = self._fleet_stop_event()
+        event.set()
+        was_running = bool(getattr(self, "is_running_fleet", False))
+        self.is_running_fleet = False
+        print(f"[Orchestrator] Fleet stop requested: {reason}")
+        return was_running
+
+    def clear_fleet_stop_request(self) -> None:
+        self._fleet_stop_event().clear()
+
+    def is_fleet_stop_requested(self) -> bool:
+        return self._fleet_stop_event().is_set()
 
     def acquire_execution_lock(self, agent_id):
         priority = self.get_agent_priority(agent_id)
@@ -690,9 +714,66 @@ class ExegolOrchestrator:
         state = self._blocked_fleet_state(repo_path)
         if not state:
             return False
+        if self._attempt_auto_failure_recovery(repo_path, state):
+            return False
         print(f"[Orchestrator] Repository {repo_path} is blocked: {state.get('output_summary', 'Fleet state is blocked.')}")
         self.update_repo_status(repo_path, "blocked")
         return True
+
+    def _attempt_auto_failure_recovery(self, repo_path: str, state: Dict[str, Any]) -> bool:
+        """Let the fleet take one self-healing pass at agent crash backlog items."""
+        backlog_item_id = str(state.get("backlog_item_id") or "")
+        if not state.get("retry_available") or not backlog_item_id.startswith("auto_fail_"):
+            return False
+
+        try:
+            from tools.backlog_manager import BacklogManager
+
+            bm = BacklogManager(repo_path)
+            task = bm.get_task(backlog_item_id)
+            if not task or task.get("status") in {"done", "completed", "archived", "dismissed"}:
+                return False
+
+            try:
+                attempts = int(task.get("auto_recovery_attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+
+            max_attempts = int(self._get_isolation_setting("max_auto_failure_recovery_attempts", 1))
+            if attempts >= max_attempts:
+                return False
+
+            now = datetime.now().isoformat()
+            bm.update_task(backlog_item_id, {
+                "status": "todo",
+                "priority": "critical",
+                "blocker_type": task.get("blocker_type") or "agent_crash",
+                "recovery_agent_id": task.get("recovery_agent_id") or "developer_dex",
+                "auto_recovery_attempts": attempts + 1,
+                "auto_recovery_started_at": now,
+            })
+
+            StateManager(repo_path).update_fleet_state({
+                "active_agent": None,
+                "session_id": "",
+                "status": "idle",
+                "next_agent_id": "",
+                "errors": [],
+                "output_summary": f"Auto-recovery queued for {backlog_item_id}.",
+                "retry_available": False,
+                "last_cleared_errors": state.get("errors", []),
+                "auto_recovery": {
+                    "backlog_item_id": backlog_item_id,
+                    "attempt": attempts + 1,
+                    "started_at": now,
+                },
+            })
+            self.update_repo_status(repo_path, "idle")
+            print(f"[Orchestrator] Auto-recovery queued for {backlog_item_id}; continuing fleet dispatch.")
+            return True
+        except Exception as exc:
+            print(f"[Orchestrator] Failed to prepare auto-recovery for {backlog_item_id}: {exc}")
+            return False
 
     def _record_repo_failure(self, repo_info: Dict[str, Any], message: str,
                              errors: List[str] = None, handoff_chain: List[str] = None):
@@ -887,6 +968,7 @@ class ExegolOrchestrator:
             return False
 
         print("\nStarting Fleet Cycle...")
+        self.clear_fleet_stop_request()
         self.is_running_fleet = True
         all_success = True
         try:
@@ -909,7 +991,8 @@ class ExegolOrchestrator:
                 sorted_repos = sorted(active_repos, key=lambda x: x.get('priority', 999))
             
             for repo_info in sorted_repos:
-                if not self.is_running_fleet:
+                if self.is_fleet_stop_requested() or not self.is_running_fleet:
+                    all_success = False
                     break
                 repo_path = repo_info.get("repo_path", "")
                 if self._skip_blocked_repo(repo_path):
@@ -923,6 +1006,10 @@ class ExegolOrchestrator:
                 )
                 try:
                     self.process_repo(repo_info)
+                    if self.is_fleet_stop_requested() or not self.is_running_fleet:
+                        all_success = False
+                        print("[Orchestrator] Fleet cycle stopped before further dispatch.")
+                        break
 
                     # Check if the repository status has become 'idle' or 'blocked'
                     self.load_config()
@@ -945,6 +1032,7 @@ class ExegolOrchestrator:
             return all_success
         finally:
             self.is_running_fleet = False
+            self.clear_fleet_stop_request()
             self._fleet_cycle_lock.release()
 
 
@@ -969,6 +1057,14 @@ class ExegolOrchestrator:
         """Decides which agent to wake for a given repo based on its current state."""
         repo_path = repo_info.get("repo_path")
         print(f"\nChecking repo: {repo_path}")
+        if self.is_fleet_stop_requested():
+            self._write_fleet_state(
+                repo_path=repo_path,
+                status="idle",
+                active_agent=None,
+                output_summary="Fleet stop requested before agent dispatch.",
+            )
+            return
         if self._skip_blocked_repo(repo_path):
             return
         
@@ -982,18 +1078,14 @@ class ExegolOrchestrator:
         if self._dispatch_objective_step(repo_info):
             return
 
-        # Check backlog for pending tasks
-        backlog_path = os.path.join(exegol_dir, "backlog.json")
-        if os.path.exists(backlog_path):
-            with open(backlog_path, 'r') as f:
-                backlog = json.load(f)
-            
-            # Check backlog for pending tasks (including prioritized 'todo' tasks)
-            pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged", "todo"]]
-            if pending_tasks:
-                print(f"Found {len(pending_tasks)} pending/todo tasks. Triggering ProductPoeAgent...")
-                self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 10, "product_poe")
-                return
+        # Check backlog for pending tasks (including prioritized 'todo' tasks)
+        from tools.backlog_manager import BacklogManager
+        backlog = BacklogManager(repo_path).load_backlog()
+        pending_tasks = [t for t in backlog if t.get("status") in ["pending_prioritization", "backlogged", "todo"]]
+        if pending_tasks:
+            print(f"Found {len(pending_tasks)} pending/todo tasks. Triggering ProductPoeAgent...")
+            self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 10, "product_poe")
+            return
 
         # If it's a Monday or specific time, run review/optimizer (Logic TBD)
         print("Repo is idle.")
@@ -1257,6 +1349,11 @@ class ExegolOrchestrator:
             )
         finally:
             self.release_execution_lock()
+
+        if result and self.is_fleet_stop_requested() and getattr(result, "outcome", "") == "success":
+            print("[Orchestrator] Fleet stop requested; suppressing autonomous handoff.")
+            result.next_agent_id = ""
+            result.status_update = result.status_update or "idle"
             
         if result:
             status = getattr(result, "status_update", "")

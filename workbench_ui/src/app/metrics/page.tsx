@@ -5,6 +5,23 @@ import Link from "next/link";
 import { apiGet, getLocalActiveRepo, setLocalActiveRepo } from "../api-client";
 import LogDrillDown from "../../components/LogDrillDown";
 
+const METRICS_BASELINE_START_DATE = "2026-05-31";
+
+function formatMetricPercent(value: number | undefined, decimals = 1): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "N/A";
+  return `${(value * 100).toFixed(decimals)}%`;
+}
+
+function metricPercentWidth(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
+  return `${Math.min(100, Math.max(0, value * 100))}%`;
+}
+
+function driftPercentWidth(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
+  return `${Math.min(100, Math.abs(value * 100) * 10)}%`;
+}
+
 interface Repo {
   repo_path: string;
   model_routing_preference: string;
@@ -30,6 +47,9 @@ interface AgentMetrics {
 interface FleetMetricsReport {
   timestamp: string;
   period_days: number;
+  period_start?: string;
+  period_end?: string;
+  period_label?: string;
   fleet_aggregate: {
     total_sessions: number;
     success_rate: number;
@@ -74,7 +94,7 @@ export default function MetricsDashboard() {
 
   const fetchMetrics = useCallback(() => {
     if (!activeRepo) return;
-    apiGet<FleetMetricsReport>(`/fleet/metrics?repo_path=${encodeURIComponent(activeRepo)}`)
+    apiGet<FleetMetricsReport>(`/fleet/metrics?repo_path=${encodeURIComponent(activeRepo)}&start_date=${METRICS_BASELINE_START_DATE}`)
       .then(data => {
         setMetrics(data);
         setLoading(false);
@@ -94,20 +114,6 @@ export default function MetricsDashboard() {
   }, [fetchMetrics, activeRepo]);
 
   if (loading) return <div className="loading">Initializing Advanced Metrics...</div>;
-
-  // Generate deterministic "advanced" metrics if not fully supported by backend yet
-  const getAdvancedStats = (agentId: string, baseRate: number) => {
-    const hash = Array.from(agentId).reduce((s, c) => Math.imul(31, s) + c.charCodeAt(0) | 0, 0);
-    const precision = Math.min(100, Math.max(0, (baseRate * 100) + (hash % 15) - 5));
-    const recall = Math.min(100, Math.max(0, (baseRate * 100) - (hash % 10) + 2));
-    const drift = Math.abs((hash % 8) + (baseRate > 0.8 ? 0.5 : 2.5));
-    
-    return {
-      precision: precision.toFixed(1),
-      recall: recall.toFixed(1),
-      drift: drift.toFixed(2),
-    };
-  };
 
   return (
     <div className="metrics-page">
@@ -157,7 +163,7 @@ export default function MetricsDashboard() {
         <>
           <section className="summary-grid">
             <div className="summary-card glass">
-              <span className="label">Fleet Sessions ({metrics.period_days}d)</span>
+              <span className="label">Fleet Sessions ({metrics.period_label || `${metrics.period_days}d`})</span>
               <span className="value">{metrics.fleet_aggregate.total_sessions}</span>
             </div>
             <div className="summary-card glass">
@@ -174,10 +180,13 @@ export default function MetricsDashboard() {
             <h2 className="section-title">Agent Telemetry & Drift Analysis</h2>
             <div className="metrics-grid">
               {Object.entries(metrics.agent_breakdown || {}).map(([agentId, stats]) => {
-                const adv = getAdvancedStats(agentId, stats.success_rate);
-                const precision = stats.precision !== undefined ? (stats.precision * 100).toFixed(1) : adv.precision;
-                const recall = stats.recall !== undefined ? (stats.recall * 100).toFixed(1) : adv.recall;
-                const drift = stats.drift !== undefined ? (stats.drift * 100).toFixed(2) : adv.drift;
+                const precision = formatMetricPercent(stats.precision);
+                const recall = formatMetricPercent(stats.recall);
+                const drift = formatMetricPercent(stats.drift, 2);
+                const precisionWidth = metricPercentWidth(stats.precision);
+                const recallWidth = metricPercentWidth(stats.recall);
+                const driftWidth = driftPercentWidth(stats.drift);
+                const driftIsHigh = typeof stats.drift === "number" && Math.abs(stats.drift * 100) > 5;
 
                 return (
                   <div key={agentId} className="metric-card glass">
@@ -208,10 +217,10 @@ export default function MetricsDashboard() {
                       >
                         <div className="bar-label">
                           <span>Precision</span>
-                          <span>{precision}%</span>
+                          <span>{precision}</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill precision" style={{ width: `${precision}%` }}></div>
+                          <div className="bar-fill precision" style={{ width: precisionWidth }}></div>
                         </div>
                       </div>
                       
@@ -225,10 +234,10 @@ export default function MetricsDashboard() {
                       >
                         <div className="bar-label">
                           <span>Recall</span>
-                          <span>{recall}%</span>
+                          <span>{recall}</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill recall" style={{ width: `${recall}%` }}></div>
+                          <div className="bar-fill recall" style={{ width: recallWidth }}></div>
                         </div>
                       </div>
 
@@ -242,10 +251,10 @@ export default function MetricsDashboard() {
                       >
                         <div className="bar-label">
                           <span>Concept Drift</span>
-                          <span className={parseFloat(drift) > 5 ? 'text-red' : 'text-green'}>{drift}%</span>
+                          <span className={driftIsHigh ? 'text-red' : 'text-green'}>{drift}</span>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill drift" style={{ width: `${Math.min(100, Math.abs(parseFloat(drift)) * 10)}%` }}></div>
+                          <div className="bar-fill drift" style={{ width: driftWidth }}></div>
                         </div>
                       </div>
                     </div>
@@ -311,6 +320,7 @@ export default function MetricsDashboard() {
         repoPath={activeRepo}
         initialAgentId={selectedAgent}
         initialOutcome={selectedOutcome}
+        startDate={METRICS_BASELINE_START_DATE}
       />
 
       <style jsx>{`

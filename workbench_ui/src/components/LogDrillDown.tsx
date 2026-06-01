@@ -36,6 +36,7 @@ interface LogDrillDownProps {
   repoPath: string;
   initialAgentId?: string;
   initialOutcome?: string;
+  startDate?: string;
 }
 
 export default function LogDrillDown({
@@ -43,7 +44,8 @@ export default function LogDrillDown({
   onClose,
   repoPath,
   initialAgentId,
-  initialOutcome
+  initialOutcome,
+  startDate
 }: LogDrillDownProps) {
   const [logs, setLogs] = useState<InteractionLog[]>([]);
   const [loading, setLoading] = useState(false);
@@ -67,6 +69,7 @@ export default function LogDrillDown({
     setLoading(true);
     try {
       let path = `/fleet/interactions?repo_path=${encodeURIComponent(repoPath)}`;
+      if (startDate) path += `&start_date=${encodeURIComponent(startDate)}`;
       if (filterAgent) path += `&agent_id=${encodeURIComponent(filterAgent)}`;
       if (filterOutcome) path += `&outcome=${encodeURIComponent(filterOutcome)}`;
 
@@ -83,7 +86,7 @@ export default function LogDrillDown({
     } finally {
       setLoading(false);
     }
-  }, [filterAgent, filterOutcome, repoPath]);
+  }, [filterAgent, filterOutcome, repoPath, startDate]);
 
   useEffect(() => {
     if (isOpen) {
@@ -127,8 +130,8 @@ export default function LogDrillDown({
             <h2>Interaction Logs{filterAgent ? `: ${filterAgent}` : ""}</h2>
             <p className="subtitle">
               {filterAgent
-                ? `Showing all recorded sessions for this agent`
-                : "Showing interaction logs across the entire fleet"}
+                ? `Showing sessions for this agent${startDate ? ` since ${startDate}` : ""}`
+                : `Showing interaction logs across the fleet${startDate ? ` since ${startDate}` : ""}`}
             </p>
           </div>
           <button className="close-btn" onClick={onClose}>&times;</button>

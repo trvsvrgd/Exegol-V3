@@ -142,7 +142,7 @@ class IntelImaAgent:
         market_intel = web_search(market_query, num_results=3)
         
         # 2. Cost Analysis
-        print(f"[{self.name}] Running real cost analysis via CostAnalyzer...")
+        print(f"[{self.name}] Running estimated cost analysis via CostAnalyzer...")
         try:
             cost_report = get_cost_report(repo_path, days=30)
             cost_breakdown = cost_report.get("agent_costs", {})
@@ -150,7 +150,10 @@ class IntelImaAgent:
             total_spend = cost_report.get("total_spend", 0.0)
             cloud_status = cost_report.get("cloud_status", "Healthy")
             remaining_quota = cost_report.get("remaining_quota", 0.0)
-            print(f"[{self.name}] Cost analysis complete. Total spend: ${total_spend:.4f}")
+            billable_provider_detected = cost_report.get("billable_provider_detected", False)
+            billing_status = cost_report.get("billing_status", "no_billable_provider_detected")
+            cost_basis = cost_report.get("cost_basis", "estimated_from_local_interaction_logs")
+            print(f"[{self.name}] Cost analysis complete. Estimated spend: ${total_spend:.4f}")
         except Exception as e:
             print(f"[{self.name}] CostAnalyzer warning: {e}. Using empty breakdown.")
             cost_breakdown = {}
@@ -158,6 +161,9 @@ class IntelImaAgent:
             total_spend = 0.0
             cloud_status = "Unknown"
             remaining_quota = 0.0
+            billable_provider_detected = False
+            billing_status = "cost_analysis_unavailable"
+            cost_basis = "unavailable"
 
         # 3. Collect Fleet Health Metrics
         print(f"[{self.name}] Gathering fleet health metrics...")
@@ -198,6 +204,9 @@ class IntelImaAgent:
             "total_spend": total_spend,
             "cloud_status": cloud_status,
             "remaining_quota": remaining_quota,
+            "billable_provider_detected": billable_provider_detected,
+            "billing_status": billing_status,
+            "cost_basis": cost_basis,
             "fleet_metrics": metrics,
             "recommendations": analysis.get("recommendations", []),
             "strategic_debt_count": len(pending_debt)
@@ -227,7 +236,8 @@ class IntelImaAgent:
                     f"Exegol Intelligence Report - {timestamp_fs}\n"
                     f"==========================================\n\n"
                     f"Fleet Status: {cloud_status}\n"
-                    f"Total Spend: ${total_spend:.4f}\n"
+                    f"Estimated Spend: ${total_spend:.4f}\n"
+                    f"Billing Status: {billing_status}\n"
                     f"Remaining Quota: ${remaining_quota:.2f}\n\n"
                     f"Summary: {report['summary']}\n\n"
                     f"Recommendations:\n" + "\n".join([f"- {r}" for r in report['recommendations']]) + "\n\n"
@@ -268,9 +278,11 @@ class IntelImaAgent:
         {json.dumps(market_intel)}
         
         COST REPORT (FinOps):
-        Total Spend: ${cost_report.get('total_spend', 0)}
+        Estimated Spend: ${cost_report.get('total_spend', 0)}
         Cloud Status: {cost_report.get('cloud_status', 'Unknown')}
         Remaining Quota: ${cost_report.get('remaining_quota', 0)}
+        Billing Status: {cost_report.get('billing_status', 'unknown')}
+        Cost Basis: {cost_report.get('cost_basis', 'unknown')}
         Provider Breakdown: {json.dumps(cost_report.get('provider_breakdown', {}))}
         
         FLEET HEALTH (Success Metrics):
@@ -342,7 +354,7 @@ class IntelImaAgent:
                         <strong style="color: {status_color}; font-size: 18px;">● {status}</strong>
                     </div>
                     <div style="text-align: right;">
-                        <span style="font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px;">Total Spend</span><br>
+                        <span style="font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px;">Estimated Spend</span><br>
                         <strong style="font-size: 18px;">${report.get('total_spend'):.4f}</strong>
                     </div>
                 </div>

@@ -1,0 +1,7 @@
+# Supervisor Configuration
+supervisor:
+  log_path: /exegol_v3/logs/supervisor.log
+  version: 1.0.0
+  dependencies:
+    - requests==2.28.2
+    - python-dotenv==0.21.0

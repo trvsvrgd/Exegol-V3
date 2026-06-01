@@ -1,6 +1,8 @@
 import os
 import json
 import datetime
+import hashlib
+import re
 from tools.git_tool import has_commits_since, get_recent_commits
 from tools.web_search import web_search
 from tools.backlog_manager import BacklogManager
@@ -38,6 +40,48 @@ class ArchitectArtooAgent:
         }
         self.system_prompt = self.llm_client.generate_system_prompt(self)
 
+    def _architecture_task_from_finding(self, finding):
+        """Normalize LLM findings into stable backlog task dictionaries."""
+        if isinstance(finding, dict):
+            text = (
+                finding.get("summary")
+                or finding.get("title")
+                or finding.get("issue")
+                or finding.get("task")
+                or finding.get("description")
+                or json.dumps(finding, sort_keys=True)
+            )
+            rationale = (
+                finding.get("rationale")
+                or finding.get("recommendation")
+                or finding.get("context")
+                or "Automated architectural review identified this concern."
+            )
+            priority = str(
+                finding.get("priority")
+                or finding.get("severity")
+                or "high"
+            ).lower()
+        else:
+            text = str(finding)
+            rationale = "Automated architectural review identified this concern."
+            priority = "high"
+
+        if priority not in {"critical", "high", "medium", "low"}:
+            priority = "high"
+
+        slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:32]
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+        return {
+            "id": f"arch_fix_{slug or digest}_{digest}",
+            "summary": f"Architectural Issue: {text}",
+            "priority": priority,
+            "type": "architecture_improvement",
+            "status": "pending_prioritization",
+            "source_agent": self.name,
+            "rationale": rationale,
+            "created_at": datetime.datetime.now().isoformat()
+        }
 
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
@@ -138,16 +182,7 @@ class ArchitectArtooAgent:
         arch_tasks = []
         if review_report.get("status") in ["DEGRADED", "CRITICAL"]:
             for finding in review_report.get("findings", []):
-                arch_tasks.append({
-                    "id": f"arch_fix_{finding[:12].lower().replace(' ', '_')}",
-                    "summary": f"Architectural Issue: {finding}",
-                    "priority": "high",
-                    "type": "architecture_improvement",
-                    "status": "pending_prioritization",
-                    "source_agent": self.name,
-                    "rationale": "Automated architectural review identified this concern.",
-                    "created_at": datetime.datetime.now().isoformat()
-                })
+                arch_tasks.append(self._architecture_task_from_finding(finding))
 
         # Add predefined tasks if they are not already there
         standard_tasks = [

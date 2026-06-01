@@ -1,9 +1,65 @@
 import os
 import json
 import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional
 from tools.fleet_logger import read_interaction_logs
 from agents.registry import AGENT_REGISTRY
+
+
+DEFAULT_METRICS_START_DATE = "2026-05-31"
+
+
+def _to_local_naive(value: datetime.datetime) -> datetime.datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
+
+def parse_metrics_start_date(start_date: Optional[str]) -> Optional[datetime.datetime]:
+    if not start_date:
+        return None
+
+    value = start_date.strip()
+    if not value:
+        return None
+
+    try:
+        if len(value) == 10:
+            return datetime.datetime.combine(
+                datetime.date.fromisoformat(value),
+                datetime.time.min,
+            )
+        return _to_local_naive(datetime.datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError as exc:
+        raise ValueError(f"Invalid metrics start_date '{start_date}'. Use YYYY-MM-DD or ISO datetime.") from exc
+
+
+def parse_log_timestamp(timestamp: Optional[str]) -> Optional[datetime.datetime]:
+    if not timestamp:
+        return None
+    try:
+        return _to_local_naive(datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def filter_logs_since(logs: List[dict], period_start: Optional[datetime.datetime]) -> List[dict]:
+    if period_start is None:
+        return logs
+    filtered = []
+    for log in logs:
+        timestamp = parse_log_timestamp(log.get("timestamp"))
+        if timestamp and timestamp >= period_start:
+            filtered.append(log)
+    return filtered
+
+
+def calculate_read_days_for_start(period_start: Optional[datetime.datetime], default_days: int) -> int:
+    if period_start is None:
+        return default_days
+    elapsed_days = (datetime.datetime.now().date() - period_start.date()).days + 1
+    return max(default_days, elapsed_days, 1)
+
 
 class SuccessMetricsManager:
     """Calculates and persists agent success metrics across the fleet.
@@ -30,10 +86,22 @@ class SuccessMetricsManager:
                 print(f"[SuccessMetricsManager] Failed to load human observations: {e}")
         return {}
 
-    def calculate_metrics(self, days: int = 30, enable_live_judge: bool = False) -> Dict[str, Any]:
+    def calculate_metrics(
+        self,
+        days: int = 30,
+        enable_live_judge: bool = False,
+        start_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Analyzes interaction logs to calculate advanced per-agent metrics."""
-        # Baseline (Full period)
-        baseline_logs = read_interaction_logs([self.repo_path], days=days)
+        period_start = parse_metrics_start_date(start_date)
+        read_days = calculate_read_days_for_start(period_start, days)
+        period_end = datetime.datetime.now()
+
+        # Baseline (filtered reporting period)
+        baseline_logs = filter_logs_since(
+            read_interaction_logs([self.repo_path], days=read_days),
+            period_start,
+        )
         # Recent (Last 7 days)
         recent_logs = [log for log in baseline_logs if self._is_within_days(log.get("timestamp"), 7)]
         
@@ -88,9 +156,20 @@ class SuccessMetricsManager:
                 "human_observations": list(agent_obs.values())
             }
 
+        if period_start is None:
+            period_start = period_end - datetime.timedelta(days=days)
+            period_label = f"Last {days} days"
+            period_days = days
+        else:
+            period_days = max(1, (period_end.date() - period_start.date()).days + 1)
+            period_label = f"Since {period_start.date().isoformat()}"
+
         report = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "period_days": days,
+            "timestamp": period_end.isoformat(),
+            "period_days": period_days,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "period_label": period_label,
             "fleet_aggregate": {
                 "total_sessions": len(baseline_logs),
                 "success_rate": round(
@@ -110,13 +189,11 @@ class SuccessMetricsManager:
         return report
 
     def _is_within_days(self, ts_str: str, days: int) -> bool:
-        if not ts_str: return False
-        try:
-            ts = datetime.datetime.fromisoformat(ts_str)
-            cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
-            return ts >= cutoff
-        except ValueError:
+        ts = parse_log_timestamp(ts_str)
+        if not ts:
             return False
+        cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+        return ts >= cutoff
 
     def _process_logs(self, logs: List[dict]) -> Dict[str, Any]:
         stats = {}

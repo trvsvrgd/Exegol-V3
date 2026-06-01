@@ -7,6 +7,7 @@ import tempfile
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from tools.backlog_manager import BacklogManager
+from tools.backlog_groomer import groom_backlog
 
 def test_backlog_archiving():
     # Use a temp directory so each test run starts with a clean SQLite DB
@@ -85,6 +86,31 @@ def test_backlog_dedupe_auto_failures_archives_repeated_rows(tmp_path):
     archived = bm.get_task("auto_fail_DeveloperDexAgent_2")
     assert canonical["merged_duplicate_ids"] == ["auto_fail_DeveloperDexAgent_2"]
     assert archived["canonical_task_id"] == "auto_fail_DeveloperDexAgent_1"
+
+
+def test_backlog_groomer_prioritizes_failure_recovery(tmp_path):
+    bm = BacklogManager(str(tmp_path))
+    bm.add_task({
+        "id": "feature_high",
+        "summary": "Implement planned feature",
+        "priority": "high",
+        "status": "todo",
+        "created_at": "2026-05-30T00:00:00",
+    })
+    bm.add_task({
+        "id": "auto_fail_architect_artoo_123456",
+        "summary": "FIX: architect_artoo autonomous failure",
+        "priority": "critical",
+        "status": "todo",
+        "blocker_type": "agent_crash",
+        "created_at": "2026-05-31T00:00:00",
+    })
+
+    result = groom_backlog(str(tmp_path))
+
+    assert result["source"] == "failure_recovery"
+    assert result["task"]["id"] == "auto_fail_architect_artoo_123456"
+    assert BacklogManager(str(tmp_path)).get_task("auto_fail_architect_artoo_123456")["status"] == "in_progress"
 
 
 def test_archive_task_archives_arbitrary_row_with_reason(tmp_path):

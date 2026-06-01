@@ -111,6 +111,52 @@ def test_continuous_loop_runs_multiple_cycles_until_stopped(monkeypatch, tmp_pat
     ]
 
 
+def test_autonomous_status_reports_stopping_until_cycle_unwinds(tmp_path):
+    repo_path = os.path.abspath(tmp_path)
+    api._continuous_mode = False
+    api._continuous_repo_path = repo_path
+    api._continuous_fleet_thread = None
+    api._continuous_cycle_active = True
+    api.orchestrator.is_running_fleet = False
+
+    try:
+        status = api._autonomous_status()
+        context = api._autonomous_context_for_repo(repo_path)
+    finally:
+        api._continuous_cycle_active = False
+        api._continuous_repo_path = None
+
+    assert status["continuous_mode"] is False
+    assert status["cycle_running"] is True
+    assert status["stopping"] is True
+    assert context["loop_status"] == "stopping"
+
+
+def test_stop_autonomous_requests_cooperative_orchestrator_stop(tmp_path):
+    repo_path = os.path.abspath(tmp_path)
+    api.orchestrator.clear_fleet_stop_request()
+    api._continuous_mode = True
+    api._continuous_repo_path = repo_path
+    api._continuous_fleet_thread = None
+    api._continuous_cycle_active = True
+    api.orchestrator.is_running_fleet = True
+
+    try:
+        status = api.stop_autonomous_fleet()
+
+        assert status["status"] == "success"
+        assert status["continuous_mode"] is False
+        assert status["cycle_running"] is True
+        assert status["stopping"] is True
+        assert status["repo_path"] is None
+        assert api.orchestrator.is_fleet_stop_requested()
+    finally:
+        api._continuous_cycle_active = False
+        api._continuous_repo_path = None
+        api.orchestrator.is_running_fleet = False
+        api.orchestrator.clear_fleet_stop_request()
+
+
 def test_start_autonomous_http_uses_selected_repo(monkeypatch, tmp_path):
     class FakeThread:
         def __init__(self, target, daemon):

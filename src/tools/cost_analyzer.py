@@ -40,6 +40,29 @@ DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
     "default":           {"input": 1.00,  "output": 5.00},   # fallback
 }
 
+# Model names without an explicit cloud provider are routed by InferenceManager
+# as specific Ollama models. Keep this list aligned with local model families
+# commonly used in config/agent_models.json.
+LOCAL_MODEL_MARKERS = (
+    "ollama",
+    "local",
+    "llama.cpp",
+    "llamacpp",
+    "vllm",
+    "llama",
+    "qwen",
+    "deepseek",
+    "phi",
+    "mistral",
+    "mixtral",
+    "gemma",
+    "codellama",
+    "starcoder",
+    "vicuna",
+    "yi",
+    "mock",
+)
+
 # Average tokens per agent step (heuristic)
 TOKENS_PER_STEP = 800
 INPUT_RATIO = 0.70
@@ -115,6 +138,10 @@ class CostAnalyzer:
 
         # Provider breakdown — aggregate by inferred provider
         provider_breakdown = self._build_provider_breakdown(agent_costs)
+        billable_provider_detected = any(
+            provider != "Ollama (Local)" and cost > 0
+            for provider, cost in provider_breakdown.items()
+        )
 
         # Daily trend (last 14 days, sorted)
         daily_trend = self._build_daily_trend(daily_costs, days=14)
@@ -135,6 +162,13 @@ class CostAnalyzer:
             "monthly_budget": self.monthly_budget,
             "days_until_budget": days_until_budget,
             "cloud_status": cloud_status,
+            "billable_provider_detected": billable_provider_detected,
+            "billing_status": (
+                "billable_provider_estimate"
+                if billable_provider_detected
+                else "no_billable_provider_detected"
+            ),
+            "cost_basis": "estimated_from_local_interaction_logs",
             "agent_costs": agent_costs,
             "provider_breakdown": provider_breakdown,
             "step_breakdown": agent_steps,
@@ -177,19 +211,36 @@ class CostAnalyzer:
                     break
         
         if not raw_model:
-            raw_model = "default"
+            raw_model = os.getenv("LLM_PROVIDER", "ollama")
 
-        raw_model = raw_model.lower()
+        raw_model = str(raw_model).strip().lower()
 
-        for key in DEFAULT_PRICING:
+        if not raw_model:
+            return "ollama"
+
+        if self._is_local_model(raw_model):
+            return "ollama"
+
+        # Prefer exact/specific model matches before generic provider matches.
+        for key in sorted(DEFAULT_PRICING, key=len, reverse=True):
+            if key in {"ollama", "local", "default"}:
+                continue
             if key in raw_model:
                 return key
 
-        # Treat anything local/ollama as free
-        if "ollama" in raw_model or "local" in raw_model or "llama" in raw_model:
-            return "ollama"
+        if "openai" in raw_model:
+            return "gpt"
+        if "anthropic" in raw_model or "claude" in raw_model:
+            return "claude-3-5-sonnet"
 
-        return "default"
+        # InferenceManager treats unknown provider strings as local Ollama model
+        # names, so unqualified model names must not be costed as API billing.
+        return "ollama"
+
+    @staticmethod
+    def _is_local_model(raw_model: str) -> bool:
+        """Return True for local/self-hosted model routing strings."""
+        return any(marker in raw_model for marker in LOCAL_MODEL_MARKERS)
 
     def _build_provider_breakdown(self, agent_costs: Dict[str, float]) -> Dict[str, float]:
         """Aggregates agent costs by cloud provider."""

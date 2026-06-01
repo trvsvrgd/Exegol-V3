@@ -101,10 +101,12 @@ def log_interaction(
             fail_task = {
                 "id": error_id,
                 "summary": f"FIX: {agent_id} autonomous failure",
-                "priority": "high",
+                "priority": "critical",
                 "type": "bug",
                 "status": "todo",
                 "source_agent": "FleetLogger",
+                "blocker_type": "agent_crash",
+                "recovery_agent_id": "developer_dex",
                 "rationale": f"System-detected failure. Summary: {task_summary}. Errors: {error_str}",
                 "created_at": now_iso,
                 "last_seen_at": now_iso,
@@ -116,11 +118,13 @@ def log_interaction(
                 existing = bm.get_task(error_id) or {}
                 next_occurrences = int(existing.get("occurrences", 1)) + 1
                 status = existing.get("status", "todo")
-                if status in {"done", "completed"}:
+                if status in {"done", "completed", "in_progress"}:
                     status = "todo"
                 bm.update_task(error_id, {
                     "status": status,
-                    "priority": "high",
+                    "priority": "critical",
+                    "blocker_type": existing.get("blocker_type") or "agent_crash",
+                    "recovery_agent_id": existing.get("recovery_agent_id") or "developer_dex",
                     "rationale": fail_task["rationale"],
                     "last_seen_at": now_iso,
                     "occurrences": next_occurrences,

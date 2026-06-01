@@ -53,6 +53,14 @@ def _make_log(repo_path: str, agent_id: str, steps: int, outcome: str = "success
         json.dump(log, f)
 
 
+def _write_agent_models(repo_path: str, mappings: dict):
+    """Writes a local config/agent_models.json for cost routing tests."""
+    config_dir = os.path.join(repo_path, "config")
+    os.makedirs(config_dir, exist_ok=True)
+    with open(os.path.join(config_dir, "agent_models.json"), "w", encoding="utf-8") as f:
+        json.dump(mappings, f)
+
+
 @pytest.fixture
 def empty_repo(tmp_path):
     """A repo with no interaction logs."""
@@ -82,7 +90,8 @@ def test_analyze_returns_all_required_keys(repo_with_logs):
         "total_spend", "daily_average", "remaining_quota", "monthly_budget",
         "days_until_budget", "cloud_status", "agent_costs", "provider_breakdown",
         "step_breakdown", "session_breakdown", "daily_trend", "period_days",
-        "total_sessions", "generated_at",
+        "total_sessions", "generated_at", "billable_provider_detected",
+        "billing_status", "cost_basis",
     ]
     for key in required_keys:
         assert key in report, f"Missing key: {key}"
@@ -234,6 +243,43 @@ def test_default_pricing_has_required_models():
 def test_ollama_pricing_is_free():
     assert DEFAULT_PRICING["ollama"]["input"] == 0.0
     assert DEFAULT_PRICING["ollama"]["output"] == 0.0
+
+
+def test_configured_ollama_model_names_are_free(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    repo = str(tmp_path)
+    _write_agent_models(repo, {
+        "developer_dex": "qwen2.5-coder:7b",
+        "security_sabine": "deepseek-r1:8b",
+        "model_router_mothma": "phi4-mini:latest",
+    })
+    _make_log(repo, "DeveloperDexAgent", steps=5)
+    _make_log(repo, "SecuritySabineAgent", steps=4)
+    _make_log(repo, "ModelRouterMothmaAgent", steps=3)
+
+    report = get_cost_report(repo, days=30)
+
+    assert report["total_spend"] == 0.0
+    assert report["agent_costs"]["DeveloperDexAgent"] == 0.0
+    assert report["agent_costs"]["SecuritySabineAgent"] == 0.0
+    assert report["agent_costs"]["ModelRouterMothmaAgent"] == 0.0
+    assert report["provider_breakdown"] == {"Ollama (Local)": 0.0}
+    assert report["billable_provider_detected"] is False
+    assert report["billing_status"] == "no_billable_provider_detected"
+
+
+def test_explicit_cloud_model_names_remain_billable(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    repo = str(tmp_path)
+    _write_agent_models(repo, {"developer_dex": "gemini-2.0-flash"})
+    _make_log(repo, "DeveloperDexAgent", steps=5)
+
+    report = get_cost_report(repo, days=30)
+
+    assert report["total_spend"] > 0.0
+    assert report["provider_breakdown"] == {"Google (Gemini)": report["total_spend"]}
+    assert report["billable_provider_detected"] is True
+    assert report["billing_status"] == "billable_provider_estimate"
 
 
 # ---------------------------------------------------------------------------

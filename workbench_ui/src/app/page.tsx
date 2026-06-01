@@ -22,6 +22,7 @@ interface AutonomousStatus {
   continuous_mode: boolean;
   thread_alive: boolean;
   cycle_running: boolean;
+  stopping?: boolean;
   repo_path?: string | null;
 }
 
@@ -32,6 +33,19 @@ interface SupervisorHealth {
   degraded_repositories: string[];
 }
 
+const ACTIVE_STATUS_REFRESH_MS = 5000;
+const STOPPED_STATUS_REFRESH_MS = 30000;
+const ACTIVE_SUPERVISOR_REFRESH_MS = 15000;
+const ACTIVE_REPO_REFRESH_MS = 5000;
+const STOPPED_REPO_REFRESH_MS = 30000;
+const BACKEND_OFFLINE_MESSAGE = "Exegol backend is unreachable. Start the backend and leave it running before using fleet controls.";
+
+function isBackendNetworkError(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return name === "AbortError" || message.includes("failed to fetch") || message.includes("networkerror") || message.includes("aborted");
+}
+
 export default function Home() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [activeRepo, setActiveRepo] = useState<string | null>(() => getLocalActiveRepo() || null);
@@ -39,25 +53,55 @@ export default function Home() {
   const [activeAgent, setActiveAgent] = useState<'poe' | 'thrawn' | 'vader'>('poe');
   const [autonomousMode, setAutonomousMode] = useState<boolean>(false);
   const [cycleRunning, setCycleRunning] = useState<boolean>(false);
+  const [stopping, setStopping] = useState<boolean>(false);
   const [controlBusy, setControlBusy] = useState<boolean>(false);
   const [controlError, setControlError] = useState<string | null>(null);
   const [controlMessage, setControlMessage] = useState<string | null>(null);
   const [supervisorHealth, setSupervisorHealth] = useState<SupervisorHealth | null>(null);
+  const [backendReachable, setBackendReachable] = useState<boolean>(true);
+  const fleetActive = autonomousMode || cycleRunning || stopping;
+  const statusRefreshActive = fleetActive || !backendReachable;
+
+  const fetchAutonomousStatus = useCallback(async () => {
+    try {
+      const data = await apiGet<AutonomousStatus>("/fleet/autonomous-status");
+      setBackendReachable(true);
+      setFetchError(null);
+      setAutonomousMode(data.continuous_mode);
+      setCycleRunning(data.cycle_running);
+      setStopping(Boolean(data.stopping));
+    } catch (e) {
+      console.error("Failed to fetch autonomous status", e);
+      setBackendReachable(false);
+      setAutonomousMode(false);
+      setCycleRunning(false);
+      setStopping(false);
+      setFetchError(BACKEND_OFFLINE_MESSAGE);
+    }
+  }, []);
+
+  const fetchSupervisorHealth = useCallback(async () => {
+    try {
+      const data = await apiGet<SupervisorHealth>("/fleet/supervisor-health");
+      setSupervisorHealth(data);
+    } catch (e) {
+      console.error("Failed to fetch supervisor health", e);
+    }
+  }, []);
 
   useEffect(() => {
-    async function fetchAutonomousStatus() {
-      try {
-        const data = await apiGet<AutonomousStatus>("/fleet/autonomous-status");
-        setAutonomousMode(data.continuous_mode);
-        setCycleRunning(data.cycle_running);
-      } catch (e) {
-        console.error("Failed to fetch autonomous status", e);
-      }
-    }
-    fetchAutonomousStatus();
-    const interval = setInterval(fetchAutonomousStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void fetchAutonomousStatus();
+    }, 0);
+    const interval = window.setInterval(
+      () => void fetchAutonomousStatus(),
+      statusRefreshActive ? ACTIVE_STATUS_REFRESH_MS : STOPPED_STATUS_REFRESH_MS
+    );
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [fetchAutonomousStatus, statusRefreshActive]);
 
   useEffect(() => {
     if (!controlMessage) return;
@@ -66,18 +110,21 @@ export default function Home() {
   }, [controlMessage]);
 
   useEffect(() => {
-    async function fetchSupervisorHealth() {
-      try {
-        const data = await apiGet<SupervisorHealth>("/fleet/supervisor-health");
-        setSupervisorHealth(data);
-      } catch (e) {
-        console.error("Failed to fetch supervisor health", e);
-      }
+    const timeout = window.setTimeout(() => {
+      void fetchSupervisorHealth();
+    }, 0);
+    if (!fleetActive) {
+      return () => {
+        window.clearTimeout(timeout);
+      };
     }
-    fetchSupervisorHealth();
-    const interval = setInterval(fetchSupervisorHealth, 15000);
-    return () => clearInterval(interval);
-  }, []);
+
+    const interval = window.setInterval(() => void fetchSupervisorHealth(), ACTIVE_SUPERVISOR_REFRESH_MS);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [fetchSupervisorHealth, fleetActive]);
 
   const setAutonomousFleet = async (enabled: boolean) => {
     setControlBusy(true);
@@ -89,10 +136,26 @@ export default function Home() {
       const data = await apiPost<AutonomousStatus & {status: string}>(endpoint, payload);
       setAutonomousMode(data.continuous_mode);
       setCycleRunning(data.cycle_running);
-      setControlMessage(enabled ? "Autonomous fleet loop started." : "Autonomous fleet loop stopped.");
+      setStopping(Boolean(data.stopping));
+      setBackendReachable(true);
+      setFetchError(null);
+      setControlMessage(
+        enabled
+          ? "Autonomous fleet loop started."
+          : data.stopping
+            ? "Stop requested. The fleet will pause after the current cycle yields."
+            : "Autonomous fleet loop stopped."
+      );
     } catch (e) {
       console.error("Failed to toggle autonomous mode", e);
-      setControlError("Fleet control request failed. Check backend logs.");
+      if (isBackendNetworkError(e)) {
+        setBackendReachable(false);
+        setStopping(false);
+        setFetchError(BACKEND_OFFLINE_MESSAGE);
+        setControlError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setControlError("Fleet control request failed. Check backend logs.");
+      }
     } finally {
       setControlBusy(false);
     }
@@ -107,10 +170,19 @@ export default function Home() {
       const data = await apiPost<AutonomousStatus & {status: string}>("/fleet/start-autonomous", { repo_path: activeRepo });
       setAutonomousMode(data.continuous_mode);
       setCycleRunning(data.cycle_running);
+      setStopping(Boolean(data.stopping));
+      setBackendReachable(true);
+      setFetchError(null);
       setControlMessage("Autonomous fleet loop started for the selected repository.");
     } catch (e) {
       console.error("Failed to run autonomous fleet", e);
-      setControlError("Fleet run request failed. Check backend logs.");
+      if (isBackendNetworkError(e)) {
+        setBackendReachable(false);
+        setFetchError(BACKEND_OFFLINE_MESSAGE);
+        setControlError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setControlError("Fleet run request failed. Check backend logs.");
+      }
     } finally {
       setControlBusy(false);
     }
@@ -119,6 +191,8 @@ export default function Home() {
   const fetchRepos = useCallback(async () => {
     try {
       const data = await apiGet<Repo[]>("/repos");
+      setBackendReachable(true);
+      setFetchError(null);
       setRepos(data);
       if (data.length > 0) {
         const savedRepo = getLocalActiveRepo();
@@ -133,7 +207,12 @@ export default function Home() {
       }
     } catch (err) {
       console.error("Failed to fetch repos:", err);
-      setFetchError("Unable to load repository list. Check backend connectivity.");
+      if (isBackendNetworkError(err)) {
+        setBackendReachable(false);
+        setFetchError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setFetchError("Unable to load repository list. Check backend connectivity.");
+      }
     }
   }, [activeRepo]);
 
@@ -141,16 +220,26 @@ export default function Home() {
     const timeout = window.setTimeout(() => {
       void fetchRepos();
     }, 0);
+    const refreshMs = fleetActive ? ACTIVE_REPO_REFRESH_MS : STOPPED_REPO_REFRESH_MS;
     const interval = window.setInterval(() => {
       void fetchRepos();
-    }, 5000);
+    }, refreshMs);
     return () => {
       window.clearTimeout(timeout);
       window.clearInterval(interval);
     };
-  }, [fetchRepos]);
+  }, [fetchRepos, fleetActive]);
 
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
+  const fleetControlLabel = !backendReachable
+    ? "Backend Offline"
+    : autonomousMode
+      ? "Stop Autonomous Fleet"
+      : stopping
+        ? "Stopping Fleet"
+        : cycleRunning
+          ? "Fleet Cycle Running"
+          : "Run Autonomous Fleet";
   const attentionItems = supervisorHealth?.status === "degraded"
     ? [
         ...supervisorHealth.degraded_services,
@@ -168,10 +257,10 @@ export default function Home() {
           <button
             className="fleet-toggle-btn"
             onClick={autonomousMode ? () => setAutonomousFleet(false) : runAutonomousFleet}
-            disabled={controlBusy || (!autonomousMode && (cycleRunning || !activeRepo))}
-            title={autonomousMode ? "Stop the autonomous fleet loop." : cycleRunning ? "A fleet cycle is already running." : "Run the autonomous fleet for the selected repository."}
+            disabled={!backendReachable || controlBusy || stopping || (!autonomousMode && (cycleRunning || !activeRepo))}
+            title={!backendReachable ? "The Exegol backend is not reachable." : autonomousMode ? "Stop the autonomous fleet loop." : stopping ? "The autonomous fleet loop is stopping." : cycleRunning ? "A fleet cycle is already running." : "Run the autonomous fleet for the selected repository."}
           >
-            {autonomousMode ? "Stop Autonomous Fleet" : cycleRunning ? "Fleet Cycle Running" : "Run Autonomous Fleet"}
+            {fleetControlLabel}
           </button>
         </div>
         {controlError && <div className="error-banner control-error">{controlError}</div>}
