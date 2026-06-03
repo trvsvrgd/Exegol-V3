@@ -6,6 +6,7 @@ import pytest
 
 os.environ["EXEGOL_DISABLE_SCHEDULER"] = "true"
 os.environ["EXEGOL_DISABLE_SLACK"] = "true"
+os.environ["EXEGOL_DISABLE_LOCAL_MODEL_UNLOAD"] = "true"
 os.environ["SLACK_BOT_TOKEN"] = ""
 os.environ["SLACK_APP_TOKEN"] = ""
 os.environ["SLACK_WEBHOOK_URL"] = ""
@@ -17,6 +18,7 @@ from handoff import SessionResult
 from orchestrator import ExegolOrchestrator
 from tools.backlog_manager import BacklogManager
 from tools.objective_manager import ObjectiveManager
+from tools.fleet_runtime_control import request_runtime_stop, resume_runtime
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ def orchestrator(tmp_path, monkeypatch):
                     }
                 ],
                 "global_settings": {
-                    "context_isolation": {"max_handoff_depth": 5},
+                    "context_isolation": {"max_handoff_depth": 8},
                     "compliance_monitoring": {},
                 },
             }
@@ -52,6 +54,7 @@ def orchestrator(tmp_path, monkeypatch):
     monkeypatch.setattr(ExegolOrchestrator, "_setup_cadence_engine", lambda self: None)
     monkeypatch.setattr(orchestrator_module.slack_manager, "setup_listener", lambda handler: None)
     monkeypatch.setattr(orchestrator_module.slack_manager, "post_message", lambda *args, **kwargs: None)
+    resume_runtime("test setup")
 
     orch = ExegolOrchestrator()
     return orch, repo_path, priority_file
@@ -85,6 +88,8 @@ def test_run_fleet_cycle_resets_running_flag_after_exception(orchestrator, monke
 
 def test_run_fleet_cycle_runs_due_scheduled_before_repo_dispatch(orchestrator, monkeypatch):
     orch, repo_path, _priority_file = orchestrator
+    (repo_path / "src").mkdir()
+    (repo_path / "src" / "main.py").write_text("print('ready')\n", encoding="utf-8")
     events = []
 
     monkeypatch.setattr(
@@ -262,6 +267,39 @@ def test_stop_request_suppresses_autonomous_handoff(orchestrator, monkeypatch):
     assert result.status_update == "idle"
 
 
+def test_stop_request_abandons_queued_agent_wake(orchestrator):
+    orch, _repo_path, _priority_file = orchestrator
+    orch.current_running_agent = {"id": "held", "agent_id": "developer_dex"}
+
+    try:
+        orch.request_fleet_stop("unit test queued stop")
+        acquired = orch.acquire_execution_lock("product_poe")
+    finally:
+        orch.current_running_agent = None
+        orch.clear_fleet_stop_request()
+        resume_runtime("test cleanup")
+
+    assert acquired is False
+    assert orch.pending_tasks == []
+
+
+def test_scheduled_task_skips_when_runtime_stopped(orchestrator):
+    orch, _repo_path, _priority_file = orchestrator
+    request_runtime_stop("unit test scheduler stop")
+
+    try:
+        result = orch._run_scheduled_task(
+            agent_id="product_poe",
+            summary="Should not run while stopped",
+            job_id="unit_job",
+        )
+    finally:
+        resume_runtime("test cleanup")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "fleet runtime stopped"
+
+
 def test_retry_blocked_repo_moves_config_and_state_to_idle(orchestrator):
     orch, repo_path, priority_file = orchestrator
     state_file = repo_path / ".exegol" / "fleet_state.json"
@@ -351,6 +389,18 @@ def test_retry_blocked_repo_clears_stale_heartbeat_file(orchestrator):
         ),
         encoding="utf-8",
     )
+    acknowledged_heartbeat = heartbeat_dir / "stale789.json"
+    acknowledged_heartbeat.write_text(
+        json.dumps(
+            {
+                "session_id": "stale789",
+                "agent_id": "quality_quigon",
+                "status": "stale",
+                "last_pulse": "2026-05-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
     state_file.write_text(
         json.dumps(
             {
@@ -370,8 +420,10 @@ def test_retry_blocked_repo_clears_stale_heartbeat_file(orchestrator):
 
     heartbeat = json.loads(heartbeat_file.read_text(encoding="utf-8"))
     second = json.loads(second_heartbeat.read_text(encoding="utf-8"))
+    acknowledged = json.loads(acknowledged_heartbeat.read_text(encoding="utf-8"))
     assert heartbeat["status"] == "cleared"
     assert second["status"] == "cleared"
+    assert acknowledged["status"] == "cleared"
     assert heartbeat["clear_reason"] == "Cleared from Workbench retry control."
 
 
@@ -510,12 +562,15 @@ def test_seeded_objective_advances_to_done_across_fleet_cycles(orchestrator, mon
     assert ObjectiveManager(str(repo_path)).load()["phase"] == "validating"
 
     assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
+    assert ObjectiveManager(str(repo_path)).load()["phase"] == "accepting"
+
+    assert orch.run_fleet_cycle(repo_path=str(repo_path)) is True
     objective = ObjectiveManager(str(repo_path)).load()
 
-    assert dispatched == ["product_poe", "developer_dex", "quality_quigon"]
+    assert dispatched == ["product_poe", "developer_dex", "quality_quigon", "uat_ulic"]
     assert objective["phase"] == "done"
     assert objective["status"] == "done"
-    assert objective["last_agent_id"] == "quality_quigon"
+    assert objective["last_agent_id"] == "uat_ulic"
     assert objective["last_result"]["outcome"] == "success"
 
     events = (repo_path / ".exegol" / "objective_events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -547,6 +602,40 @@ def test_objective_implementation_failure_transitions_to_retrying(orchestrator, 
     assert objective["status"] == "running"
     assert objective["last_agent_id"] == "developer_dex"
     assert objective["last_result"]["errors"] == ["synthetic implementation failure"]
+
+
+def test_objective_uat_failure_transitions_to_retrying_without_global_block(orchestrator, monkeypatch):
+    orch, repo_path, priority_file = orchestrator
+    manager = ObjectiveManager(str(repo_path))
+    manager.create_or_update(goal="Recover from UAT failure")
+    manager.transition("planning")
+    manager.transition("implementing", active_task_id="objective_loop_verification")
+    manager.transition("validating")
+    manager.transition("accepting")
+
+    def fake_wake(repo_info, routing, max_steps, agent_id=None, **kwargs):
+        return SessionResult(
+            agent_id=agent_id,
+            session_id="uat-failed",
+            outcome="failure",
+            output_summary="UAT acceptance gaps found.",
+            errors=["missing restart control"],
+        )
+
+    monkeypatch.setattr(orch, "wake_and_execute_agent", fake_wake)
+
+    orch.process_repo(orch._repo_info_for_path(str(repo_path)))
+
+    objective = ObjectiveManager(str(repo_path)).load()
+    config = json.loads(priority_file.read_text(encoding="utf-8"))
+    state = json.loads((repo_path / ".exegol" / "fleet_state.json").read_text(encoding="utf-8"))
+    assert objective["phase"] == "retrying"
+    assert objective["status"] == "running"
+    assert objective["last_agent_id"] == "uat_ulic"
+    assert objective["last_result"]["errors"] == ["missing restart control"]
+    assert config["repositories"][0]["agent_status"] == "idle"
+    assert state["status"] == "running"
+    assert "Retrying with developer_dex" in state["output_summary"]
 
 
 def test_objective_planning_failure_records_environment_blocker(orchestrator, monkeypatch):

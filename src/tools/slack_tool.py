@@ -8,6 +8,7 @@ from slack_sdk import WebClient
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from tools.egress_filter import EgressFilter
+from tools.fleet_runtime_control import is_runtime_stopped, runtime_stop_reason
 from dotenv import load_dotenv
 
 class SlackManager:
@@ -76,6 +77,10 @@ class SlackManager:
 
     def post_message(self, text: str, blocks: Optional[list] = None, channel: Optional[str] = None) -> str:
         """Sends a message to Slack using Bot Token (preferred) or Webhook (fallback)."""
+        if is_runtime_stopped():
+            reason = runtime_stop_reason()
+            print(f"[SlackManager] Suppressed Slack notification while fleet is stopped: {reason}")
+            return {"status": "suppressed", "mode": "fleet_stopped", "reason": reason}
         
         # 1. Try Bot Client
         if self.client:
@@ -373,13 +378,19 @@ def request_file_approval(file_path: str, action: str, reason: str, risk_score: 
     else:
         print(f"[Slack] Waiting up to {wait_timeout}s for response in Slack...")
         
-    if event.wait(timeout=wait_timeout):
-        result = slack_manager.approval_results.get(callback_id, "REJECTED")
-        print(f"[Slack] Received response: {result}")
-        return result
-    else:
-        print("[Slack] Approval timed out. Defaulting to REJECT.")
-        return "REJECTED"
+    start = time.time()
+    while True:
+        if is_runtime_stopped():
+            print("[Slack] Approval wait cancelled because the fleet was stopped.")
+            return "REJECTED"
+        remaining = None if wait_timeout is None else max(0.0, wait_timeout - (time.time() - start))
+        if remaining == 0:
+            print("[Slack] Approval timed out. Defaulting to REJECT.")
+            return "REJECTED"
+        if event.wait(timeout=1.0 if remaining is None else min(1.0, remaining)):
+            result = slack_manager.approval_results.get(callback_id, "REJECTED")
+            print(f"[Slack] Received response: {result}")
+            return result
 
 def post_hitl_request(item_id: str, task: str, context: str, category: str):
     """Broadcasts a HITL task from the unified queue to Slack and tracks the message ID."""

@@ -31,3 +31,34 @@ def test_sync_does_not_duplicate_existing_repo(tmp_path, monkeypatch):
 
     assert repo_discovery.sync_discovered_repositories(config, str(tmp_path)) == 0
     assert len(config["repositories"]) == 1
+
+
+def test_register_repository_adds_git_repo_with_defaults(tmp_path):
+    repo = tmp_path / "FreshGameRepo"
+    (repo / ".git").mkdir(parents=True)
+    config = {"repositories": []}
+
+    registered, added = repo_discovery.register_repository(config, str(repo))
+
+    assert added is True
+    assert registered["repo_path"] == str(repo.resolve())
+    assert registered["agent_status"] == "idle"
+    assert registered["model_routing_preference"] == "ollama"
+    assert config["repositories"] == [registered]
+
+    existing, added_again = repo_discovery.register_repository(config, str(repo))
+    assert added_again is False
+    assert existing == registered
+    assert len(config["repositories"]) == 1
+
+
+def test_register_repository_rejects_unmanaged_directory(tmp_path):
+    repo = tmp_path / "PlainDir"
+    repo.mkdir()
+
+    try:
+        repo_discovery.register_repository({"repositories": []}, str(repo))
+    except ValueError as exc:
+        assert ".git or .exegol" in str(exc)
+    else:
+        raise AssertionError("Expected unmanaged repo registration to fail")

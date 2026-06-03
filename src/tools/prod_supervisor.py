@@ -29,7 +29,7 @@ class ProdSupervisor:
         restart_frontend: Optional[Callable[[], bool]] = None,
         restart_scheduler: Optional[Callable[[], bool]] = None,
         now_fn: Optional[Callable[[], datetime.datetime]] = None,
-        heartbeat_ttl_seconds: int = 120,
+        heartbeat_ttl_seconds: int = 300,
         persist_blockers: bool = True,
     ):
         self.repo_path = os.path.abspath(repo_path)

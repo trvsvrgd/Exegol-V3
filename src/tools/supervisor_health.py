@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from tools.state_manager import StateManager
 
 
-DEFAULT_HEARTBEAT_TTL_SECONDS = 180
+DEFAULT_HEARTBEAT_TTL_SECONDS = 300
 DEFAULT_ENDPOINT_TIMEOUT_SECONDS = 2
 
 
@@ -87,10 +87,12 @@ def scan_heartbeats(repo_path: str, ttl_seconds: int = DEFAULT_HEARTBEAT_TTL_SEC
     """Inspect persisted heartbeat files and report stale active sessions."""
     heartbeat_dir = os.path.join(repo_path, ".exegol", "heartbeats")
     if not os.path.isdir(heartbeat_dir):
-        return _service("ok", "No active heartbeat directory found.", active=0, stale=0, sessions=[])
+        return _service("ok", "No active heartbeat directory found.", active=0, stale=0, historical_stale=0, total=0, sessions=[])
 
     sessions: List[Dict[str, Any]] = []
     stale_count = 0
+    active_count = 0
+    historical_stale_count = 0
     now = datetime.now()
 
     for filename in sorted(os.listdir(heartbeat_dir)):
@@ -105,41 +107,95 @@ def scan_heartbeats(repo_path: str, ttl_seconds: int = DEFAULT_HEARTBEAT_TTL_SEC
                 "session_id": filename.removesuffix(".json"),
                 "status": "unreadable",
                 "detail": f"{type(exc).__name__}: {exc}",
+                "blocking": True,
             })
             stale_count += 1
             continue
 
         last_pulse = data.get("last_pulse")
         age_seconds: Optional[float] = None
-        stale = data.get("status") == "zombie"
+        raw_status = data.get("status", "unknown")
+        blocking_stale = raw_status == "zombie"
+        historical_stale = raw_status == "stale"
         if last_pulse:
             try:
                 age_seconds = (now - datetime.fromisoformat(last_pulse)).total_seconds()
-                stale = stale or (data.get("status") == "active" and age_seconds > ttl_seconds)
+                blocking_stale = blocking_stale or (raw_status == "active" and age_seconds > ttl_seconds)
             except ValueError:
-                stale = True
+                blocking_stale = True
 
-        if stale:
+        if blocking_stale:
             stale_count += 1
+        elif historical_stale:
+            historical_stale_count += 1
+        elif raw_status == "active":
+            active_count += 1
 
         sessions.append({
             "session_id": data.get("session_id", filename.removesuffix(".json")),
             "agent_id": data.get("agent_id", "unknown"),
-            "status": "stale" if stale else data.get("status", "unknown"),
+            "status": "stale" if blocking_stale or historical_stale else raw_status,
+            "blocking": blocking_stale,
             "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
             "last_pulse": last_pulse,
         })
 
-    active_count = len(sessions)
+    total_count = len(sessions)
     if stale_count:
         return _service(
             "degraded",
-            f"{stale_count} stale heartbeat session(s) need review.",
+            f"{stale_count} active heartbeat session(s) need review.",
             active=active_count,
             stale=stale_count,
+            historical_stale=historical_stale_count,
+            total=total_count,
             sessions=sessions,
         )
-    return _service("ok", "Heartbeat files are current.", active=active_count, stale=0, sessions=sessions)
+
+    detail = "Heartbeat files are current."
+    if historical_stale_count:
+        detail = f"Heartbeat files are current; {historical_stale_count} stale heartbeat record(s) already acknowledged."
+    return _service(
+        "ok",
+        detail,
+        active=active_count,
+        stale=0,
+        historical_stale=historical_stale_count,
+        total=total_count,
+        sessions=sessions,
+    )
+
+
+def _acknowledge_stale_heartbeat_records(repo_path: str, stale_sessions: List[Dict[str, Any]]) -> None:
+    """Mark blocking stale heartbeat files as acknowledged so they do not re-block repeatedly."""
+    heartbeat_dir = os.path.join(repo_path, ".exegol", "heartbeats")
+    if not os.path.isdir(heartbeat_dir):
+        return
+
+    acknowledged_at = datetime.now().isoformat()
+    for session in stale_sessions:
+        session_id = session.get("session_id")
+        if not session_id or session.get("status") == "unreadable":
+            continue
+
+        heartbeat_path = os.path.join(heartbeat_dir, f"{session_id}.json")
+        if not os.path.exists(heartbeat_path):
+            continue
+
+        try:
+            with open(heartbeat_path, "r", encoding="utf-8") as f:
+                heartbeat = json.load(f)
+            if heartbeat.get("status") not in {"active", "zombie"}:
+                continue
+            heartbeat["status"] = "stale"
+            heartbeat.setdefault("stale_detected_at", acknowledged_at)
+            if session.get("age_seconds") is not None:
+                heartbeat["stale_age_seconds"] = session["age_seconds"]
+            heartbeat["acknowledge_reason"] = "Supervisor converted stale heartbeat to blocked fleet state."
+            with open(heartbeat_path, "w", encoding="utf-8") as f:
+                json.dump(heartbeat, f, indent=2)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[SupervisorHealth] Failed to acknowledge heartbeat {session_id}: {exc}")
 
 
 def read_fleet_state(repo_path: str) -> Dict[str, Any]:
@@ -165,13 +221,18 @@ def reconcile_stale_heartbeats(repo_path: str, heartbeat_health: Dict[str, Any])
 
     sm = StateManager(repo_path)
     existing = sm.read_fleet_state()
-    if existing.get("status") == "blocked" and existing.get("blocker_type") == "stale_heartbeat":
-        return existing
 
     stale_sessions = [
         session for session in heartbeat_health.get("sessions", [])
-        if session.get("status") in {"stale", "unreadable"}
+        if session.get("blocking") or session.get("status") == "unreadable"
     ]
+    if not stale_sessions:
+        return None
+
+    if existing.get("status") == "blocked" and existing.get("blocker_type") == "stale_heartbeat":
+        _acknowledge_stale_heartbeat_records(repo_path, stale_sessions)
+        return existing
+
     first = stale_sessions[0] if stale_sessions else {}
     agent_id = first.get("agent_id", "unknown")
     session_id = first.get("session_id", "")
@@ -194,6 +255,7 @@ def reconcile_stale_heartbeats(repo_path: str, heartbeat_health: Dict[str, Any])
         "blocker_type": "stale_heartbeat",
     }
     sm.write_fleet_state(state)
+    _acknowledge_stale_heartbeat_records(repo_path, stale_sessions)
     persist_supervisor_event(
         repo_path,
         "stale_session_blocked",

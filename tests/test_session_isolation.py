@@ -207,3 +207,45 @@ class TestSessionIsolation:
             )
             ids.add(ctx.session_id)
         assert len(ids) == 10, "All 10 session IDs should be unique"
+
+    def test_agent_declared_failure_is_preserved(self, tmp_repo, monkeypatch):
+        """Agents can reject work without raising an infrastructure exception."""
+        class ExplicitFailureAgent:
+            outcome = "failure"
+            errors = ["missing acceptance criterion"]
+            next_agent_id = "developer_dex"
+            regression_context = "UAT criteria failed"
+
+            def execute(self, _handoff):
+                return "Objective Acceptance: fail"
+
+        class FakeLLM:
+            model = "fake"
+
+        sm = SessionManager(log_every_session=False)
+        handoff = self._sign_handoff(HandoffContext(
+            repo_path=tmp_repo,
+            agent_id="uat_ulic",
+            task_id="fleet_cycle",
+            model_routing="ollama",
+            max_steps=10,
+        ))
+        monkeypatch.setattr(sm, "_create_fresh_instance", lambda *_args, **_kwargs: ExplicitFailureAgent())
+        monkeypatch.setattr(
+            "inference.inference_manager.InferenceManager.get_client",
+            staticmethod(lambda provider=None, model=None: FakeLLM()),
+        )
+
+        with monkeypatch.context() as m:
+            m.setattr(sm, "_get_agent_cooldown", lambda *_args, **_kwargs: 0.0)
+            result = sm.spawn_agent_session(
+                agent_id="uat_ulic",
+                module_path="agents.uat_ulic_agent",
+                class_name="UatUlicAgent",
+                handoff=handoff,
+            )
+
+        assert result.outcome == "failure"
+        assert result.errors == ["missing acceptance criterion"]
+        assert result.next_agent_id == "developer_dex"
+        assert result.regression_context == "UAT criteria failed"

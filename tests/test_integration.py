@@ -12,7 +12,7 @@ import hashlib
 from handoff import HandoffContext  # type: ignore
 from agents.registry import AGENT_REGISTRY  # type: ignore
 
-def test_agent_spawning_with_llm():
+def test_agent_spawning_with_llm(monkeypatch):
     sm = session_manager.SessionManager(log_every_session=False)
     
     # Mock handoff
@@ -39,12 +39,12 @@ def test_agent_spawning_with_llm():
     
     # Mocking the actual LLM generation to avoid network calls
     from inference.llm_client import LLMClient, OllamaClient  # type: ignore
-    LLMClient._generate_ollama = MagicMock(return_value="Mocked response")
-    OllamaClient.generate = MagicMock(return_value="Mocked response")
+    monkeypatch.setattr(LLMClient, "_generate_ollama", MagicMock(return_value="Mocked response"), raising=False)
+    monkeypatch.setattr(OllamaClient, "generate", MagicMock(return_value="Mocked response"))
     
     # Mock web search to prevent external network calls during agent execution
     import tools.web_search
-    tools.web_search.web_search = MagicMock(return_value=[])
+    monkeypatch.setattr(tools.web_search, "web_search", MagicMock(return_value=[]))
     
     result = sm.spawn_agent_session(
         agent_id="quality_quigon",

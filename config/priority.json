@@ -80,6 +80,33 @@
       "max_steps_policy": 30,
       "requires_slack_approval_for_deletes": true,
       "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\Exegol_v3\\scratch\\live_zero_to_one_demo_final_20260601_151513",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 30,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\meal-stream",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 30,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
+    },
+    {
+      "repo_path": "C:\\Users\\travi\\Documents\\Python_Projects\\meal-stream-1",
+      "priority": 10,
+      "model_routing_preference": "ollama",
+      "agent_status": "idle",
+      "max_steps_policy": 30,
+      "requires_slack_approval_for_deletes": true,
+      "daily_commit_routine": true
     }
   ],
   "global_settings": {
@@ -89,7 +116,7 @@
       "enabled": true,
       "fresh_instance_per_execution": true,
       "max_handoff_fields": 7,
-      "max_handoff_depth": 5,
+      "max_handoff_depth": 8,
       "log_every_session": true
     },
     "rate_limits": {

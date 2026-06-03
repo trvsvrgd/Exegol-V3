@@ -9,6 +9,14 @@ from tools.prompt_generator import generate_active_prompt
 from tools.metrics_manager import SuccessMetricsManager
 from tools.heartbeat_monitor import HeartbeatMonitor
 from tools.state_manager import StateManager
+from tools.objective_manager import ObjectiveManager
+from tools.poe_roadmap_brief import save_poe_roadmap_brief
+from tools.thrawn_intel_manager import ThrawnIntelManager
+from tools.zero_to_one_onboarding import (
+    ZERO_TO_ONE_TASK_ID,
+    build_zero_to_one_poe_plan,
+    is_zero_to_one_repo,
+)
 
 
 class ProductPoeAgent:
@@ -147,6 +155,77 @@ class ProductPoeAgent:
             sm.write_json(".exegol/user_action_required.json", hitl_tasks)
             # Note: Markdown will be cleaned up by Vader on his next daily run
 
+    def _define_zero_to_one_mvp(self, repo_path: str, bm: BacklogManager):
+        """Let Poe define MVP requirements, roadmap, and the first build task."""
+        manager = ObjectiveManager(repo_path)
+        objective = manager.load()
+        goal = str(objective.get("goal") or "").strip()
+        phase = str(objective.get("phase") or "").lower()
+        if not goal or phase != "planning":
+            return None
+
+        existing_task = bm.get_task(ZERO_TO_ONE_TASK_ID)
+        criteria_ready = bool(objective.get("success_criteria"))
+        if existing_task and criteria_ready:
+            if existing_task.get("status") in {"todo", "backlogged", "pending_prioritization"}:
+                bm.update_task_status(ZERO_TO_ONE_TASK_ID, "in_progress")
+                existing_task["status"] = "in_progress"
+            return existing_task
+
+        if not existing_task and not is_zero_to_one_repo(repo_path):
+            return None
+
+        plan = build_zero_to_one_poe_plan(repo_path, goal)
+        objective["success_criteria"] = plan["success_criteria"]
+        objective["constraints"] = plan["constraints"]
+        manager.save(objective, event_type="poe_mvp_requirements_defined")
+        self._write_zero_to_one_roadmap(repo_path, goal, plan)
+
+        task = {
+            "id": ZERO_TO_ONE_TASK_ID,
+            "summary": f"Build the first runnable MVP for: {goal}",
+            "priority": "critical",
+            "type": "feature",
+            "status": "in_progress",
+            "source_agent": "product_poe",
+            "target_agent": "developer_dex",
+            "rationale": plan["rationale"],
+            "acceptance_criteria": plan["success_criteria"],
+            "post_mvp_roadmap": plan["post_mvp_roadmap"],
+        }
+        if existing_task:
+            bm.update_task(ZERO_TO_ONE_TASK_ID, task)
+        else:
+            bm.add_task(task)
+        return bm.get_task(ZERO_TO_ONE_TASK_ID) or task
+
+    @staticmethod
+    def _write_zero_to_one_roadmap(repo_path: str, goal: str, plan: dict) -> None:
+        constraints = plan["constraints"]
+        content = [
+            "# Zero-to-One Product Roadmap",
+            "",
+            "## MVP",
+            goal,
+            "",
+            "## Poe-Defined Success Requirements",
+            *[f"- {item}" for item in plan["success_criteria"]],
+            "",
+            "## Human Constraints",
+            *([f"- {item}" for item in constraints] if constraints else ["- None specified."]),
+            "",
+            "## Post-MVP Roadmap",
+            *[f"- {item}" for item in plan["post_mvp_roadmap"]],
+            "",
+        ]
+        ThrawnIntelManager(repo_path).save_roadmap("\n".join(content))
+
+    def _refresh_roadmap_brief(self, repo_path: str) -> None:
+        try:
+            save_poe_roadmap_brief(repo_path)
+        except Exception as exc:
+            print(f"[{self.name}] Failed to refresh Poe roadmap brief: {exc}")
+
     def execute(self, handoff):
         """Execute with a clean HandoffContext — no prior session memory required.
 
@@ -181,13 +260,18 @@ class ProductPoeAgent:
                 # Save to backlog for tracking
                 bm.add_task(task)
             else:
-                # 1.5 Salvage HITL tasks from Vader
-                self._salvage_hitl_tasks(repo_path, bm)
-                
-                grooming_result = groom_backlog(repo_path)
-                task = grooming_result["task"]
-                source = grooming_result["source"]
-                print(f"[{self.name}] {grooming_result['summary']}")
+                task = self._define_zero_to_one_mvp(repo_path, bm)
+                if task:
+                    source = "poe_zero_to_one_planning"
+                    print(f"[{self.name}] Defined zero-to-one MVP requirements and selected {task.get('id')}.")
+                else:
+                    # 1.5 Salvage HITL tasks from Vader
+                    self._salvage_hitl_tasks(repo_path, bm)
+
+                    grooming_result = groom_backlog(repo_path)
+                    task = grooming_result["task"]
+                    source = grooming_result["source"]
+                    print(f"[{self.name}] {grooming_result['summary']}")
 
             if not task:
                 print(f"[{self.name}] No actionable tasks found. Falling back to maintenance.")
@@ -198,6 +282,8 @@ class ProductPoeAgent:
                     "status": "todo"
                 }
                 source = "fallback"
+
+            self._refresh_roadmap_brief(repo_path)
 
             # 2. Prompt Generation (Externalized Tool)
             # Pulse heartbeat (arch_agent_heartbeat)

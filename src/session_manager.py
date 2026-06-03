@@ -21,6 +21,7 @@ from typing import Optional, Any, Dict
 from handoff import HandoffContext, SessionResult
 from tools.heartbeat_monitor import HeartbeatMonitor
 from tools.fleet_logger import failure_backlog_task_id, log_interaction
+from tools.fleet_runtime_control import FleetStopRequested, raise_if_runtime_stopped
 from tools.state_manager import StateManager
 
 
@@ -67,6 +68,14 @@ class SessionManager:
             agent_id=agent_id,
             session_id=handoff.session_id,
         )
+        try:
+            raise_if_runtime_stopped("Agent session skipped")
+        except FleetStopRequested as exc:
+            result.outcome = "cancelled"
+            result.status_update = "idle"
+            result.output_summary = f"Fleet stop requested before {agent_id} started."
+            result.state_changes["runtime_stop"] = {"reason": str(exc)}
+            return result
 
         # --- SECURITY GUARD: Trust System (feat_agent_trust_system) ---
         from tools.trust_manager import TrustManager
@@ -150,14 +159,21 @@ class SessionManager:
             os.environ["EXEGOL_ACTIVE_SESSION_ID"] = handoff.session_id
             
             output = agent_instance.execute(handoff)
+            raise_if_runtime_stopped("Agent session cancelled after execution")
             
             os.environ.pop("EXEGOL_ACTIVE_AGENT", None)
             os.environ.pop("EXEGOL_ACTIVE_REPO", None)
             os.environ.pop("EXEGOL_ACTIVE_SESSION_ID", None)
 
-            result.outcome = "success"
+            result.outcome = getattr(agent_instance, "outcome", "success")
             result.output_summary = str(output) if output else ""
             result.steps_used = getattr(agent_instance, "_steps_used", 1)
+            explicit_errors = getattr(agent_instance, "errors", [])
+            if isinstance(explicit_errors, list):
+                result.errors = [str(error) for error in explicit_errors if str(error).strip()]
+            elif explicit_errors:
+                result.errors = [str(explicit_errors)]
+            result.status_update = getattr(agent_instance, "status_update", "") or result.status_update
             
             # Capture tracking metrics
             result.prompt_count = llm_client.prompt_count
@@ -178,6 +194,13 @@ class SessionManager:
             if result.regression_context:
                 print(f"[SessionManager] Regression context captured: {result.regression_context}")
 
+        except FleetStopRequested as exc:
+            result.outcome = "cancelled"
+            result.status_update = "idle"
+            result.errors = []
+            result.output_summary = f"Fleet stop requested; cancelled {agent_id} session."
+            result.state_changes["runtime_stop"] = {"reason": str(exc)}
+            print(f"[SessionManager] {result.output_summary}")
         except Exception as exc:
             result.outcome = "failure"
             error_details = f"{type(exc).__name__}: {exc}"
@@ -201,11 +224,14 @@ class SessionManager:
                     print(f"[SessionManager] Failed to route fatal error: {route_err}")
 
         finally:
+            os.environ.pop("EXEGOL_ACTIVE_AGENT", None)
+            os.environ.pop("EXEGOL_ACTIVE_REPO", None)
+            os.environ.pop("EXEGOL_ACTIVE_SESSION_ID", None)
             elapsed = time.time() - start_time
             result.duration_seconds = elapsed
 
             # Update active state to finished status (success -> done, failure -> blocked)
-            status_map = {"success": "done", "failure": "blocked"}
+            status_map = {"success": "done", "failure": "blocked", "cancelled": "idle"}
             self._write_active_state(
                 repo_path=handoff.repo_path,
                 agent_id=agent_id,

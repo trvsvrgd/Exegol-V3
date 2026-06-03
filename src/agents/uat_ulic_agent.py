@@ -4,6 +4,7 @@ from tools.fleet_logger import log_interaction
 from tools.metrics_manager import SuccessMetricsManager
 from tools.playwright_recorder import record_interaction
 from tools.backlog_manager import BacklogManager
+from tools.objective_manager import ObjectiveManager
 import datetime
 
 class UatUlicAgent:
@@ -15,6 +16,8 @@ class UatUlicAgent:
         self.max_steps = 15
         self.tools = ["playwright_recorder", "video_clipper", "uat_sandbox", "slack_notifier", "web_search", "backlog_writer"]
         self.metrics_manager = SuccessMetricsManager(os.getcwd())
+        self.outcome = "success"
+        self.errors = []
         self.success_metrics = {
             "ui_bugs_detected": {
                 "description": "Number of UI bugs detected during autonomous computer use sessions",
@@ -94,6 +97,25 @@ to satisfy documentation requirements.
         else:
             results.append("No actionable UI anomalies detected.")
 
+        acceptance = self._evaluate_objective_acceptance(repo_path)
+        results.extend(acceptance["results"])
+        if acceptance["failures"]:
+            self.outcome = "failure"
+            self.errors = acceptance["failures"]
+            bm = BacklogManager(repo_path)
+            task_id = f"uat_acceptance_fix_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+            bm.add_task({
+                "id": task_id,
+                "summary": "Fix UAT acceptance gaps against Poe's success requirements.",
+                "priority": "critical",
+                "type": "bug_fix",
+                "status": "todo",
+                "source_agent": self.name,
+                "target_agent": "developer_dex",
+                "rationale": "\n".join(acceptance["failures"]),
+                "created_at": datetime.datetime.now().isoformat(),
+            })
+
         # 2. Video Loop Generation
         print(f"[{self.name}] Generating video loop for README representation...")
         try:
@@ -118,15 +140,123 @@ to satisfy documentation requirements.
         metrics = self._calculate_success_metrics(repo_path)
         log_interaction(
             agent_id=self.name,
-            outcome="success",
+            outcome=self.outcome,
             task_summary=summary,
             repo_path=repo_path,
             steps_used=2,
             duration_seconds=15.0,
             session_id=handoff.session_id,
+            errors=self.errors,
             metrics=metrics
         )
 
         # Handoff to product or backlog manager to handle the bugs
         self.next_agent_id = "architect_artoo"
         return summary
+
+    def _evaluate_objective_acceptance(self, repo_path: str) -> dict:
+        """Deterministically check repo output against Poe's objective criteria."""
+        objective = ObjectiveManager(repo_path).load()
+        goal = str(objective.get("goal") or "").strip()
+        criteria = [str(item).strip() for item in objective.get("success_criteria", []) if str(item).strip()]
+        if not goal and not criteria:
+            return {"results": ["Objective Acceptance: skipped (no active objective)."], "failures": []}
+
+        content = self._repo_text_corpus(repo_path)
+        files = self._repo_files(repo_path)
+        failures = []
+        checks = []
+        objective_text = " ".join([goal] + criteria).lower()
+
+        if "game" in objective_text or "browser" in objective_text:
+            required = {"index.html", "styles.css", "src/game.js", "README.md"}
+            missing = sorted(required - files)
+            if missing:
+                failures.append(f"Missing required zero-to-one game files: {', '.join(missing)}")
+            else:
+                checks.append("required browser-game files present")
+
+        for criterion in criteria:
+            failure = self._criterion_failure(criterion, content, files)
+            if failure:
+                failures.append(f"{criterion}: {failure}")
+            else:
+                checks.append(criterion)
+
+        report = {
+            "goal": goal,
+            "checked_criteria": criteria,
+            "passed_checks": checks,
+            "failures": failures,
+            "status": "fail" if failures else "pass",
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        report_path = os.path.join(repo_path, ".exegol", "uat_acceptance_report.json")
+        try:
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=4)
+        except Exception as exc:
+            failures.append(f"Could not write UAT acceptance report: {exc}")
+
+        if failures:
+            return {
+                "results": [f"Objective Acceptance: fail ({len(failures)} gap(s) against Poe criteria)."],
+                "failures": failures,
+            }
+        return {
+            "results": [f"Objective Acceptance: pass ({len(checks)} check(s) matched Poe criteria)."],
+            "failures": [],
+        }
+
+    @staticmethod
+    def _repo_files(repo_path: str) -> set:
+        ignored_dirs = {".exegol", ".git", "node_modules", "__pycache__", ".pytest_cache"}
+        files = set()
+        for current_root, dirnames, filenames in os.walk(repo_path):
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in ignored_dirs]
+            for filename in filenames:
+                rel_path = os.path.relpath(os.path.join(current_root, filename), repo_path)
+                files.add(rel_path.replace("\\", "/"))
+        return files
+
+    @staticmethod
+    def _repo_text_corpus(repo_path: str) -> str:
+        text_extensions = {".html", ".css", ".js", ".md", ".json", ".txt", ".py", ".ts", ".tsx"}
+        ignored_dirs = {".exegol", ".git", "node_modules", "__pycache__", ".pytest_cache"}
+        chunks = []
+        for current_root, dirnames, filenames in os.walk(repo_path):
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in ignored_dirs]
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in text_extensions:
+                    continue
+                path = os.path.join(current_root, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        chunks.append(f.read(20000))
+                except Exception:
+                    continue
+        return "\n".join(chunks).lower()
+
+    @staticmethod
+    def _criterion_failure(criterion: str, content: str, files: set) -> str:
+        text = criterion.lower()
+        if "runnable application" in text:
+            has_entrypoint = bool({"index.html", "README.md"} & files) or any(path.startswith("src/") for path in files)
+            return "" if has_entrypoint else "No obvious runnable entrypoint or source files found."
+        if "instructions" in text or "fresh checkout" in text:
+            if "README.md" not in files:
+                return "README.md is missing."
+            return "" if any(token in content for token in ("open `index.html`", "run", "start", "install")) else "README does not include clear run instructions."
+        if "playable loop" in text or "score" in text or "win" in text or "loss" in text:
+            missing = []
+            if not any(token in content for token in ("score", "points", "progress")):
+                missing.append("score/progress feedback")
+            if not any(token in content for token in ("start", "restart", "reset")):
+                missing.append("start/restart controls")
+            if not any(token in content for token in ("victory", "win", "loss", "game over", "final score")):
+                missing.append("win/loss feedback")
+            return "" if not missing else "Missing " + ", ".join(missing) + "."
+        if text.startswith("designed for:"):
+            return "" if any(token in content for token in ("demo", "player", "user", "game", "local")) else "No visible product affordance for the target user."
+        return ""

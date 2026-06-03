@@ -6,6 +6,7 @@ import BacklogBoard from "../components/BacklogBoard";
 import QuickAddTask from "../components/QuickAddTask";
 import ThrawnInteraction from "../components/ThrawnInteraction";
 import ActiveFleetConsole from "../components/ActiveFleetConsole";
+import PoeRoadmapBrief from "../components/PoeRoadmapBrief";
 
 import { apiGet, apiPost, getLocalActiveRepo, setLocalActiveRepo } from "../app/api-client";
 
@@ -59,6 +60,9 @@ export default function Home() {
   const [controlMessage, setControlMessage] = useState<string | null>(null);
   const [supervisorHealth, setSupervisorHealth] = useState<SupervisorHealth | null>(null);
   const [backendReachable, setBackendReachable] = useState<boolean>(true);
+  const [repoPathInput, setRepoPathInput] = useState<string>("");
+  const [repoRegistering, setRepoRegistering] = useState<boolean>(false);
+  const [repoRegisterMessage, setRepoRegisterMessage] = useState<string | null>(null);
   const fleetActive = autonomousMode || cycleRunning || stopping;
   const statusRefreshActive = fleetActive || !backendReachable;
 
@@ -230,16 +234,35 @@ export default function Home() {
     };
   }, [fetchRepos, fleetActive]);
 
+  const registerRepository = async () => {
+    const repoPath = repoPathInput.trim();
+    if (!repoPath) return;
+    setRepoRegistering(true);
+    setRepoRegisterMessage(null);
+    try {
+      const result = await apiPost<{ status: string; repo: Repo }>("/repos/register", { repo_path: repoPath });
+      setActiveRepo(result.repo.repo_path);
+      setLocalActiveRepo(result.repo.repo_path);
+      setRepoPathInput("");
+      setRepoRegisterMessage(result.status === "added" ? "Repository registered." : "Repository already registered.");
+      await fetchRepos();
+    } catch (err) {
+      console.error("Failed to register repository:", err);
+      setRepoRegisterMessage("Repository registration failed. Confirm the path exists and contains .git.");
+    } finally {
+      setRepoRegistering(false);
+    }
+  };
+
   const activeRepoMeta = repos.find((repo) => repo.repo_path === activeRepo);
+  const stopControlActive = autonomousMode || stopping || cycleRunning;
   const fleetControlLabel = !backendReachable
     ? "Backend Offline"
-    : autonomousMode
+    : stopping
+      ? "Force Stop Fleet"
+      : stopControlActive
       ? "Stop Autonomous Fleet"
-      : stopping
-        ? "Stopping Fleet"
-        : cycleRunning
-          ? "Fleet Cycle Running"
-          : "Run Autonomous Fleet";
+      : "Run Autonomous Fleet";
   const attentionItems = supervisorHealth?.status === "degraded"
     ? [
         ...supervisorHealth.degraded_services,
@@ -256,9 +279,9 @@ export default function Home() {
         <div className="fleet-controls" style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
           <button
             className="fleet-toggle-btn"
-            onClick={autonomousMode ? () => setAutonomousFleet(false) : runAutonomousFleet}
-            disabled={!backendReachable || controlBusy || stopping || (!autonomousMode && (cycleRunning || !activeRepo))}
-            title={!backendReachable ? "The Exegol backend is not reachable." : autonomousMode ? "Stop the autonomous fleet loop." : stopping ? "The autonomous fleet loop is stopping." : cycleRunning ? "A fleet cycle is already running." : "Run the autonomous fleet for the selected repository."}
+            onClick={stopControlActive ? () => setAutonomousFleet(false) : runAutonomousFleet}
+            disabled={!backendReachable || controlBusy || (!stopControlActive && !activeRepo)}
+            title={!backendReachable ? "The Exegol backend is not reachable." : stopControlActive ? "Stop autonomous fleet work and release local model resources." : "Run the autonomous fleet for the selected repository."}
           >
             {fleetControlLabel}
           </button>
@@ -299,6 +322,28 @@ export default function Home() {
               );
             })}
           </div>
+          <div className="repo-register">
+            <input
+              type="text"
+              value={repoPathInput}
+              onChange={(event) => setRepoPathInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void registerRepository();
+                }
+              }}
+              placeholder="Paste cloned GitHub repo path"
+              aria-label="Repository path"
+            />
+            <button
+              type="button"
+              onClick={registerRepository}
+              disabled={repoRegistering || !repoPathInput.trim()}
+            >
+              {repoRegistering ? "Registering" : "Register Repo"}
+            </button>
+          </div>
+          {repoRegisterMessage && <div className="repo-register-message">{repoRegisterMessage}</div>}
         </div>
 
         {activeRepoMeta ? (
@@ -359,6 +404,7 @@ export default function Home() {
                   <h3>Product Management & Backlog</h3>
                   <p>Define user intents and manage the development queue.</p>
                 </div>
+                <PoeRoadmapBrief repoPath={activeRepo} />
                 <QuickAddTask repoPath={activeRepo} onTaskAdded={fetchRepos} />
                 <BacklogBoard repoPath={activeRepo} />
               </div>
@@ -469,6 +515,43 @@ export default function Home() {
           display: flex;
           flex-wrap: wrap;
           gap: 1rem;
+        }
+
+        .repo-register {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 0.75rem;
+          margin-top: 1rem;
+        }
+
+        .repo-register input {
+          min-width: 0;
+          background: rgba(0, 0, 0, 0.28);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 6px;
+          color: #f9fafb;
+          padding: 0.75rem 0.85rem;
+        }
+
+        .repo-register button {
+          background: rgba(59, 130, 246, 0.16);
+          border: 1px solid rgba(96, 165, 250, 0.45);
+          border-radius: 6px;
+          color: #bfdbfe;
+          cursor: pointer;
+          font-weight: 700;
+          padding: 0.75rem 0.95rem;
+        }
+
+        .repo-register button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
+        .repo-register-message {
+          color: #cbd5e1;
+          font-size: 0.82rem;
+          margin-top: 0.55rem;
         }
 
         .repo-pill {

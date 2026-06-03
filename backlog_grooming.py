@@ -6,7 +6,70 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 from tools.backlog_manager import BacklogManager
 
+import json
+from config.app_definition_schema import validate_schema
 def groom_backlog(execute: bool = False):
+    db_path = os.path.join(".exegol", "backlog.db")
+    if not os.path.exists(db_path):
+        print(f"Error: Database not found at {db_path}")
+        return
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Get all tasks
+    cursor.execute("SELECT id, summary, priority, type, status, source_agent, archived_at FROM tasks")
+    rows = cursor.fetchall()
+
+    to_delete = []
+    to_keep = []
+
+    for row in rows:
+        tid, summary, priority, ttype, status, source_agent, archived_at = row
+        try:
+            task_data = json.loads(row[5])
+            validate_schema(task_data)
+            # Add task processing logic here
+            to_keep.append({"id": tid, "summary": summary, "priority": priority, "type": ttype, "status": status, "source_agent": source_agent, "archived_at": archived_at})
+        except (json.JSONDecodeError, ValidationError) as e:
+            print(f'Task validation error for {tid}: {e}')
+            to_delete.append((tid, summary))
+
+    print(f"Total tasks in database: {len(rows)}")
+    print(f"Tasks identified for removal: {len(to_delete)}")
+    print(f"Tasks to keep: {len(to_keep)}")
+
+    if not execute:
+        print("\n--- DRY RUN: Tasks that will be KEPT and ORGANIZED ---")
+        for idx, task in enumerate(to_keep):
+            print(f'  [KEEP] Rank {idx}: ID={task["id"]} | Summary={task["summary"]}')
+        print("\nTo apply these changes, run with the execute flag: python backlog_grooming.py --execute")
+        conn.close()
+        return
+
+    # Delete junk tasks
+    print("\nExecuting database cleanup...")
+    delete_query = "DELETE FROM tasks WHERE id = ?"
+    for tid, _ in to_delete:
+        cursor.execute(delete_query, (tid,))
+
+    # Priority order for re-ranking the remaining actual tasks
+    priority_order = [...]
+    rank_map = {tid: idx for idx, tid in enumerate(priority_order)}
+    for task in to_keep:
+        tid = task["id"]
+        rank = rank_map.get(tid, 999)
+        archived_at = task["archived_at"]
+        cursor.execute("UPDATE tasks SET rank = ?, archived_at = ? WHERE id = ?", (rank, archived_at, tid))
+
+    conn.commit()
+    conn.close()
+    print("Database updates committed.")
+
+    # Sync back to json files
+    bm = BacklogManager(".")
+    bm._sync_to_json()
+    print("Grooming completed and synchronized successfully.")
     db_path = os.path.join(".exegol", "backlog.db")
     if not os.path.exists(db_path):
         print(f"Error: Database not found at {db_path}")

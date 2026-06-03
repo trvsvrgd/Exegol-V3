@@ -28,7 +28,7 @@ class TestLoopGuard(unittest.TestCase):
         
         # Create a dummy mock_priority.json
         with open('tests/mock_priority.json', 'w') as f:
-            f.write('{"repositories": [{"repo_path": "test_repo", "priority": 1}], "global_settings": {"context_isolation": {"max_handoff_depth": 5}}}')
+            f.write('{"repositories": [{"repo_path": "test_repo", "priority": 1}], "global_settings": {"context_isolation": {"max_handoff_depth": 8}}}')
             
         self.orchestrator = ExegolOrchestrator()
         self.repo_info = {

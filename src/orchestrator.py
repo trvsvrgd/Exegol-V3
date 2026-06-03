@@ -19,8 +19,15 @@ from handoff import HandoffContext, SessionResult
 from session_manager import SessionManager
 from tools.slack_tool import slack_manager
 from tools.fleet_logger import log_interaction
+from tools.fleet_runtime_control import (
+    request_runtime_stop,
+    resume_runtime,
+    is_runtime_stopped,
+    unload_local_models_async,
+)
 from tools.state_manager import StateManager
 from tools.objective_manager import ObjectiveManager
+from tools.zero_to_one_onboarding import activate_zero_to_one_objective, is_zero_to_one_repo, zero_to_one_status
 
 PRIORITY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'priority.json')
 HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'job_history.json')
@@ -98,8 +105,12 @@ class ExegolOrchestrator:
         """Request the active fleet cycle to stop before any further dispatch."""
         event = self._fleet_stop_event()
         event.set()
+        request_runtime_stop(reason)
+        unload_local_models_async(reason)
         was_running = bool(getattr(self, "is_running_fleet", False))
         self.is_running_fleet = False
+        with self.queue_condition:
+            self.queue_condition.notify_all()
         print(f"[Orchestrator] Fleet stop requested: {reason}")
         return was_running
 
@@ -118,9 +129,20 @@ class ExegolOrchestrator:
             self.pending_tasks.append(ticket)
             self.pending_tasks.sort(key=lambda x: x["priority"])
             while self.current_running_agent is not None or self.pending_tasks[0]["id"] != ticket["id"]:
-                self.queue_condition.wait()
+                if self.is_fleet_stop_requested():
+                    self.pending_tasks = [item for item in self.pending_tasks if item["id"] != ticket["id"]]
+                    self.queue_condition.notify_all()
+                    print(f"[Orchestrator] Stop requested; abandoning queued wake for {agent_id}.")
+                    return False
+                self.queue_condition.wait(timeout=0.5)
+            if self.is_fleet_stop_requested():
+                self.pending_tasks = [item for item in self.pending_tasks if item["id"] != ticket["id"]]
+                self.queue_condition.notify_all()
+                print(f"[Orchestrator] Stop requested; refusing wake for {agent_id}.")
+                return False
             self.current_running_agent = ticket
             self.pending_tasks.pop(0)
+            return True
 
     def release_execution_lock(self):
         with self.queue_condition:
@@ -455,6 +477,10 @@ class ExegolOrchestrator:
 
     def _scheduled_trigger(self, agent_id: str, summary: str, job_id: str = None):
         """Bridge between schedule library and the orchestration loop."""
+        if is_runtime_stopped():
+            self._record_scheduler_event("scheduled_job_skipped", job_id or agent_id, "fleet runtime is stopped")
+            return
+
         def run_task():
             self._run_scheduled_task(agent_id=agent_id, summary=summary, job_id=job_id)
 
@@ -468,6 +494,9 @@ class ExegolOrchestrator:
         target: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         print(f"\n[Scheduler] Triggering scheduled task: {summary} ({agent_id})")
+        if is_runtime_stopped():
+            print("[Scheduler] Fleet runtime is stopped; skipping scheduled task.")
+            return {"status": "skipped", "reason": "fleet runtime stopped", "job_id": job_id, "agent_id": agent_id}
         target = target or self.active_target or self.get_highest_priority_task()
         if not target:
             print("[Scheduler] No target repository found for scheduled task.")
@@ -670,7 +699,7 @@ class ExegolOrchestrator:
     def _write_fleet_state(self, repo_path: str, status: str, active_agent: str = None,
                            session_id: str = "", handoff_chain: List[str] = None,
                            next_agent_id: str = "", errors: List[str] = None,
-                           output_summary: str = ""):
+                           output_summary: str = "", status_detail: str = ""):
         """Writes a truthful repo-level state even when no agent session owns the failure."""
         if not repo_path:
             return
@@ -696,6 +725,8 @@ class ExegolOrchestrator:
                 "retry_available": status == "blocked",
                 "failure_logged_at": datetime.now().isoformat() if status == "blocked" else "",
             }
+            if status_detail:
+                state_data["status_detail"] = status_detail
             sm.write_fleet_state(state_data)
         except Exception as e:
             print(f"[Status Update] Failed to write fleet_state.json: {e}")
@@ -858,7 +889,7 @@ class ExegolOrchestrator:
             try:
                 with open(heartbeat_path, "r", encoding="utf-8") as f:
                     heartbeat = json.load(f)
-                if heartbeat.get("status") in {"active", "zombie"}:
+                if heartbeat.get("status") in {"active", "zombie", "stale"}:
                     heartbeat["status"] = "cleared"
                     heartbeat["cleared_at"] = datetime.now().isoformat()
                     heartbeat["clear_reason"] = "Cleared from Workbench retry control."
@@ -917,6 +948,9 @@ class ExegolOrchestrator:
             
             fleet_triggered = False
             for repo in active_repos:
+                if is_runtime_stopped():
+                    fleet_triggered = False
+                    break
                 repo_path = repo.get("repo_path")
                 if not repo_path:
                     continue
@@ -968,11 +1002,15 @@ class ExegolOrchestrator:
             return False
 
         print("\nStarting Fleet Cycle...")
+        resume_runtime("fleet cycle starting")
         self.clear_fleet_stop_request()
         self.is_running_fleet = True
         all_success = True
         try:
-            if include_due_scheduled:
+            defer_scheduled = bool(repo_path) and self._should_defer_scheduled_for_zero_to_one(repo_path)
+            if include_due_scheduled and defer_scheduled:
+                print("[Scheduler] Skipping due scheduled jobs until zero-to-one onboarding completes.")
+            elif include_due_scheduled:
                 due_result = self.run_due_scheduled_agents(
                     repo_path=repo_path,
                     trigger_source=trigger_source,
@@ -1052,6 +1090,21 @@ class ExegolOrchestrator:
             "model_routing_preference": os.getenv("LLM_PROVIDER", "ollama"),
         }
 
+    def _should_defer_scheduled_for_zero_to_one(self, repo_path: str) -> bool:
+        try:
+            onboarding = zero_to_one_status(repo_path)
+            if onboarding.get("action") in {"kickoff", "wait", "activate"}:
+                return True
+            objective = ObjectiveManager(repo_path).load()
+            has_active_objective = bool(str(objective.get("goal") or "").strip())
+            phase = str(objective.get("phase") or "").lower()
+            objective_status = str(objective.get("status") or "").lower()
+            if has_active_objective and phase != "done" and objective_status in {"running", "paused"}:
+                return True
+            return is_zero_to_one_repo(repo_path) and has_active_objective and phase != "done"
+        except Exception as exc:
+            print(f"[Onboarding] Failed to inspect zero-to-one status before scheduled jobs: {exc}")
+            return False
 
     def process_repo(self, repo_info: Dict[str, Any]):
         """Decides which agent to wake for a given repo based on its current state."""
@@ -1071,9 +1124,42 @@ class ExegolOrchestrator:
         # Check if .exegol exists, otherwise trigger Thrawn (onboarding)
         exegol_dir = os.path.join(repo_path, ".exegol")
         if not os.path.exists(exegol_dir):
+            if self._should_defer_scheduled_for_zero_to_one(repo_path):
+                self._start_zero_to_one_onboarding(repo_info)
+                return
+
             print(f"[Onboarding] No .exegol found. Triggering ThoughtfulThrawnAgent...")
             self.wake_and_execute_agent(repo_info, repo_info.get('model_routing_preference', 'ollama'), 5, "thoughtful_thrawn")
             return
+
+        onboarding = zero_to_one_status(repo_path)
+        if onboarding.get("action") == "kickoff":
+            self._start_zero_to_one_onboarding(repo_info)
+            return
+        if onboarding.get("action") == "wait":
+            pending = onboarding.get("pending_onboarding", [])
+            active_agent = "vibe_vader" if any("Vader:" in str(item.get("task", "")) for item in pending) else "thoughtful_thrawn"
+            self._write_fleet_state(
+                repo_path=repo_path,
+                status="awaiting_human",
+                active_agent=active_agent,
+                output_summary=onboarding.get("summary", "Waiting for human onboarding input."),
+                status_detail="Resolve the Thrawn/Vader onboarding prompts before autonomous coding starts.",
+            )
+            return
+        if onboarding.get("action") == "activate":
+            objective = activate_zero_to_one_objective(repo_path)
+            if objective:
+                print(f"[Onboarding] Activated zero-to-one objective: {objective.get('goal')}")
+            else:
+                self._write_fleet_state(
+                    repo_path=repo_path,
+                    status="awaiting_human",
+                    active_agent="thoughtful_thrawn",
+                    output_summary="Waiting for a usable objective before autonomous coding starts.",
+                    status_detail="Answer Thrawn's primary objective prompt or set the objective directly.",
+                )
+                return
 
         if self._dispatch_objective_step(repo_info):
             return
@@ -1093,6 +1179,42 @@ class ExegolOrchestrator:
             repo_path=repo_path,
             status="idle",
             output_summary="No pending autonomous work found.",
+        )
+
+    def _start_zero_to_one_onboarding(self, repo_info: Dict[str, Any]) -> None:
+        repo_path = repo_info.get("repo_path", "")
+        routing = repo_info.get("model_routing_preference", "ollama")
+        print("[Onboarding] Empty repository needs zero-to-one intent capture. Triggering Thrawn and Vader...")
+
+        thrawn_result = self.wake_and_execute_agent(
+            repo_info,
+            routing,
+            5,
+            "thoughtful_thrawn",
+            allow_chaining=False,
+        )
+        if thrawn_result and getattr(thrawn_result, "outcome", "") == "failure":
+            return
+
+        if not self.is_fleet_stop_requested():
+            self.wake_and_execute_agent(
+                repo_info,
+                routing,
+                10,
+                "vibe_vader",
+                allow_chaining=False,
+            )
+
+        onboarding = zero_to_one_status(repo_path)
+        self._write_fleet_state(
+            repo_path=repo_path,
+            status="awaiting_human",
+            active_agent="thoughtful_thrawn",
+            output_summary=onboarding.get(
+                "summary",
+                "Waiting for human onboarding input before autonomous coding.",
+            ),
+            status_detail="Resolve the Thrawn/Vader onboarding prompts before autonomous coding starts.",
         )
 
     def _dispatch_objective_step(self, repo_info: Dict[str, Any]) -> bool:
@@ -1160,6 +1282,7 @@ class ExegolOrchestrator:
             "planning": ("product_poe", 10),
             "implementing": ("developer_dex", 15),
             "validating": ("quality_quigon", 10),
+            "accepting": ("uat_ulic", 10),
             "retrying": ("developer_dex", 10),
             "remediating": ("watcher_wedge", 10),
         }
@@ -1182,7 +1305,8 @@ class ExegolOrchestrator:
             next_phase = {
                 "planning": "implementing",
                 "implementing": "validating",
-                "validating": "done",
+                "validating": "accepting",
+                "accepting": "done",
                 "retrying": "implementing",
                 "remediating": "retrying",
             }.get(phase)
@@ -1196,7 +1320,7 @@ class ExegolOrchestrator:
             return
 
         blocked_reason = "; ".join(getattr(result, "errors", []) or []) or getattr(result, "output_summary", "") or f"{agent_id} failed."
-        next_phase = "retrying" if phase in {"implementing", "validating"} else "blocked_environment"
+        next_phase = "retrying" if phase in {"implementing", "validating", "accepting"} else "blocked_environment"
         self._safe_objective_transition(
             manager,
             next_phase,
@@ -1204,6 +1328,14 @@ class ExegolOrchestrator:
             last_result=result_summary,
             blocked_reason=blocked_reason if next_phase == "blocked_environment" else None,
         )
+        if next_phase == "retrying":
+            self.update_repo_status(manager.repo_path, "idle")
+            self._write_fleet_state(
+                repo_path=manager.repo_path,
+                status="running",
+                active_agent=None,
+                output_summary=f"Objective validation failed in phase '{phase}'. Retrying with developer_dex.",
+            )
 
     @staticmethod
     def _objective_result_payload(result: Any) -> Dict[str, Any]:
@@ -1340,7 +1472,16 @@ class ExegolOrchestrator:
                 if not regression_context:
                     regression_context = cache.get("regression_context", "")
 
-        self.acquire_execution_lock(agent_id)
+        stop_requested_before_wake = self.is_fleet_stop_requested()
+        acquired = self.acquire_execution_lock(agent_id)
+        if not acquired:
+            return SessionResult(
+                agent_id=agent_id,
+                session_id="cancelled",
+                outcome="cancelled",
+                status_update="idle",
+                output_summary="Fleet stop requested before agent execution lock was acquired.",
+            )
         result = None
         try:
             result = self._wake_and_execute_agent_inner(
@@ -1350,10 +1491,15 @@ class ExegolOrchestrator:
         finally:
             self.release_execution_lock()
 
-        if result and self.is_fleet_stop_requested() and getattr(result, "outcome", "") == "success":
+        if (
+            result
+            and self.is_fleet_stop_requested()
+            and (self.is_running_fleet or not stop_requested_before_wake)
+            and getattr(result, "outcome", "") == "success"
+        ):
             print("[Orchestrator] Fleet stop requested; suppressing autonomous handoff.")
             result.next_agent_id = ""
-            result.status_update = result.status_update or "idle"
+            result.status_update = getattr(result, "status_update", "") or "idle"
             
         if result:
             status = getattr(result, "status_update", "")
@@ -1427,7 +1573,7 @@ class ExegolOrchestrator:
                 print(f"[Orchestrator] {msg}")
                 return None        
         # 1. Loop Guard: Check max depth
-        max_depth = self._get_isolation_setting("max_handoff_depth", 5)
+        max_depth = self._get_isolation_setting("max_handoff_depth", 8)
         if loop_depth >= max_depth:
             msg = f"[Orchestrator] CRITICAL: Max loop depth ({max_depth}) reached for chain: {' -> '.join(chain_history)}"
             print(msg)

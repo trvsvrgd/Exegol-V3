@@ -36,7 +36,7 @@ def log_interaction(
     # Input Validation
     agent_id = str(agent_id) if agent_id else "unknown"
     outcome = str(outcome).lower() if outcome else "unknown"
-    if outcome not in ["success", "failure", "partial"]:
+    if outcome not in ["success", "failure", "partial", "cancelled"]:
         outcome = "unknown"
     task_summary = str(task_summary) if task_summary else "No summary provided."
     steps_used = steps_used if isinstance(steps_used, int) else 0

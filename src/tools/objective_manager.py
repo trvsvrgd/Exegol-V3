@@ -15,6 +15,7 @@ VALID_PHASES = {
     "planning",
     "implementing",
     "validating",
+    "accepting",
     "retrying",
     "remediating",
     "done",
@@ -37,6 +38,7 @@ PHASE_STATUS = {
     "planning": "running",
     "implementing": "running",
     "validating": "running",
+    "accepting": "running",
     "retrying": "running",
     "remediating": "running",
     "done": "done",
@@ -49,16 +51,17 @@ ALLOWED_TRANSITIONS = {
     "idle": {"planning", "blocked_human", "blocked_environment"},
     "planning": {"implementing", "blocked_human", "blocked_environment", "failed_budget", "idle"},
     "implementing": {"validating", "retrying", "remediating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
-    "validating": {"done", "implementing", "planning", "retrying", "blocked_human", "blocked_environment", "failed_budget", "idle"},
-    "retrying": {"implementing", "validating", "remediating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
-    "remediating": {"retrying", "implementing", "validating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
-    "blocked_human": {"planning", "implementing", "validating", "idle", "failed_budget"},
+    "validating": {"accepting", "done", "implementing", "planning", "retrying", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "accepting": {"done", "implementing", "validating", "retrying", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "retrying": {"implementing", "validating", "accepting", "remediating", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "remediating": {"retrying", "implementing", "validating", "accepting", "blocked_human", "blocked_environment", "failed_budget", "idle"},
+    "blocked_human": {"planning", "implementing", "validating", "accepting", "idle", "failed_budget"},
     "blocked_environment": {"remediating", "retrying", "idle", "failed_budget"},
     "done": {"planning", "idle"},
     "failed_budget": {"planning", "idle"},
 }
 
-LOOP_COUNT_PHASES = {"planning", "implementing", "validating", "retrying", "remediating"}
+LOOP_COUNT_PHASES = {"planning", "implementing", "validating", "accepting", "retrying", "remediating"}
 BLOCKED_PHASES = {"blocked_human", "blocked_environment"}
 TERMINAL_PHASES = {"done", "failed_budget"}
 

@@ -97,6 +97,7 @@ def test_blocked_transitions_require_reason_and_terminal_states_clear_active_tas
 
     done = manager.transition("implementing", active_task_id="task-1")
     done = manager.transition("validating")
+    done = manager.transition("accepting")
     done = manager.transition("done")
     assert done["status"] == "done"
     assert done["active_task_id"] is None

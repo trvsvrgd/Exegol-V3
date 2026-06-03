@@ -12,7 +12,7 @@ interface FleetState {
   active_repo: string;
   active_agent: string | null;
   session_id: string;
-  status: "idle" | "running" | "done" | "blocked";
+  status: "idle" | "running" | "done" | "blocked" | "awaiting_human";
   started_at?: string;
   handoff_chain: string[];
   next_agent_id?: string;
@@ -73,6 +73,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
 
   const liveTelemetryActive = autonomousMode
     || state?.status === "running"
+    || state?.status === "awaiting_human"
     || state?.autonomous?.cycle_running === true
     || state?.autonomous?.stopping === true;
 
@@ -123,6 +124,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
   const displayStatus = state.status === "idle" && loopStatus === "waiting_between_cycles"
     ? "standby"
     : state.status;
+  const displayLabel = displayStatus === "awaiting_human" ? "NEEDS INPUT" : displayStatus.toUpperCase();
   const loopContext = (() => {
     switch (loopStatus) {
       case "running_selected_repo":
@@ -147,6 +149,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
     switch (displayStatus) {
       case "running": return "status-running";
       case "blocked": return "status-blocked";
+      case "awaiting_human": return "status-awaiting-human";
       case "done": return "status-done";
       case "standby": return "status-standby";
       default: return "status-idle";
@@ -170,7 +173,7 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           <h3>Live Fleet Telemetry</h3>
         </div>
         <span className={`status-badge ${getStatusBadgeClass()}`}>
-          {displayStatus.toUpperCase()}
+          {displayLabel}
         </span>
       </div>
       <div className="loop-context">
@@ -184,6 +187,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           {state.last_cleared_errors && state.last_cleared_errors.length > 0 && (
             <p className="last-cleared">Last cleared blocker: {state.last_cleared_errors[0]}</p>
           )}
+        </div>
+      )}
+
+      {state.status === "awaiting_human" && (
+        <div className="input-wait-state">
+          <p>{state.output_summary || "The fleet is waiting for onboarding input before coding starts."}</p>
         </div>
       )}
 
@@ -547,6 +556,11 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           box-shadow: 0 0 10px #ef4444;
         }
 
+        .console-indicator.awaiting_human {
+          background: #f59e0b;
+          box-shadow: 0 0 10px #f59e0b;
+        }
+
         .console-indicator.done {
           background: #3b82f6;
           box-shadow: 0 0 10px #3b82f6;
@@ -584,6 +598,12 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           color: #fcd34d;
         }
 
+        .status-awaiting-human {
+          background: rgba(245, 158, 11, 0.16);
+          border: 1px solid #f59e0b;
+          color: #fcd34d;
+        }
+
         .status-idle {
           background: rgba(107, 114, 128, 0.2);
           border: 1px solid #6b7280;
@@ -604,6 +624,20 @@ export default function ActiveFleetConsole({ repoPath, autonomousMode }: ActiveF
           text-align: center;
           padding: 2rem 0;
           color: #9ca3af;
+        }
+
+        .input-wait-state {
+          text-align: center;
+          padding: 1.5rem;
+          color: #fcd34d;
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.25);
+          border-radius: 8px;
+        }
+
+        .input-wait-state p {
+          margin: 0;
+          line-height: 1.5;
         }
 
         .last-cleared {

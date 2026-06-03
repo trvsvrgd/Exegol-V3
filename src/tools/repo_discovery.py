@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Set, Tuple
 
 
 DEFAULT_IGNORE_NAMES = {
@@ -41,6 +41,41 @@ def is_managed_repo(path: Path) -> bool:
     return (path / ".git").exists() or (path / ".exegol").exists()
 
 
+def build_repo_config(repo_path: str, priority: int = 10) -> Dict[str, object]:
+    return {
+        "repo_path": repo_path,
+        "priority": priority,
+        "model_routing_preference": "ollama",
+        "agent_status": "idle",
+        "max_steps_policy": 30,
+        "requires_slack_approval_for_deletes": True,
+        "daily_commit_routine": True,
+    }
+
+
+def register_repository(config: Dict[str, object], repo_path: str, priority: int = 10) -> Tuple[Dict[str, object], bool]:
+    path = Path(repo_path).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        raise ValueError(f"Repository path does not exist: {repo_path}")
+    if not is_managed_repo(path):
+        raise ValueError("Repository must contain a .git or .exegol directory before Exegol can manage it.")
+
+    repos = config.setdefault("repositories", [])
+    normalized = str(path)
+    key = os.path.normcase(os.path.abspath(normalized))
+
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        configured = repo.get("repo_path", "")
+        if os.path.normcase(os.path.abspath(str(configured))) == key:
+            return repo, False
+
+    repo_config = build_repo_config(normalized, priority=priority)
+    repos.append(repo_config)
+    return repo_config, True
+
+
 def discover_repositories(project_root: str, existing_paths: Iterable[str] = ()) -> List[Dict[str, object]]:
     existing = {os.path.normcase(os.path.abspath(path)) for path in existing_paths if path}
     discovered: List[Dict[str, object]] = []
@@ -58,15 +93,7 @@ def discover_repositories(project_root: str, existing_paths: Iterable[str] = ())
             if key in existing:
                 continue
             existing.add(key)
-            discovered.append({
-                "repo_path": normalized,
-                "priority": 10,
-                "model_routing_preference": "ollama",
-                "agent_status": "idle",
-                "max_steps_policy": 30,
-                "requires_slack_approval_for_deletes": True,
-                "daily_commit_routine": True,
-            })
+            discovered.append(build_repo_config(normalized))
 
     return discovered
 

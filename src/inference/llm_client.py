@@ -9,6 +9,12 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union
 from dotenv import load_dotenv
 from tools.egress_filter import EgressFilter
+from tools.fleet_runtime_control import (
+    FleetStopRequested,
+    raise_if_runtime_stopped,
+    register_ollama_model,
+    unload_local_models_async,
+)
 
 load_dotenv()
 
@@ -121,6 +127,7 @@ class TrackingLLMClient(LLMClient):
         self.history = []
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
+        raise_if_runtime_stopped("LLM generation skipped")
         self.prompt_count += 1
         # Simple heuristic: 1 token ~= 4 characters for now
         self.token_usage += (len(prompt) + (len(system_instruction) if system_instruction else 0)) // 4
@@ -146,7 +153,9 @@ class TrackingLLMClient(LLMClient):
         last_failure = None
 
         for attempt in range(attempts):
+            raise_if_runtime_stopped("LLM retry loop cancelled")
             last_response = self.base_client.generate(prompt, system_instruction, json_format)
+            raise_if_runtime_stopped("LLM generation cancelled")
             last_failure = classify_provider_failure(last_response)
             if not last_failure or not last_failure.get("retryable"):
                 break
@@ -183,25 +192,57 @@ class OllamaClient(LLMClient):
         super().__init__(model or os.getenv("OLLAMA_MODEL", "llama3"))
         self.api_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
         self._allowed_hosts = {"localhost", "127.0.0.1", "host.docker.internal"}
+        register_ollama_model(self.model)
 
     def _validate_url(self, url: str) -> bool:
         """Ensures the URL is within the allowed set of hosts to prevent SSRF."""
         return EgressFilter.is_url_allowed(url)
 
     def generate(self, prompt: str, system_instruction: Optional[str] = None, json_format: bool = False) -> str:
+        raise_if_runtime_stopped("Ollama generation skipped")
         payload = {
             "model": self.model,
             "prompt": prompt,
             "system": system_instruction or "You are a helpful assistant.",
-            "stream": False,
+            "stream": True,
             "format": "json" if json_format else ""
         }
         try:
             if not self._validate_url(self.api_url):
                 return f"Security Error: Blocked attempt to access non-allowlisted host in Ollama URL: {self.api_url}"
-                
-            response = requests.post(self.api_url, json=payload, timeout=60)
-            return response.json().get("response", "")
+
+            response = None
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                timeout=(
+                    float(os.getenv("EXEGOL_OLLAMA_CONNECT_TIMEOUT_SECONDS", "5")),
+                    float(os.getenv("EXEGOL_OLLAMA_READ_TIMEOUT_SECONDS", "30")),
+                ),
+                stream=True,
+            )
+            response.raise_for_status()
+            chunks = []
+            for raw_line in response.iter_lines(decode_unicode=True):
+                raise_if_runtime_stopped("Ollama generation cancelled")
+                if not raw_line:
+                    continue
+                try:
+                    data = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("response"):
+                    chunks.append(str(data.get("response")))
+                if data.get("done"):
+                    break
+            return "".join(chunks)
+        except FleetStopRequested:
+            try:
+                response.close()
+            except Exception:
+                pass
+            unload_local_models_async("fleet stop during Ollama generation", models=[self.model])
+            raise
         except Exception as e:
             return f"Ollama Error: {e}"
 

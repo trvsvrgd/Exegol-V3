@@ -35,8 +35,51 @@ def test_scan_heartbeats_reports_stale_active_session(tmp_path):
     health = supervisor_health.scan_heartbeats(str(repo_path), ttl_seconds=60)
 
     assert health["status"] == "degraded"
+    assert health["active"] == 0
     assert health["stale"] == 1
     assert health["sessions"][0]["status"] == "stale"
+    assert health["sessions"][0]["blocking"] is True
+
+
+def test_scan_heartbeats_counts_only_current_active_sessions(tmp_path):
+    repo_path = tmp_path / "repo"
+    heartbeat_dir = repo_path / ".exegol" / "heartbeats"
+    heartbeat_dir.mkdir(parents=True)
+    current_pulse = datetime.datetime.now().isoformat()
+    old_pulse = (datetime.datetime.now() - datetime.timedelta(seconds=500)).isoformat()
+    records = {
+        "active123.json": {
+            "session_id": "active123",
+            "agent_id": "developer_dex",
+            "status": "active",
+            "last_pulse": current_pulse,
+        },
+        "stale123.json": {
+            "session_id": "stale123",
+            "agent_id": "watcher_wedge",
+            "status": "stale",
+            "last_pulse": old_pulse,
+        },
+        "cleared123.json": {
+            "session_id": "cleared123",
+            "agent_id": "quality_quigon",
+            "status": "cleared",
+            "last_pulse": old_pulse,
+        },
+    }
+    for filename, payload in records.items():
+        (heartbeat_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+
+    health = supervisor_health.scan_heartbeats(str(repo_path), ttl_seconds=60)
+
+    assert health["status"] == "ok"
+    assert health["active"] == 1
+    assert health["stale"] == 0
+    assert health["historical_stale"] == 1
+    assert health["total"] == 3
+    stale_session = next(session for session in health["sessions"] if session["session_id"] == "stale123")
+    assert stale_session["status"] == "stale"
+    assert stale_session["blocking"] is False
 
 
 def test_check_docker_reports_missing_cli(monkeypatch):
@@ -140,6 +183,15 @@ def test_supervisor_reconciles_stale_heartbeat_to_blocked_state(tmp_path, monkey
     assert state["blocker_type"] == "stale_heartbeat"
     assert state["retry_available"] is True
     assert any(event["event_type"] == "stale_session_blocked" for event in events)
+
+    heartbeat = json.loads((heartbeat_dir / "stale123.json").read_text(encoding="utf-8"))
+    assert heartbeat["status"] == "stale"
+    assert heartbeat["acknowledge_reason"] == "Supervisor converted stale heartbeat to blocked fleet state."
+
+    follow_up = supervisor_health.scan_heartbeats(str(repo_path))
+    assert follow_up["status"] == "ok"
+    assert follow_up["stale"] == 0
+    assert follow_up["historical_stale"] == 1
 
 
 def test_dead_scheduler_is_auto_restarted_and_event_persisted(tmp_path, monkeypatch):

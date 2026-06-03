@@ -3,6 +3,7 @@ import sys
 import time
 import pytest
 import threading
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 # Ensure src is in sys.path
@@ -182,3 +183,35 @@ def test_api_objective_lifecycle(monkeypatch, tmp_path):
             if repo_path in api._active_objective_loops:
                 api._active_objective_loops[repo_path]["event"].set()
                 api._active_objective_loops.pop(repo_path)
+
+
+def test_objective_loop_worker_stops_and_unregisters_when_objective_done(monkeypatch, tmp_path):
+    repo_path = os.path.abspath(str(tmp_path))
+    manager = ObjectiveManager(repo_path)
+    manager.create_or_update(goal="Complete selected objective")
+    manager.transition("planning")
+    stop_event = threading.Event()
+    calls = []
+
+    def complete_objective(repo_path=None):
+        calls.append(repo_path)
+        manager.transition("implementing")
+        manager.transition("validating")
+        manager.transition("accepting")
+        manager.transition("done")
+        return True
+
+    monkeypatch.setattr(api.orchestrator, "run_fleet_cycle", complete_objective)
+    with api._objective_loops_lock:
+        api._active_objective_loops[repo_path] = {
+            "event": stop_event,
+            "thread": SimpleNamespace(is_alive=lambda: True),
+            "started_at": "2026-06-01T00:00:00",
+        }
+
+    api._objective_loop_for_repo(repo_path, stop_event)
+
+    assert calls == [repo_path]
+    assert ObjectiveManager(repo_path).load()["phase"] == "done"
+    with api._objective_loops_lock:
+        assert repo_path not in api._active_objective_loops

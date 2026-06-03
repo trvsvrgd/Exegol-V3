@@ -1,5 +1,8 @@
+import pytest
+
 from inference import llm_client
-from inference.llm_client import LLMClient, TrackingLLMClient, classify_provider_failure
+from inference.llm_client import LLMClient, OllamaClient, TrackingLLMClient, classify_provider_failure
+from tools.fleet_runtime_control import FleetStopRequested, request_runtime_stop, resume_runtime
 
 
 class FlakyClient(LLMClient):
@@ -60,3 +63,36 @@ def test_tracking_client_can_fallback_to_local_provider(monkeypatch):
 
     assert response == "local ok"
     assert any(event.get("event_type") == "provider_fallback" for event in tracker.history)
+
+
+def test_ollama_generation_cancels_stream_and_requests_unload(monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self.closed = False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield '{"response": "partial"}'
+            request_runtime_stop("unit stop during stream")
+            yield '{"response": "late"}'
+
+        def close(self):
+            self.closed = True
+
+    response = FakeResponse()
+    unloads = []
+    monkeypatch.setenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+    monkeypatch.setattr(llm_client.requests, "post", lambda *args, **kwargs: response)
+    monkeypatch.setattr(llm_client, "unload_local_models_async", lambda reason, models=None: unloads.append((reason, models)))
+    resume_runtime("test setup")
+
+    try:
+        with pytest.raises(FleetStopRequested):
+            OllamaClient("qwen-test:latest").generate("prompt")
+    finally:
+        resume_runtime("test cleanup")
+
+    assert response.closed is True
+    assert unloads == [("fleet stop during Ollama generation", ["qwen-test:latest"])]

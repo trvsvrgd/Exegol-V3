@@ -10,7 +10,7 @@ Usage
 -----
     from tools.heartbeat_monitor import HeartbeatMonitor
 
-    monitor = HeartbeatMonitor(repo_path, ttl_seconds=120)
+    monitor = HeartbeatMonitor(repo_path, ttl_seconds=300)
     monitor.start(session_id="abc123", agent_id="developer_dex")
 
     # ... agent runs ...
@@ -31,7 +31,7 @@ from typing import Dict, Optional
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_DEFAULT_TTL_SECONDS = 120          # 2 minutes with no pulse = zombie
+_DEFAULT_TTL_SECONDS = 300          # 5 minutes with no pulse = zombie
 _WATCHDOG_INTERVAL_SECONDS = 15     # How often the watchdog scans
 _HEARTBEAT_DIR_NAME = "heartbeats"  # Relative to .exegol/
 

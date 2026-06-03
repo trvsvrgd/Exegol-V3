@@ -88,6 +88,11 @@ class ThrawnIntelManager:
                     current_q["answered_at"] = mtime
                 intel["questions"].append(current_q)
 
+        title_intel, title_found = self._parse_intent_by_heading_titles(content, mtime)
+        for field in ("objective", "architecture", "questions"):
+            if title_found.get(field):
+                intel[field] = title_intel[field]
+
         # Sanitize: ensure all question entries are dicts and have a 'question' key (guard against parse corruption)
         intel["questions"] = [
             q for q in intel["questions"] 
@@ -95,6 +100,86 @@ class ThrawnIntelManager:
         ]
 
         return intel
+
+    @staticmethod
+    def _parse_intent_by_heading_titles(content: str, mtime: str) -> tuple[Dict[str, Any], Dict[str, bool]]:
+        """Parse intent sections by heading text, regardless of emoji bytes."""
+        intel = {
+            "objective": "",
+            "architecture": [],
+            "questions": []
+        }
+        found = {
+            "objective": False,
+            "architecture": False,
+            "questions": False,
+        }
+
+        objective = ThrawnIntelManager._section_content(content, "Primary Objective")
+        if objective is not None:
+            found["objective"] = True
+            intel["objective"] = objective.strip()
+
+        architecture = ThrawnIntelManager._section_content(content, "Architecture & Patterns")
+        if architecture is not None:
+            found["architecture"] = True
+            intel["architecture"] = [
+                line.strip("- ").strip()
+                for line in architecture.strip().splitlines()
+                if line.strip().startswith("-")
+            ]
+
+        questions = ThrawnIntelManager._section_content(content, "Open Clarification Questions")
+        if questions is not None:
+            found["questions"] = True
+            intel["questions"] = ThrawnIntelManager._parse_questions_block(questions, mtime)
+
+        return intel, found
+
+    @staticmethod
+    def _section_content(content: str, title: str) -> Optional[str]:
+        match = re.search(
+            rf"^##[^\n]*{re.escape(title)}[^\n]*\n(.*?)(?=^##|\Z)",
+            content,
+            re.DOTALL | re.MULTILINE,
+        )
+        if not match:
+            return None
+        return match.group(1)
+
+    @staticmethod
+    def _parse_questions_block(q_text: str, mtime: str) -> List[Dict[str, Any]]:
+        questions = []
+        current_q = None
+        for line in q_text.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            q_match = re.match(r"^(\d+\.|\-)\s+(.*)", line)
+            if q_match:
+                if current_q:
+                    if current_q.get("answer") and not current_q.get("answered_at"):
+                        current_q["answered_at"] = mtime
+                    questions.append(current_q)
+                current_q = {"question": q_match.group(2).strip(), "answer": None}
+            elif line.lower().startswith("asked:") and current_q:
+                current_q["asked_at"] = line[6:].strip()
+            elif line.lower().startswith("answered:") and current_q:
+                current_q["answered_at"] = line[9:].strip()
+            elif line.lower().startswith("answer:") and current_q:
+                current_q["answer"] = line[7:].strip()
+            elif current_q:
+                if current_q.get("answer") is not None:
+                    current_q["answer"] += " " + line
+                else:
+                    current_q["question"] += " " + line
+
+        if current_q:
+            if current_q.get("answer") and not current_q.get("answered_at"):
+                current_q["answered_at"] = mtime
+            questions.append(current_q)
+
+        return questions
 
     def load_human_observations(self) -> Dict[str, str]:
         """Loads qualitative context provided by humans."""

@@ -35,7 +35,9 @@ from tools.operations import get_backend_process_state, is_retry_allowed
 from tools.supervisor_health import build_supervisor_health, reconcile_stale_heartbeats, scan_heartbeats
 from tools.backlog_manager import BacklogManager
 from tools.objective_manager import ObjectiveManager
-from tools.repo_discovery import sync_discovered_repositories
+from tools.poe_roadmap_brief import load_or_build_poe_roadmap_brief
+from tools.repo_discovery import register_repository, sync_discovered_repositories
+from tools.fleet_runtime_control import resume_runtime
 
 ROOT_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -155,22 +157,51 @@ _continuous_lock = threading.Lock()
 # --- Active Objective Loops Registry ---
 _active_objective_loops: Dict[str, Dict[str, Any]] = {}
 _objective_loops_lock = threading.Lock()
+OBJECTIVE_LOOP_STOP_PHASES = {"done", "failed_budget", "blocked_human"}
+
+
+def _objective_loop_should_stop(repo_path: str) -> bool:
+    objective = ObjectiveManager(repo_path).load()
+    if not str(objective.get("goal") or "").strip():
+        return False
+    return str(objective.get("phase") or "").lower() in OBJECTIVE_LOOP_STOP_PHASES
+
+
+def _stop_all_objective_loops() -> int:
+    with _objective_loops_lock:
+        loops = list(_active_objective_loops.values())
+        _active_objective_loops.clear()
+    for loop in loops:
+        event = loop.get("event")
+        if event:
+            event.set()
+    return len(loops)
 
 def _objective_loop_for_repo(repo_path: str, stop_event: threading.Event):
-    while not stop_event.is_set():
-        print(f"[API] Running objective loop cycle for {repo_path}...")
-        try:
-            orchestrator.run_fleet_cycle(repo_path=repo_path)
-        except Exception as e:
-            print(f"[API] Error in objective loop for {repo_path}: {e}")
-        
-        for _ in range(10):
-            if stop_event.is_set():
+    try:
+        while not stop_event.is_set():
+            print(f"[API] Running objective loop cycle for {repo_path}...")
+            try:
+                orchestrator.run_fleet_cycle(repo_path=repo_path)
+            except Exception as e:
+                print(f"[API] Error in objective loop for {repo_path}: {e}")
+
+            if _objective_loop_should_stop(repo_path):
+                print(f"[API] Objective loop reached terminal phase for {repo_path}; stopping loop.")
                 break
-            time.sleep(1)
+
+            for _ in range(10):
+                if stop_event.is_set():
+                    break
+                time.sleep(1)
+    finally:
+        with _objective_loops_lock:
+            current = _active_objective_loops.get(repo_path)
+            if current and current.get("event") is stop_event:
+                _active_objective_loops.pop(repo_path, None)
 
 def _continuous_fleet_loop():
-    global _continuous_mode, _continuous_cycle_active
+    global _continuous_mode, _continuous_cycle_active, _continuous_repo_path
     while True:
         with _continuous_lock:
             if not _continuous_mode:
@@ -196,6 +227,14 @@ def _continuous_fleet_loop():
         finally:
             with _continuous_lock:
                 _continuous_cycle_active = False
+
+        if repo_path and _objective_loop_should_stop(repo_path):
+            with _continuous_lock:
+                if _continuous_repo_path == repo_path:
+                    _continuous_mode = False
+                    _continuous_repo_path = None
+            print(f"[API] Continuous fleet loop reached terminal objective phase for {repo_path}; stopping loop.")
+            return
 
         for _ in range(10):
             with _continuous_lock:
@@ -306,6 +345,7 @@ def start_autonomous_fleet(req: Optional[RepoRequest] = None):
     with _continuous_lock:
         if req and req.repo_path:
             _continuous_repo_path = os.path.abspath(req.repo_path)
+        resume_runtime("autonomous fleet start requested")
         orchestrator.clear_fleet_stop_request()
         _continuous_mode = True
         if _continuous_fleet_thread is None or not _continuous_fleet_thread.is_alive():
@@ -319,8 +359,9 @@ def stop_autonomous_fleet():
     with _continuous_lock:
         _continuous_mode = False
         _continuous_repo_path = None
+    stopped_objective_loops = _stop_all_objective_loops()
     orchestrator.request_fleet_stop("autonomous fleet stop requested from API")
-    return {"status": "success", **_autonomous_status()}
+    return {"status": "success", "objective_loops_stopped": stopped_objective_loops, **_autonomous_status()}
 
 @app.post("/fleet/toggle-autonomous")
 def toggle_autonomous_fleet(req: Dict[str, Any] = None):
@@ -658,6 +699,20 @@ def get_repos():
         key=lambda repo: (repo.get("priority", 999), os.path.basename(repo.get("repo_path", "")).lower()),
     )
 
+@app.post("/repos/register")
+def register_repo(req: RepoRequest):
+    orchestrator.load_config()
+    try:
+        repo, added = register_repository(orchestrator.priority_config, req.repo_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if added:
+        orchestrator.save_config()
+        orchestrator.load_config()
+
+    return {"status": "added" if added else "exists", "repo": repo}
+
 @app.get("/agents")
 def get_agents():
     return [
@@ -918,6 +973,10 @@ def add_thrawn_architecture(req: ThrawnArchitectureRequest):
     mgr = ThrawnIntelManager(req.repo_path)
     mgr.add_architecture(req.pattern)
     return {"status": "success"}
+
+@app.get("/poe/roadmap")
+def get_poe_roadmap(repo_path: str):
+    return load_or_build_poe_roadmap_brief(repo_path)
 
 # --- Epic 5: Fleet Health Dashboard ---
 

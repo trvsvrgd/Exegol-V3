@@ -12,6 +12,7 @@ from tools.repo_analyzer import analyze_repository
 from tools.todo_reporter import report_todos
 from tools.metrics_manager import SuccessMetricsManager
 from tools.backlog_manager import BacklogManager
+from tools.zero_to_one_onboarding import vader_onboarding_findings
 
 
 class VibeVaderAgent:
@@ -90,15 +91,33 @@ Output your human-actionable findings exclusively to .exegol/user_action_require
             print(f"[{self.name}] Daily assessment detected. Cleaning up completed items...")
             self._cleanup_human_tasks(repo_path)
 
-        # 2. Market Vibe Research (Phase 2 Integration)
-        print(f"[{self.name}] Researching latest AI agent market vibes...")
-        market_query = "latest trending features for autonomous AI development fleets 2024 2025"
-        market_research = web_search(market_query, num_results=3)
-        
         exegol_dir = os.path.join(repo_path, ".exegol")
         os.makedirs(exegol_dir, exist_ok=True)
 
         try:
+            onboarding_findings = vader_onboarding_findings(repo_path)
+            if onboarding_findings:
+                print(f"[{self.name}] Zero-to-one onboarding detected. Reporting demo boundaries only.")
+                res = report_todos(repo_path, onboarding_findings, self.name)
+                duration = time.time() - start_time
+                log_interaction(
+                    agent_id=self.name,
+                    outcome="success",
+                    task_summary=f"Onboarding boundary prompt generated. {res}",
+                    repo_path=repo_path,
+                    steps_used=1,
+                    duration_seconds=duration,
+                    session_id=handoff.session_id,
+                    metrics={"human_tasks_reported": len(onboarding_findings)}
+                )
+                self.next_agent_id = None
+                return res
+
+            # 2. Market Vibe Research (Phase 2 Integration)
+            print(f"[{self.name}] Researching latest AI agent market vibes...")
+            market_query = "latest trending features for autonomous AI development fleets 2024 2025"
+            market_research = web_search(market_query, num_results=3)
+
             # 3. Perform Repository Audit for Mocks, Limitations, and Human Observations
             print(f"[{self.name}] Scanning repository for technical debt and human observations...")
             raw_audit_findings = analyze_repository(repo_path)
@@ -150,7 +169,7 @@ Output your human-actionable findings exclusively to .exegol/user_action_require
             
             # 5. Check for direct User Actions (user_actions.md/json)
             user_actions = self._check_user_actions(repo_path)
-            
+
             # 6. Combine and Report
             all_findings = audit_findings + readiness_findings + user_actions
             
